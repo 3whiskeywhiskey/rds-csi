@@ -10,7 +10,7 @@ import (
 )
 
 // CreateVolume creates a file-backed NVMe/TCP volume on RDS
-func (c *Client) CreateVolume(opts CreateVolumeOptions) error {
+func (c *sshClient) CreateVolume(opts CreateVolumeOptions) error {
 	klog.V(2).Infof("Creating volume %s (size: %d bytes, path: %s)", opts.Slot, opts.FileSizeBytes, opts.FilePath)
 
 	// Validate options
@@ -32,7 +32,7 @@ func (c *Client) CreateVolume(opts CreateVolumeOptions) error {
 	)
 
 	// Execute command with retry
-	_, err := c.RunCommandWithRetry(cmd, 3)
+	_, err := c.runCommandWithRetry(cmd, 3)
 	if err != nil {
 		return fmt.Errorf("failed to create volume: %w", err)
 	}
@@ -47,7 +47,7 @@ func (c *Client) CreateVolume(opts CreateVolumeOptions) error {
 }
 
 // DeleteVolume removes a volume from RDS
-func (c *Client) DeleteVolume(slot string) error {
+func (c *sshClient) DeleteVolume(slot string) error {
 	klog.V(2).Infof("Deleting volume %s", slot)
 
 	// Validate slot name
@@ -59,7 +59,7 @@ func (c *Client) DeleteVolume(slot string) error {
 	cmd := fmt.Sprintf(`/disk remove [find slot=%s]`, slot)
 
 	// Execute command with retry
-	_, err := c.RunCommandWithRetry(cmd, 3)
+	_, err := c.runCommandWithRetry(cmd, 3)
 	if err != nil {
 		// If volume doesn't exist, that's okay (idempotent)
 		if strings.Contains(err.Error(), "no such item") {
@@ -74,7 +74,7 @@ func (c *Client) DeleteVolume(slot string) error {
 }
 
 // GetVolume retrieves information about a specific volume
-func (c *Client) GetVolume(slot string) (*VolumeInfo, error) {
+func (c *sshClient) GetVolume(slot string) (*VolumeInfo, error) {
 	klog.V(4).Infof("Getting volume info for %s", slot)
 
 	// Validate slot name
@@ -86,7 +86,7 @@ func (c *Client) GetVolume(slot string) (*VolumeInfo, error) {
 	cmd := fmt.Sprintf(`/disk print detail where slot=%s`, slot)
 
 	// Execute command
-	output, err := c.RunCommand(cmd)
+	output, err := c.runCommand(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get volume info: %w", err)
 	}
@@ -105,7 +105,7 @@ func (c *Client) GetVolume(slot string) (*VolumeInfo, error) {
 }
 
 // VerifyVolumeExists checks if a volume exists and is ready
-func (c *Client) VerifyVolumeExists(slot string) error {
+func (c *sshClient) VerifyVolumeExists(slot string) error {
 	volume, err := c.GetVolume(slot)
 	if err != nil {
 		return err
@@ -119,14 +119,14 @@ func (c *Client) VerifyVolumeExists(slot string) error {
 }
 
 // GetCapacity queries the available storage capacity on RDS
-func (c *Client) GetCapacity(basePath string) (*CapacityInfo, error) {
+func (c *sshClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 	klog.V(4).Infof("Getting capacity for %s", basePath)
 
 	// Build /file print command
 	cmd := fmt.Sprintf(`/file print detail where name="%s"`, basePath)
 
 	// Execute command
-	output, err := c.RunCommand(cmd)
+	output, err := c.runCommand(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get capacity: %w", err)
 	}
@@ -141,14 +141,14 @@ func (c *Client) GetCapacity(basePath string) (*CapacityInfo, error) {
 }
 
 // ListVolumes lists all volumes on RDS
-func (c *Client) ListVolumes() ([]VolumeInfo, error) {
+func (c *sshClient) ListVolumes() ([]VolumeInfo, error) {
 	klog.V(4).Info("Listing all volumes")
 
 	// Build /disk print command
 	cmd := `/disk print detail`
 
 	// Execute command
-	output, err := c.RunCommand(cmd)
+	output, err := c.runCommand(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes: %w", err)
 	}

@@ -367,7 +367,7 @@ func (cs *ControllerServer) getRDSAddress(params map[string]string) string {
 		return addr
 	}
 	// Fall back to driver's RDS client address
-	return cs.driver.rdsClient.Address
+	return cs.driver.rdsClient.GetAddress()
 }
 
 // containsString checks if a string contains a substring

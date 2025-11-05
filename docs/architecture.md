@@ -310,20 +310,64 @@ The RDS CSI Driver is a Kubernetes-native storage driver that enables dynamic pr
 - Acceptable for most workloads (<5% overhead)
 - Future: Could add raw device support if needed
 
-### 2. SSH-based Management
+### 2. SSH-based Management vs RouterOS API
 
-**Decision**: Use SSH with RouterOS CLI for volume operations
+**Decision**: Use SSH with RouterOS CLI for volume operations (with API support planned for future)
 
-**Rationale**:
-- RouterOS REST API limited documentation and coverage
-- SSH is stable, well-documented, and widely used
-- Easier to debug (can manually test commands)
-- Authentication via SSH keys (secure)
+**Context**: MikroTik RouterOS provides two management interfaces:
+1. **SSH + CLI**: Text-based command-line interface over SSH (port 22)
+2. **RouterOS API**: Binary protocol over TCP (port 8728/8729)
+
+**Analysis**:
+
+*Advantages of RouterOS API*:
+- **Performance**: 2-3x faster (~50-80ms vs 150-200ms per operation)
+- **Structured data**: Binary protocol with key-value pairs (no text parsing)
+- **Error handling**: Structured error codes (categories 0-7) vs parsing stderr
+- **Concurrency**: Tagged requests allow parallel operations
+- **Efficiency**: Less bandwidth overhead than text-based CLI
+
+*Advantages of SSH + CLI*:
+- **Security**: Public key authentication (asymmetric) vs plain-text passwords
+- **Maturity**: SSH is battle-tested, industry standard for device management
+- **Debugging**: Easy to test commands manually (`ssh admin@rds "/disk print"`)
+- **Familiarity**: RouterOS CLI is well-documented and widely used
+- **Testing**: Easier to mock (existing 454-line mock SSH server implementation)
+
+**Decision Rationale**:
+1. **Security is paramount**: SSH with public key auth is more secure than API with plain passwords (even with TLS)
+2. **Performance not critical**: Volume operations are infrequent (minutes to hours apart, not milliseconds)
+3. **Time to market**: SSH implementation is working and tested (600 lines of code)
+4. **Risk management**: SSH is proven technology; API adds complexity during alpha stage
+5. **Functionality parity**: Both approaches execute the same RouterOS commands
+
+**Implementation**:
+- SSH client uses `golang.org/x/crypto/ssh` with retry logic
+- CLI commands: `/disk add`, `/disk remove`, `/disk print detail`
+- Response parsing with regex patterns for key-value extraction
+- Exponential backoff retry for transient errors
+
+**Future Migration Path**:
+- Code architected with `RDSClient` interface abstraction
+- Can add API implementation alongside SSH in future releases
+- Users can choose protocol via config (`Protocol: "ssh"` or `"api"`)
+- Hybrid approach possible: SSH for management (secure), API for monitoring (fast)
+- Migration would take ~20-30 hours of development effort
+
+**When to Reconsider API**:
+- Performance becomes critical (hundreds of volume ops per minute)
+- RouterOS adds key-based authentication to API
+- Need for real-time volume monitoring alongside management
+- API-only features are added by MikroTik
+
+**References**:
+- go-routeros library: https://github.com/go-routeros/routeros (v3.0.1, MIT license)
+- RouterOS API docs: https://help.mikrotik.com/docs/spaces/ROS/pages/47579160/API
 
 **Trade-offs**:
 - Parsing CLI output is less reliable than structured API
 - Requires maintaining SSH connection pool
-- Mitigated by: Robust parsing, error handling, retries
+- Mitigated by: Robust parsing with regex, error handling, retries, test coverage
 
 ### 3. Single Controller Replica
 

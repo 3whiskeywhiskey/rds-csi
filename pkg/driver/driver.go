@@ -34,8 +34,8 @@ type Driver struct {
 	cs  csi.ControllerServer
 	ns  csi.NodeServer
 
-	// RDS client
-	rdsClient *rds.Client
+	// RDS client (interface allows different implementations: SSH, API, mock)
+	rdsClient rds.RDSClient
 
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
@@ -202,7 +202,7 @@ func (d *Driver) Stop() {
 }
 
 // SetRDSClient sets the RDS client (for testing)
-func (d *Driver) SetRDSClient(client *rds.Client) {
+func (d *Driver) SetRDSClient(client rds.RDSClient) {
 	d.rdsClient = client
 }
 
