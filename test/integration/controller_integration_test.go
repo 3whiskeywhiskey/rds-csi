@@ -210,9 +210,9 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	})
 
 	t.Run("DeleteVolume_Idempotency", func(t *testing.T) {
-		// Delete a non-existent volume (should succeed)
+		// Delete a non-existent volume (should succeed - idempotent)
 		deleteReq := &csi.DeleteVolumeRequest{
-			VolumeId: "pvc-nonexistent-volume",
+			VolumeId: "pvc-00000000-0000-0000-0000-000000000000", // Valid format but doesn't exist
 		}
 
 		_, err := cs.DeleteVolume(context.Background(), deleteReq)

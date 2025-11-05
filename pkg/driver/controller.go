@@ -81,10 +81,34 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.OutOfRange, "required bytes %d exceeds maximum %d", requiredBytes, maxVolumeSizeBytes)
 	}
 
-	// Generate volume ID
-	volumeID := utils.GenerateVolumeID()
+	// Generate deterministic volume ID from volume name (for idempotency)
+	volumeID := utils.VolumeNameToID(req.GetName())
 	klog.V(2).Infof("Generated volume ID: %s for volume name: %s", volumeID, req.GetName())
 
+	// Check if volume already exists (idempotency)
+	existingVolume, err := cs.driver.rdsClient.GetVolume(volumeID)
+	if err == nil {
+		// Volume already exists, verify it matches requirements
+		klog.V(2).Infof("Volume %s already exists, returning existing volume", volumeID)
+
+		// Get parameters from StorageClass for response context
+		params := req.GetParameters()
+
+		return &csi.CreateVolumeResponse{
+			Volume: &csi.Volume{
+				VolumeId:      volumeID,
+				CapacityBytes: existingVolume.FileSizeBytes,
+				VolumeContext: map[string]string{
+					"rdsAddress": cs.getRDSAddress(params),
+					"nvmePort":   fmt.Sprintf("%d", existingVolume.NVMETCPPort),
+					"nqn":        existingVolume.NVMETCPNQN,
+					"volumePath": existingVolume.FilePath,
+				},
+			},
+		}, nil
+	}
+
+	// Volume doesn't exist, create it
 	// Get parameters from StorageClass
 	params := req.GetParameters()
 	volumeBasePath := defaultVolumeBasePath
@@ -111,25 +135,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	filePath, err := utils.VolumeIDToFilePath(volumeID, volumeBasePath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate file path: %v", err)
-	}
-
-	// Check if volume already exists (idempotency)
-	existingVolume, err := cs.driver.rdsClient.GetVolume(volumeID)
-	if err == nil {
-		// Volume already exists, return it
-		klog.V(2).Infof("Volume %s already exists, returning existing volume", volumeID)
-		return &csi.CreateVolumeResponse{
-			Volume: &csi.Volume{
-				VolumeId:      volumeID,
-				CapacityBytes: existingVolume.FileSizeBytes,
-				VolumeContext: map[string]string{
-					"rdsAddress": cs.getRDSAddress(params),
-					"nvmePort":   fmt.Sprintf("%d", existingVolume.NVMETCPPort),
-					"nqn":        existingVolume.NVMETCPNQN,
-					"volumePath": existingVolume.FilePath,
-				},
-			},
-		}, nil
 	}
 
 	// Create volume on RDS

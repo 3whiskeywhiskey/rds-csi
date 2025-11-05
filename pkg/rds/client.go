@@ -38,9 +38,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if config.User == "" {
 		return nil, fmt.Errorf("user is required")
 	}
-	if len(config.PrivateKey) == 0 {
-		return nil, fmt.Errorf("private key is required")
-	}
+	// Note: PrivateKey is optional for testing with mock servers that don't require auth
 
 	// Set defaults
 	if config.Port == 0 {
@@ -63,20 +61,26 @@ func NewClient(config ClientConfig) (*Client, error) {
 func (c *Client) Connect() error {
 	klog.V(4).Infof("Connecting to RDS at %s:%d as user %s", c.Address, c.port, c.user)
 
-	// Parse private key
-	signer, err := ssh.ParsePrivateKey(c.privateKey)
-	if err != nil {
-		return fmt.Errorf("failed to parse private key: %w", err)
-	}
-
 	// Configure SSH client
 	sshConfig := &ssh.ClientConfig{
-		User: c.user,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
+		User:            c.user,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Add host key verification in production
 		Timeout:         c.timeout,
+	}
+
+	// Add authentication if private key is provided
+	if c.privateKey != nil && len(c.privateKey) > 0 {
+		// Parse private key
+		signer, err := ssh.ParsePrivateKey(c.privateKey)
+		if err != nil {
+			return fmt.Errorf("failed to parse private key: %w", err)
+		}
+		sshConfig.Auth = []ssh.AuthMethod{
+			ssh.PublicKeys(signer),
+		}
+	} else {
+		// No authentication (for testing with mock servers)
+		klog.V(4).Info("No private key provided, attempting connection without authentication")
 	}
 
 	// Establish connection

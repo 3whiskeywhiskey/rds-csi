@@ -18,7 +18,7 @@ RDS_SSH_KEY="${RDS_SSH_KEY:-}"
 
 # Test configuration
 TEST_VOLUME_SIZE="${TEST_VOLUME_SIZE:-1073741824}"  # 1 GiB
-SANITY_VERSION="${SANITY_VERSION:-v5.2.0}"
+SANITY_VERSION="${SANITY_VERSION:-latest}"
 
 echo "======================================"
 echo "CSI Sanity Test Configuration"

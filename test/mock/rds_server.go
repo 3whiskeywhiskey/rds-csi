@@ -1,6 +1,10 @@
 package mock
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"regexp"
@@ -170,29 +174,38 @@ func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.
 	defer channel.Close()
 
 	for req := range requests {
+		klog.V(4).Infof("Mock RDS received request type: %s, payload len: %d", req.Type, len(req.Payload))
+
 		switch req.Type {
 		case "exec":
 			if len(req.Payload) > 4 {
-				// Parse command from payload
-				cmdLen := int(req.Payload[3])
-				if len(req.Payload) >= 4+cmdLen {
+				// Parse command from payload (SSH exec request format)
+				cmdLen := uint32(req.Payload[0])<<24 | uint32(req.Payload[1])<<16 |
+				         uint32(req.Payload[2])<<8 | uint32(req.Payload[3])
+
+				klog.V(4).Infof("Mock RDS command length: %d, total payload: %d", cmdLen, len(req.Payload))
+
+				if len(req.Payload) >= 4+int(cmdLen) {
 					command := string(req.Payload[4 : 4+cmdLen])
-					klog.V(4).Infof("Executing command: %s", command)
+					klog.Infof("Mock RDS executing command: %s", command)
 
 					// Execute the command and get response
 					response, exitStatus := s.executeCommand(command)
 
 					// Send response
 					if response != "" {
+						klog.V(4).Infof("Mock RDS sending response (%d bytes)", len(response))
 						channel.Write([]byte(response))
 					}
 
 					// Send exit status
 					req.Reply(true, nil)
 					channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: uint32(exitStatus)}))
+					klog.V(4).Infof("Mock RDS sent exit status: %d", exitStatus)
 					return
 				}
 			}
+			klog.Warningf("Mock RDS: Invalid exec payload format")
 			req.Reply(false, nil)
 
 		case "shell":
@@ -207,33 +220,43 @@ func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.
 
 func (s *MockRDSServer) executeCommand(command string) (string, int) {
 	command = strings.TrimSpace(command)
+	klog.V(3).Infof("Mock RDS executing command: %s", command)
 
 	// Parse /disk add command
 	if strings.HasPrefix(command, "/disk add") {
-		return s.handleDiskAdd(command)
+		output, code := s.handleDiskAdd(command)
+		klog.V(3).Infof("Mock RDS /disk add returned code %d, output: %s", code, output)
+		return output, code
 	}
 
 	// Parse /disk remove command
 	if strings.HasPrefix(command, "/disk remove") {
-		return s.handleDiskRemove(command)
+		output, code := s.handleDiskRemove(command)
+		klog.V(3).Infof("Mock RDS /disk remove returned code %d", code)
+		return output, code
 	}
 
 	// Parse /disk print detail command
 	if strings.HasPrefix(command, "/disk print detail") {
-		return s.handleDiskPrintDetail(command)
+		output, code := s.handleDiskPrintDetail(command)
+		klog.V(3).Infof("Mock RDS /disk print detail returned code %d", code)
+		return output, code
 	}
 
 	// Parse /file print detail command
 	if strings.HasPrefix(command, "/file print detail") {
-		return s.handleFilePrintDetail(command)
+		output, code := s.handleFilePrintDetail(command)
+		klog.V(3).Infof("Mock RDS /file print detail returned code %d", code)
+		return output, code
 	}
 
+	klog.Warningf("Mock RDS: Unrecognized command: %s", command)
 	return fmt.Sprintf("bad command name %s\n", command), 1
 }
 
 func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 	// Parse parameters from command
-	// Example: /disk add type=file file-path=/storage/vol.img file-size=1073741824 slot=pvc-123 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn=nqn.2025-01.io.srvlab.rds:pvc-123
+	// Example: /disk add type=file file-path=/storage/vol.img file-size=1G slot=pvc-123 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn=nqn.2025-01.io.srvlab.rds:pvc-123
 
 	slot := extractParam(command, "slot")
 	filePath := extractParam(command, "file-path")
@@ -245,9 +268,11 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 		return "failure: missing required parameters\n", 1
 	}
 
-	// Parse file size
-	var fileSize int64
-	fmt.Sscanf(fileSizeStr, "%d", &fileSize)
+	// Parse file size (supports formats like "1G", "50G", "1T", or raw bytes)
+	fileSize, err := parseSize(fileSizeStr)
+	if err != nil {
+		return fmt.Sprintf("failure: invalid file size %s: %v\n", fileSizeStr, err), 1
+	}
 
 	var nvmePort int
 	if nvmePortStr != "" {
@@ -325,11 +350,13 @@ func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
 		return s.formatDiskDetail(vol), 0
 	}
 
-	// Return all volumes
+	// Return all volumes (with line numbers for proper RouterOS format)
 	var output strings.Builder
+	i := 0
 	for _, vol := range s.volumes {
-		output.WriteString(s.formatDiskDetail(vol))
-		output.WriteString("\n")
+		// RouterOS formats list output with line numbers
+		output.WriteString(fmt.Sprintf("%2d %s\n", i, s.formatDiskDetail(vol)))
+		i++
 	}
 	return output.String(), 0
 }
@@ -340,14 +367,9 @@ func (s *MockRDSServer) formatDiskDetail(vol *MockVolume) string {
 		exported = "yes"
 	}
 
-	return fmt.Sprintf(`Slot: %s
-Type: file
-File Path: %s
-File Size: %d
-NVMe TCP Export: %s
-NVMe TCP Server Port: %d
-NVMe TCP Server NQN: %s
-`, vol.Slot, vol.FilePath, vol.FileSizeBytes, exported, vol.NVMETCPPort, vol.NVMETCPNQN)
+	// Format as RouterOS key="value" pairs on a single line
+	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d nvme-tcp-export=%s nvme-tcp-server-port=%d nvme-tcp-server-nqn="%s" status="ready"`,
+		vol.Slot, vol.FilePath, vol.FileSizeBytes, exported, vol.NVMETCPPort, vol.NVMETCPNQN)
 }
 
 func (s *MockRDSServer) handleFilePrintDetail(command string) (string, int) {
@@ -372,16 +394,60 @@ func extractParam(command, param string) string {
 	return ""
 }
 
-func generateHostKey() (ssh.Signer, error) {
-	// For testing, we'll use a simplified approach
-	// In production tests, you might want to use a proper key
-	key := []byte(`-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACBqPZq7H5Oy3m8NQFO4fYMQB+k9T4PGxH7gGKCJHuG5PAAAAJh0T3JxdE9y
-cQAAAAtzc2gtZWQyNTUxOQAAACBqPZq7H5Oy3m8NQFO4fYMQB+k9T4PGxH7gGKCJHuG5PA
-AAAEDnEE7m4RqTVE7jRxYLbNMD8Px+qD0I5qXXGcH5+8v3G2o9mrsfk7LebwVAU7h9gxAH
-6T1Pg8bEfuAYoIke4bk8AAAAEHRlc3RAZXhhbXBsZS5jb20BAgMEBQ==
------END OPENSSH PRIVATE KEY-----`)
+// parseSize parses human-readable size strings like "1G", "50G", "1T" or raw bytes
+func parseSize(sizeStr string) (int64, error) {
+	// Parse with suffix (K, M, G, T) first
+	re := regexp.MustCompile(`^(\d+)([KMGT])$`)
+	matches := re.FindStringSubmatch(sizeStr)
+	if len(matches) == 3 {
+		// Parse the number part
+		var num int64
+		if _, err := fmt.Sscanf(matches[1], "%d", &num); err != nil {
+			return 0, fmt.Errorf("invalid number: %s", matches[1])
+		}
 
-	return ssh.ParsePrivateKey(key)
+		// Multiply by the appropriate factor
+		switch matches[2] {
+		case "K":
+			return num * 1024, nil
+		case "M":
+			return num * 1024 * 1024, nil
+		case "G":
+			return num * 1024 * 1024 * 1024, nil
+		case "T":
+			return num * 1024 * 1024 * 1024 * 1024, nil
+		}
+
+		return 0, fmt.Errorf("unknown size suffix: %s", matches[2])
+	}
+
+	// Try to parse as raw number (only if no suffix)
+	var size int64
+	if _, err := fmt.Sscanf(sizeStr, "%d", &size); err == nil {
+		return size, nil
+	}
+
+	return 0, fmt.Errorf("invalid size format: %s", sizeStr)
+}
+
+func generateHostKey() (ssh.Signer, error) {
+	// Generate a new RSA key for the mock SSH server
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
+	}
+
+	// Encode the private key to PEM format
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	})
+
+	// Parse it back to create an ssh.Signer
+	signer, err := ssh.ParsePrivateKey(privateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse generated key: %w", err)
+	}
+
+	return signer, nil
 }

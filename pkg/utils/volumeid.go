@@ -21,11 +21,22 @@ var (
 
 	// safeSlotPattern matches safe slot names (alphanumeric and hyphen only)
 	safeSlotPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+
+	// Namespace UUID for generating deterministic volume IDs
+	volumeNamespace = uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8") // DNS namespace UUID
 )
 
 // GenerateVolumeID generates a new unique volume ID
 func GenerateVolumeID() string {
 	return VolumeIDPrefix + uuid.New().String()
+}
+
+// VolumeNameToID generates a deterministic volume ID from a volume name
+// This ensures the same name always produces the same ID (for idempotency)
+func VolumeNameToID(name string) string {
+	// Use UUID v5 (SHA-1 based) to generate deterministic UUID from name
+	id := uuid.NewSHA1(volumeNamespace, []byte(name))
+	return VolumeIDPrefix + id.String()
 }
 
 // ValidateVolumeID validates that a volume ID is in the correct format
