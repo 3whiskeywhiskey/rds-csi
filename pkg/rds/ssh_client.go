@@ -135,9 +135,14 @@ func (c *sshClient) IsConnected() bool {
 		return false
 	}
 
-	// Test connection by sending keepalive
-	_, _, err := c.sshClient.SendRequest("keepalive@openssh.com", true, nil)
-	return err == nil
+	// Test connection by trying to create a session
+	// RouterOS may not support keepalive requests, so use session creation as test
+	session, err := c.sshClient.NewSession()
+	if err != nil {
+		return false
+	}
+	session.Close()
+	return true
 }
 
 // runCommand executes a RouterOS CLI command via SSH

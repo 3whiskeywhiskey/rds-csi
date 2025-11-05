@@ -91,14 +91,21 @@ func (c *sshClient) GetVolume(slot string) (*VolumeInfo, error) {
 		return nil, fmt.Errorf("failed to get volume info: %w", err)
 	}
 
-	// Parse output
-	if strings.TrimSpace(output) == "" {
+	// Normalize output and check if volume exists
+	// RouterOS returns flags header even when volume doesn't exist
+	normalized := normalizeRouterOSOutput(output)
+	if strings.TrimSpace(normalized) == "" {
 		return nil, fmt.Errorf("volume not found: %s", slot)
 	}
 
 	volume, err := parseVolumeInfo(output)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse volume info: %w", err)
+	}
+
+	// Additional check: if slot is empty, volume wasn't found
+	if volume.Slot == "" {
+		return nil, fmt.Errorf("volume not found: %s", slot)
 	}
 
 	return volume, nil
@@ -122,8 +129,16 @@ func (c *sshClient) VerifyVolumeExists(slot string) error {
 func (c *sshClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 	klog.V(4).Infof("Getting capacity for %s", basePath)
 
-	// Build /file print command
-	cmd := fmt.Sprintf(`/file print detail where name="%s"`, basePath)
+	// Extract mount point from base path
+	// Examples:
+	//   /storage-pool/metal-csi/volumes → storage-pool
+	//   /nvme1/kubernetes → nvme1
+	mountPoint := extractMountPoint(basePath)
+	klog.V(4).Infof("Extracted mount point: %s", mountPoint)
+
+	// Query disk capacity using mount point
+	// Use /disk print to get filesystem capacity information
+	cmd := fmt.Sprintf(`/disk print detail where mount-point="%s"`, mountPoint)
 
 	// Execute command
 	output, err := c.runCommand(cmd)
@@ -166,50 +181,74 @@ func (c *sshClient) ListVolumes() ([]VolumeInfo, error) {
 func parseVolumeInfo(output string) (*VolumeInfo, error) {
 	volume := &VolumeInfo{}
 
+	// Normalize multi-line output: join continuation lines (lines starting with spaces)
+	normalized := normalizeRouterOSOutput(output)
+
 	// Extract slot
-	if match := regexp.MustCompile(`slot="([^"]+)"`).FindStringSubmatch(output); len(match) > 1 {
+	if match := regexp.MustCompile(`slot="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		volume.Slot = match[1]
+	} else if match := regexp.MustCompile(`slot=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.Slot = match[1]
 	}
 
 	// Extract type
-	if match := regexp.MustCompile(`type="?([^"\s]+)"?`).FindStringSubmatch(output); len(match) > 1 {
+	if match := regexp.MustCompile(`type="?([^"\s]+)"?`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.Type = match[1]
 	}
 
-	// Extract file-path
-	if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(output); len(match) > 1 {
+	// Extract file-path (can be quoted or with equals sign in path)
+	// Match: file-path=/path/to/file.img or file-path="/path/to/file.img"
+	if match := regexp.MustCompile(`file-path=([^\s]+\.img)`).FindStringSubmatch(normalized); len(match) > 1 {
+		volume.FilePath = match[1]
+	} else if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.FilePath = match[1]
 	}
 
-	// Extract file-size
-	if match := regexp.MustCompile(`file-size=(\d+)`).FindStringSubmatch(output); len(match) > 1 {
-		if size, err := strconv.ParseInt(match[1], 10, 64); err == nil {
-			volume.FileSizeBytes = size
+	// Extract file-size (human-readable format like "50.0GiB" or "1024.0MiB")
+	// This is more reliable than the raw size field with spaces
+	if match := regexp.MustCompile(`file-size=([\d.]+)\s*([KMGT]i?B)`).FindStringSubmatch(normalized); len(match) > 2 {
+		if bytes, err := parseSize(match[1], match[2]); err == nil {
+			volume.FileSizeBytes = bytes
+		}
+	} else {
+		// Fallback: try to parse raw size field (with spaces removed)
+		if match := regexp.MustCompile(`size=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+			// Remove all spaces from the number
+			sizeStr := strings.ReplaceAll(match[1], " ", "")
+			if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
+				volume.FileSizeBytes = size
+			}
 		}
 	}
 
 	// Extract nvme-tcp-export
-	if match := regexp.MustCompile(`nvme-tcp-export=(yes|no)`).FindStringSubmatch(output); len(match) > 1 {
+	if match := regexp.MustCompile(`nvme-tcp-export=(yes|no)`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.NVMETCPExport = match[1] == "yes"
 	}
 
 	// Extract nvme-tcp-server-port
-	if match := regexp.MustCompile(`nvme-tcp-server-port=(\d+)`).FindStringSubmatch(output); len(match) > 1 {
+	if match := regexp.MustCompile(`nvme-tcp-server-port=(\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
 		if port, err := strconv.Atoi(match[1]); err == nil {
 			volume.NVMETCPPort = port
 		}
 	}
 
 	// Extract nvme-tcp-server-nqn
-	if match := regexp.MustCompile(`nvme-tcp-server-nqn="([^"]+)"`).FindStringSubmatch(output); len(match) > 1 {
+	if match := regexp.MustCompile(`nvme-tcp-server-nqn="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.NVMETCPNQN = match[1]
 	}
 
-	// Extract status
-	if match := regexp.MustCompile(`status="?([^"\s]+)"?`).FindStringSubmatch(output); len(match) > 1 {
+	// Extract status (if available)
+	// Note: Real RouterOS doesn't always provide a status field for file-backed disks
+	if match := regexp.MustCompile(`status="?([^"\s]+)"?`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.Status = match[1]
 	} else {
-		volume.Status = "unknown"
+		// For file-backed volumes with nvme-tcp-export=yes, assume "ready"
+		if volume.Type == "file" && volume.NVMETCPExport {
+			volume.Status = "ready"
+		} else {
+			volume.Status = "unknown"
+		}
 	}
 
 	return volume, nil
@@ -243,27 +282,31 @@ func parseVolumeList(output string) ([]VolumeInfo, error) {
 func parseCapacityInfo(output string) (*CapacityInfo, error) {
 	capacity := &CapacityInfo{}
 
-	// Look for lines like "Total: 7.23TiB" or "Free: 5.12TiB"
-	totalRe := regexp.MustCompile(`(?i)Total:\s+([\d.]+)\s*([KMGT]i?B)`)
-	freeRe := regexp.MustCompile(`(?i)Free:\s+([\d.]+)\s*([KMGT]i?B)`)
-	usedRe := regexp.MustCompile(`(?i)Used:\s+([\d.]+)\s*([KMGT]i?B)`)
+	// Normalize multi-line output
+	normalized := normalizeRouterOSOutput(output)
 
-	if match := totalRe.FindStringSubmatch(output); len(match) > 2 {
-		if bytes, err := parseSize(match[1], match[2]); err == nil {
-			capacity.TotalBytes = bytes
+	// RouterOS /file print detail output format uses space-separated numbers:
+	// size=7 681 574 174 720 free=7 301 927 047 168 use=5%
+
+	// Extract size (total capacity) - numbers may have spaces
+	if match := regexp.MustCompile(`size=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		sizeStr := strings.ReplaceAll(match[1], " ", "")
+		if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
+			capacity.TotalBytes = size
 		}
 	}
 
-	if match := freeRe.FindStringSubmatch(output); len(match) > 2 {
-		if bytes, err := parseSize(match[1], match[2]); err == nil {
-			capacity.FreeBytes = bytes
+	// Extract free capacity - numbers may have spaces
+	if match := regexp.MustCompile(`free=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		freeStr := strings.ReplaceAll(match[1], " ", "")
+		if free, err := strconv.ParseInt(freeStr, 10, 64); err == nil {
+			capacity.FreeBytes = free
 		}
 	}
 
-	if match := usedRe.FindStringSubmatch(output); len(match) > 2 {
-		if bytes, err := parseSize(match[1], match[2]); err == nil {
-			capacity.UsedBytes = bytes
-		}
+	// Calculate used capacity
+	if capacity.TotalBytes > 0 && capacity.FreeBytes > 0 {
+		capacity.UsedBytes = capacity.TotalBytes - capacity.FreeBytes
 	}
 
 	// If we didn't get values, return error
@@ -354,4 +397,54 @@ func parseSize(value, unit string) (int64, error) {
 	}
 
 	return int64(num * float64(multiplier)), nil
+}
+
+// normalizeRouterOSOutput normalizes multi-line RouterOS output by joining continuation lines
+// RouterOS CLI output often spans multiple lines with properties wrapped across lines.
+// Continuation lines start with whitespace. This function joins them into a single line.
+func normalizeRouterOSOutput(output string) string {
+	lines := strings.Split(output, "\n")
+	var normalized strings.Builder
+
+	for _, line := range lines {
+		// Remove \r if present (Windows-style line endings)
+		line = strings.TrimRight(line, "\r")
+
+		// Skip the "Flags:" header lines
+		if strings.HasPrefix(line, "Flags:") || strings.Contains(line, "disabled") {
+			continue
+		}
+
+		// If line starts with whitespace (continuation line), append to current line with space
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			normalized.WriteString(" ")
+			normalized.WriteString(strings.TrimSpace(line))
+		} else {
+			// New entry - add newline before (except for first line)
+			if normalized.Len() > 0 {
+				normalized.WriteString("\n")
+			}
+			normalized.WriteString(line)
+		}
+	}
+
+	return normalized.String()
+}
+
+// extractMountPoint extracts the mount point from a full path
+// Examples:
+//   /storage-pool/metal-csi/volumes → storage-pool
+//   /nvme1/kubernetes → nvme1
+//   storage-pool/volumes → storage-pool
+func extractMountPoint(path string) string {
+	// Remove leading slash if present
+	path = strings.TrimPrefix(path, "/")
+
+	// Split by slash and take first component
+	parts := strings.Split(path, "/")
+	if len(parts) > 0 {
+		return parts[0]
+	}
+
+	return path
 }
