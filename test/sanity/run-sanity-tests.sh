@@ -7,6 +7,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Add GOPATH/bin to PATH for csi-sanity
+export PATH="$(go env GOPATH)/bin:$PATH"
+
 # Configuration
 CSI_ENDPOINT="${CSI_ENDPOINT:-unix:///tmp/csi-sanity.sock}"
 SOCKET_PATH="/tmp/csi-sanity.sock"
@@ -39,7 +42,7 @@ fi
 # Check if csi-sanity is installed
 if ! command -v csi-sanity &> /dev/null; then
     echo "Installing csi-sanity ${SANITY_VERSION}..."
-    go install github.com/kubernetes-csi/csi-test/cmd/csi-sanity@${SANITY_VERSION}
+    go install github.com/kubernetes-csi/csi-test/v5/cmd/csi-sanity@${SANITY_VERSION}
 fi
 
 # Cleanup any existing socket
@@ -54,10 +57,12 @@ if [ -z "${RDS_ADDRESS}" ]; then
     echo ""
 
     # In mock mode, we can only test basic RPCs
-    echo "Starting driver in mock mode (Identity service only)..."
+    # Enable node mode (doesn't require RDS connection for Identity service)
+    echo "Starting driver in node mode (for Identity service testing)..."
     "${DRIVER_BINARY}" \
         --endpoint="${CSI_ENDPOINT}" \
         --node-id="test-node" \
+        --node \
         --v=5 &
     DRIVER_PID=$!
 
