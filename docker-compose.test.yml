@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # Mock RDS SSH server for integration testing
+  mock-rds:
+    image: linuxserver/openssh-server:latest
+    container_name: rds-csi-mock-rds
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - PUBLIC_KEY_FILE=/config/authorized_keys
+      - SUDO_ACCESS=false
+      - PASSWORD_ACCESS=false
+      - USER_NAME=admin
+    volumes:
+      - ./test/docker/mock-rds-config:/config
+      - ./test/docker/mock-rds-scripts:/scripts:ro
+    ports:
+      - "12222:2222"  # SSH port
+    networks:
+      - csi-test
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2222"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # RDS CSI Controller for testing
+  csi-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: controller
+    container_name: rds-csi-controller
+    environment:
+      - CSI_ENDPOINT=unix:///csi/csi.sock
+      - RDS_ADDRESS=mock-rds
+      - RDS_PORT=2222
+      - RDS_USER=admin
+      - LOG_LEVEL=5
+    volumes:
+      - csi-socket:/csi
+      - ./test/docker/ssh-keys:/keys:ro
+    command:
+      - --endpoint=unix:///csi/csi.sock
+      - --controller-mode
+      - --rds-address=mock-rds
+      - --rds-port=2222
+      - --rds-user=admin
+      - --rds-ssh-key=/keys/id_rsa
+      - --v=5
+    depends_on:
+      mock-rds:
+        condition: service_healthy
+    networks:
+      - csi-test
+    healthcheck:
+      test: ["CMD", "test", "-S", "/csi/csi.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # CSI Sanity Tests
+  csi-sanity:
+    image: golang:1.24-alpine
+    container_name: rds-csi-sanity
+    working_dir: /workspace
+    environment:
+      - CSI_ENDPOINT=unix:///csi/csi.sock
+    volumes:
+      - csi-socket:/csi
+      - .:/workspace
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "Installing csi-sanity..."
+        go install github.com/kubernetes-csi/csi-test/cmd/csi-sanity@v5.2.0
+
+        echo "Waiting for CSI socket..."
+        while [ ! -S /csi/csi.sock ]; do
+          sleep 1
+        done
+
+        echo "Running CSI sanity tests (Controller + Identity only)..."
+        csi-sanity \
+          --csi.endpoint=unix:///csi/csi.sock \
+          --csi.testvolumesize=1073741824 \
+          --ginkgo.skip="Node" \
+          --ginkgo.v
+    depends_on:
+      csi-controller:
+        condition: service_healthy
+    networks:
+      - csi-test
+
+  # Integration test runner
+  integration-tests:
+    image: golang:1.24-alpine
+    container_name: rds-csi-integration
+    working_dir: /workspace
+    environment:
+      - CGO_ENABLED=0
+    volumes:
+      - .:/workspace
+      - go-cache:/go
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "Running integration tests..."
+        go test -v -race ./test/integration/... -timeout 10m
+    networks:
+      - csi-test
+
+volumes:
+  csi-socket:
+  go-cache:
+
+networks:
+  csi-test:
+    driver: bridge

@@ -1,0 +1,425 @@
+package integration
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/test/mock"
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// TestControllerIntegrationWithMockRDS tests the full controller flow with a mock RDS server
+func TestControllerIntegrationWithMockRDS(t *testing.T) {
+	// Start mock RDS server
+	mockRDS, err := mock.NewMockRDSServer(12222)
+	if err != nil {
+		t.Fatalf("Failed to create mock RDS server: %v", err)
+	}
+
+	if err := mockRDS.Start(); err != nil {
+		t.Fatalf("Failed to start mock RDS server: %v", err)
+	}
+	defer mockRDS.Stop()
+
+	// Wait for server to be ready
+	time.Sleep(100 * time.Millisecond)
+
+	// Create RDS client connected to mock
+	rdsClient, err := rds.NewClient(rds.ClientConfig{
+		Address: mockRDS.Address(),
+		Port:    mockRDS.Port(),
+		User:    "admin",
+		// No auth for mock server
+		PrivateKey: nil,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create RDS client: %v", err)
+	}
+
+	// Connect to mock RDS
+	if err := rdsClient.Connect(); err != nil {
+		t.Fatalf("Failed to connect to mock RDS: %v", err)
+	}
+	defer rdsClient.Close()
+
+	// Create driver with mock RDS client
+	drv := &driver.Driver{}
+	// Manually initialize for testing
+	drv.SetRDSClient(rdsClient)
+	drv.AddVolumeCapabilities()
+	drv.AddControllerServiceCapabilities()
+
+	cs := driver.NewControllerServer(drv)
+
+	t.Run("CreateVolume_Success", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Name: "test-volume-1",
+			CapacityRange: &csi.CapacityRange{
+				RequiredBytes: 1073741824, // 1 GiB
+			},
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		resp, err := cs.CreateVolume(context.Background(), req)
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		if resp.Volume == nil {
+			t.Fatal("Expected volume in response")
+		}
+
+		volumeID := resp.Volume.VolumeId
+		if volumeID == "" {
+			t.Error("Expected non-empty volume ID")
+		}
+
+		// Verify volume was created on mock RDS
+		vol, exists := mockRDS.GetVolume(volumeID)
+		if !exists {
+			t.Errorf("Volume %s not found on mock RDS", volumeID)
+		}
+
+		if vol.FileSizeBytes != 1073741824 {
+			t.Errorf("Expected file size 1073741824, got %d", vol.FileSizeBytes)
+		}
+
+		if !vol.Exported {
+			t.Error("Expected volume to be exported via NVMe/TCP")
+		}
+
+		t.Logf("✅ Created volume: %s", volumeID)
+	})
+
+	t.Run("CreateVolume_Idempotency", func(t *testing.T) {
+		// Create volume first time
+		req := &csi.CreateVolumeRequest{
+			Name: "test-volume-2",
+			CapacityRange: &csi.CapacityRange{
+				RequiredBytes: 2147483648, // 2 GiB
+			},
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		resp1, err := cs.CreateVolume(context.Background(), req)
+		if err != nil {
+			t.Fatalf("First CreateVolume failed: %v", err)
+		}
+
+		volumeID := resp1.Volume.VolumeId
+
+		// Create same volume again (should be idempotent)
+		resp2, err := cs.CreateVolume(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Second CreateVolume failed: %v", err)
+		}
+
+		if resp2.Volume.VolumeId != volumeID {
+			t.Errorf("Expected same volume ID, got %s vs %s", volumeID, resp2.Volume.VolumeId)
+		}
+
+		// Verify only one volume on mock RDS
+		volumes := mockRDS.ListVolumes()
+		count := 0
+		for _, vol := range volumes {
+			if vol.Slot == volumeID {
+				count++
+			}
+		}
+
+		if count != 1 {
+			t.Errorf("Expected exactly 1 volume with ID %s, found %d", volumeID, count)
+		}
+
+		t.Logf("✅ Idempotency verified for volume: %s", volumeID)
+	})
+
+	t.Run("DeleteVolume_Success", func(t *testing.T) {
+		// First create a volume
+		createReq := &csi.CreateVolumeRequest{
+			Name: "test-volume-delete",
+			CapacityRange: &csi.CapacityRange{
+				RequiredBytes: 1073741824,
+			},
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		createResp, err := cs.CreateVolume(context.Background(), createReq)
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		volumeID := createResp.Volume.VolumeId
+
+		// Verify volume exists on mock RDS
+		_, exists := mockRDS.GetVolume(volumeID)
+		if !exists {
+			t.Fatal("Volume should exist before deletion")
+		}
+
+		// Now delete it
+		deleteReq := &csi.DeleteVolumeRequest{
+			VolumeId: volumeID,
+		}
+
+		_, err = cs.DeleteVolume(context.Background(), deleteReq)
+		if err != nil {
+			t.Fatalf("DeleteVolume failed: %v", err)
+		}
+
+		// Verify volume is gone from mock RDS
+		_, exists = mockRDS.GetVolume(volumeID)
+		if exists {
+			t.Error("Volume should not exist after deletion")
+		}
+
+		t.Logf("✅ Deleted volume: %s", volumeID)
+	})
+
+	t.Run("DeleteVolume_Idempotency", func(t *testing.T) {
+		// Delete a non-existent volume (should succeed)
+		deleteReq := &csi.DeleteVolumeRequest{
+			VolumeId: "pvc-nonexistent-volume",
+		}
+
+		_, err := cs.DeleteVolume(context.Background(), deleteReq)
+		if err != nil {
+			t.Errorf("DeleteVolume should be idempotent, got error: %v", err)
+		}
+
+		t.Log("✅ Delete idempotency verified")
+	})
+
+	t.Run("GetCapacity_Success", func(t *testing.T) {
+		req := &csi.GetCapacityRequest{}
+
+		resp, err := cs.GetCapacity(context.Background(), req)
+		if err != nil {
+			t.Fatalf("GetCapacity failed: %v", err)
+		}
+
+		if resp.AvailableCapacity == 0 {
+			t.Error("Expected non-zero available capacity")
+		}
+
+		t.Logf("✅ Available capacity: %d bytes", resp.AvailableCapacity)
+	})
+
+	t.Run("ValidateVolumeCapabilities_Success", func(t *testing.T) {
+		// First create a volume
+		createReq := &csi.CreateVolumeRequest{
+			Name: "test-volume-validate",
+			CapacityRange: &csi.CapacityRange{
+				RequiredBytes: 1073741824,
+			},
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		createResp, err := cs.CreateVolume(context.Background(), createReq)
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		volumeID := createResp.Volume.VolumeId
+
+		// Validate with supported capabilities
+		validateReq := &csi.ValidateVolumeCapabilitiesRequest{
+			VolumeId: volumeID,
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		validateResp, err := cs.ValidateVolumeCapabilities(context.Background(), validateReq)
+		if err != nil {
+			t.Fatalf("ValidateVolumeCapabilities failed: %v", err)
+		}
+
+		if validateResp.Confirmed == nil {
+			t.Error("Expected capabilities to be confirmed")
+		}
+
+		t.Log("✅ Volume capabilities validated")
+	})
+
+	t.Run("ValidateVolumeCapabilities_Unsupported", func(t *testing.T) {
+		// Create a volume first
+		createReq := &csi.CreateVolumeRequest{
+			Name: "test-volume-unsupported",
+			CapacityRange: &csi.CapacityRange{
+				RequiredBytes: 1073741824,
+			},
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		createResp, err := cs.CreateVolume(context.Background(), createReq)
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		volumeID := createResp.Volume.VolumeId
+
+		// Try to validate with unsupported MULTI_NODE access mode
+		validateReq := &csi.ValidateVolumeCapabilitiesRequest{
+			VolumeId: volumeID,
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		validateResp, err := cs.ValidateVolumeCapabilities(context.Background(), validateReq)
+		if err != nil {
+			t.Fatalf("ValidateVolumeCapabilities failed: %v", err)
+		}
+
+		if validateResp.Confirmed != nil {
+			t.Error("Expected unsupported capabilities to not be confirmed")
+		}
+
+		if validateResp.Message == "" {
+			t.Error("Expected error message for unsupported capabilities")
+		}
+
+		t.Log("✅ Unsupported capabilities correctly rejected")
+	})
+
+	t.Run("ListVolumes_Success", func(t *testing.T) {
+		// Create a few volumes
+		for i := 0; i < 3; i++ {
+			createReq := &csi.CreateVolumeRequest{
+				Name: fmt.Sprintf("test-volume-list-%d", i),
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 1073741824,
+				},
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+			}
+
+			_, err := cs.CreateVolume(context.Background(), createReq)
+			if err != nil {
+				t.Fatalf("CreateVolume failed: %v", err)
+			}
+		}
+
+		// List all volumes
+		listReq := &csi.ListVolumesRequest{}
+		listResp, err := cs.ListVolumes(context.Background(), listReq)
+		if err != nil {
+			t.Fatalf("ListVolumes failed: %v", err)
+		}
+
+		if len(listResp.Entries) < 3 {
+			t.Errorf("Expected at least 3 volumes, got %d", len(listResp.Entries))
+		}
+
+		t.Logf("✅ Listed %d volumes", len(listResp.Entries))
+	})
+
+	t.Run("CreateVolume_InvalidCapabilities", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Name: "test-volume-invalid",
+			CapacityRange: &csi.CapacityRange{
+				RequiredBytes: 1073741824,
+			},
+			VolumeCapabilities: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+		}
+
+		_, err := cs.CreateVolume(context.Background(), req)
+		if err == nil {
+			t.Fatal("Expected error for invalid capabilities")
+		}
+
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatal("Expected gRPC status error")
+		}
+
+		if st.Code() != codes.InvalidArgument {
+			t.Errorf("Expected InvalidArgument error code, got %v", st.Code())
+		}
+
+		t.Log("✅ Invalid capabilities correctly rejected")
+	})
+}

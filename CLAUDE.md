@@ -344,3 +344,4 @@ See `ROADMAP.md` for detailed implementation plan.
 ### Working with Volume IDs
 
 Always validate volume IDs match pattern `^pvc-[a-f0-9-]+$` to prevent command injection. Use `pkg/utils/volumeid.go` helpers for generation and validation.
+- make sure to update roadmap, commit and push changes, and comment on / close issues as you work through milestones

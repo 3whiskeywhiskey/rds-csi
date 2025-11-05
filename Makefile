@@ -57,12 +57,16 @@ help:
 	@echo "  make docker-multiarch - Build and push multi-arch images"
 	@echo ""
 	@echo "Testing Commands:"
-	@echo "  make test             - Run unit tests"
-	@echo "  make test-coverage    - Run tests with coverage report"
-	@echo "  make sanity           - Run CSI sanity tests"
-	@echo "  make lint             - Run linters (golangci-lint)"
-	@echo "  make fmt              - Format Go code"
-	@echo "  make verify           - Run all verification checks"
+	@echo "  make test                - Run unit tests"
+	@echo "  make test-coverage       - Run tests with coverage report"
+	@echo "  make test-integration    - Run integration tests with mock RDS"
+	@echo "  make test-sanity         - Run CSI sanity tests (requires RDS or uses mock)"
+	@echo "  make test-sanity-mock    - Run CSI sanity tests with mock RDS"
+	@echo "  make test-sanity-real    - Run CSI sanity tests with real RDS (requires env vars)"
+	@echo "  make test-docker         - Run all tests in Docker Compose"
+	@echo "  make lint                - Run linters (golangci-lint)"
+	@echo "  make fmt                 - Format Go code"
+	@echo "  make verify              - Run all verification checks"
 	@echo ""
 	@echo "Utility Commands:"
 	@echo "  make clean            - Remove build artifacts"
@@ -187,22 +191,62 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
-.PHONY: sanity
-sanity:
+# Integration Testing
+.PHONY: test-integration
+test-integration:
+	@echo "Running integration tests with mock RDS..."
+	go test -v -race -timeout 10m ./test/integration/...
+
+# CSI Sanity Tests
+.PHONY: test-sanity
+test-sanity:
 	@echo "Running CSI sanity tests..."
-	@echo "Requires csi-sanity to be installed:"
-	@echo "  go install github.com/kubernetes-csi/csi-test/cmd/csi-sanity@latest"
-	@if ! command -v csi-sanity &> /dev/null; then \
-		echo "ERROR: csi-sanity not found. Install it first."; \
+	@if [ ! -x test/sanity/run-sanity-tests.sh ]; then \
+		chmod +x test/sanity/run-sanity-tests.sh; \
+	fi
+	@test/sanity/run-sanity-tests.sh
+
+.PHONY: test-sanity-mock
+test-sanity-mock: build-local
+	@echo "Running CSI sanity tests with mock RDS..."
+	@RDS_ADDRESS="" test/sanity/run-sanity-tests.sh
+
+.PHONY: test-sanity-real
+test-sanity-real: build-local
+	@echo "Running CSI sanity tests with real RDS..."
+	@if [ -z "$(RDS_ADDRESS)" ]; then \
+		echo "ERROR: RDS_ADDRESS environment variable must be set"; \
+		echo "Example: make test-sanity-real RDS_ADDRESS=192.168.88.1 RDS_SSH_KEY=~/.ssh/id_rsa"; \
 		exit 1; \
 	fi
-	@echo "Starting CSI driver..."
-	@./$(BUILD_DIR)/$(BINARY_NAME) --endpoint=unix:///tmp/csi.sock --node-id=test-node &
-	@sleep 2
-	@echo "Running sanity tests..."
-	csi-sanity --csi.endpoint=/tmp/csi.sock
-	@killall $(BINARY_NAME) || true
-	@rm -f /tmp/csi.sock
+	@if [ -z "$(RDS_SSH_KEY)" ]; then \
+		echo "ERROR: RDS_SSH_KEY environment variable must be set"; \
+		exit 1; \
+	fi
+	@test/sanity/run-sanity-tests.sh
+
+# Docker Compose Testing
+.PHONY: test-docker
+test-docker:
+	@echo "Running all tests in Docker Compose..."
+	docker-compose -f docker-compose.test.yml up --abort-on-container-exit --build
+	docker-compose -f docker-compose.test.yml down -v
+
+.PHONY: test-docker-sanity
+test-docker-sanity:
+	@echo "Running CSI sanity tests in Docker Compose..."
+	docker-compose -f docker-compose.test.yml up csi-sanity --abort-on-container-exit --build
+	docker-compose -f docker-compose.test.yml down -v
+
+.PHONY: test-docker-integration
+test-docker-integration:
+	@echo "Running integration tests in Docker Compose..."
+	docker-compose -f docker-compose.test.yml up integration-tests --abort-on-container-exit --build
+	docker-compose -f docker-compose.test.yml down -v
+
+# Legacy alias
+.PHONY: sanity
+sanity: test-sanity-mock
 
 .PHONY: lint
 lint:

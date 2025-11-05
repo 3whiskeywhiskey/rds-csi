@@ -200,3 +200,23 @@ func (d *Driver) Stop() {
 		}
 	}
 }
+
+// SetRDSClient sets the RDS client (for testing)
+func (d *Driver) SetRDSClient(client *rds.Client) {
+	d.rdsClient = client
+}
+
+// AddVolumeCapabilities adds volume capabilities (exported for testing)
+func (d *Driver) AddVolumeCapabilities() {
+	d.addVolumeCapabilities()
+}
+
+// AddControllerServiceCapabilities adds controller service capabilities (exported for testing)
+func (d *Driver) AddControllerServiceCapabilities() {
+	d.addControllerServiceCapabilities()
+}
+
+// AddNodeServiceCapabilities adds node service capabilities (exported for testing)
+func (d *Driver) AddNodeServiceCapabilities() {
+	d.addNodeServiceCapabilities()
+}
