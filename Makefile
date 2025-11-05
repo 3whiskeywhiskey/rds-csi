@@ -11,6 +11,10 @@ GOARCH ?= amd64
 GOOS ?= linux
 CGO_ENABLED ?= 0
 
+# Detect local OS and architecture
+LOCAL_OS := $(shell go env GOOS)
+LOCAL_ARCH := $(shell go env GOARCH)
+
 # Binary output
 BINARY_NAME = rds-csi-plugin
 BUILD_DIR = bin
@@ -38,17 +42,32 @@ all: build
 help:
 	@echo "RDS CSI Driver - Build Targets:"
 	@echo ""
-	@echo "  make build         - Build binary for Linux/amd64"
-	@echo "  make docker        - Build Docker image"
-	@echo "  make docker-push   - Push Docker image to registry"
-	@echo "  make test          - Run unit tests"
-	@echo "  make test-coverage - Run tests with coverage report"
-	@echo "  make sanity        - Run CSI sanity tests"
-	@echo "  make lint          - Run linters (golangci-lint)"
-	@echo "  make fmt           - Format Go code"
-	@echo "  make clean         - Remove build artifacts"
-	@echo "  make mod-tidy      - Tidy Go modules"
-	@echo "  make verify        - Run all verification checks"
+	@echo "Build Commands:"
+	@echo "  make build            - Build binary for Linux/amd64 (container target)"
+	@echo "  make build-local      - Build binary for local OS/arch ($(LOCAL_OS)/$(LOCAL_ARCH))"
+	@echo "  make build-darwin-amd64  - Build for macOS Intel"
+	@echo "  make build-darwin-arm64  - Build for macOS Apple Silicon"
+	@echo "  make build-linux-amd64   - Build for Linux x86_64"
+	@echo "  make build-linux-arm64   - Build for Linux ARM64"
+	@echo "  make build-all        - Build for all supported platforms"
+	@echo ""
+	@echo "Container Commands:"
+	@echo "  make docker           - Build Docker image"
+	@echo "  make docker-push      - Push Docker image to registry"
+	@echo "  make docker-multiarch - Build and push multi-arch images"
+	@echo ""
+	@echo "Testing Commands:"
+	@echo "  make test             - Run unit tests"
+	@echo "  make test-coverage    - Run tests with coverage report"
+	@echo "  make sanity           - Run CSI sanity tests"
+	@echo "  make lint             - Run linters (golangci-lint)"
+	@echo "  make fmt              - Format Go code"
+	@echo "  make verify           - Run all verification checks"
+	@echo ""
+	@echo "Utility Commands:"
+	@echo "  make clean            - Remove build artifacts"
+	@echo "  make mod-tidy         - Tidy Go modules"
+	@echo "  make install-tools    - Install development tools"
 	@echo ""
 
 .PHONY: build
@@ -64,14 +83,67 @@ build: mod-tidy
 
 .PHONY: build-local
 build-local:
-	@echo "Building $(BINARY_NAME) for local OS..."
+	@echo "Building $(BINARY_NAME) for local OS ($(LOCAL_OS)/$(LOCAL_ARCH))..."
 	@mkdir -p $(BUILD_DIR)
-	go build \
+	CGO_ENABLED=0 GOOS=$(LOCAL_OS) GOARCH=$(LOCAL_ARCH) go build \
 		-ldflags "$(LDFLAGS) $(VERSION_LDFLAGS)" \
 		$(GOFLAGS) \
-		-o $(BUILD_DIR)/$(BINARY_NAME) \
+		-o $(BUILD_DIR)/$(BINARY_NAME)-$(LOCAL_OS)-$(LOCAL_ARCH) \
 		./cmd/rds-csi-plugin
-	@echo "Binary created: $(BUILD_DIR)/$(BINARY_NAME)"
+	@echo "Binary created: $(BUILD_DIR)/$(BINARY_NAME)-$(LOCAL_OS)-$(LOCAL_ARCH)"
+	@echo ""
+	@echo "To run locally: ./$(BUILD_DIR)/$(BINARY_NAME)-$(LOCAL_OS)-$(LOCAL_ARCH) --help"
+
+# Platform-specific builds
+.PHONY: build-darwin-amd64
+build-darwin-amd64:
+	@echo "Building $(BINARY_NAME) for macOS Intel..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+		-ldflags "$(LDFLAGS) $(VERSION_LDFLAGS)" \
+		$(GOFLAGS) \
+		-o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 \
+		./cmd/rds-csi-plugin
+	@echo "Binary created: $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64"
+
+.PHONY: build-darwin-arm64
+build-darwin-arm64:
+	@echo "Building $(BINARY_NAME) for macOS Apple Silicon..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+		-ldflags "$(LDFLAGS) $(VERSION_LDFLAGS)" \
+		$(GOFLAGS) \
+		-o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 \
+		./cmd/rds-csi-plugin
+	@echo "Binary created: $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64"
+
+.PHONY: build-linux-amd64
+build-linux-amd64:
+	@echo "Building $(BINARY_NAME) for Linux x86_64..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+		-ldflags "$(LDFLAGS) $(VERSION_LDFLAGS)" \
+		$(GOFLAGS) \
+		-o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 \
+		./cmd/rds-csi-plugin
+	@echo "Binary created: $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64"
+
+.PHONY: build-linux-arm64
+build-linux-arm64:
+	@echo "Building $(BINARY_NAME) for Linux ARM64..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+		-ldflags "$(LDFLAGS) $(VERSION_LDFLAGS)" \
+		$(GOFLAGS) \
+		-o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 \
+		./cmd/rds-csi-plugin
+	@echo "Binary created: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64"
+
+.PHONY: build-all
+build-all: build-darwin-amd64 build-darwin-arm64 build-linux-amd64 build-linux-arm64
+	@echo ""
+	@echo "All binaries built successfully!"
+	@ls -lh $(BUILD_DIR)/
 
 .PHONY: docker
 docker:
