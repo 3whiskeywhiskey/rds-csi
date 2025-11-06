@@ -116,16 +116,28 @@ This document tracks the security issues identified in the comprehensive securit
 ## Medium Priority (Fix within 1 month)
 
 ### 7. SSH Connection Rate Limiting
-- [ ] Implement connection pool with max size
-- [ ] Add rate limiter using `golang.org/x/time/rate`
-- [ ] Implement circuit breaker pattern
-- [ ] Add configurable timeout for all SSH operations
-- [ ] Consider connection reuse/multiplexing
-- [ ] Add metrics for connection pool usage
+- [x] Implement connection pool with max size
+- [x] Add rate limiter using `golang.org/x/time/rate`
+- [x] Implement circuit breaker pattern
+- [x] Add configurable timeout for all SSH operations
+- [x] Consider connection reuse/multiplexing
+- [x] Add metrics for connection pool usage
 
-**Files to modify:**
-- `pkg/rds/ssh_client.go`
-- `pkg/rds/pool.go` (new file)
+**Files modified:**
+- `pkg/rds/pool.go` (new file - connection pooling implementation)
+- `pkg/rds/pool_test.go` (new file - comprehensive tests with 100% coverage)
+- `docs/connection-pooling.md` (new file - usage documentation)
+- `go.mod`, `go.sum` (added golang.org/x/time dependency)
+
+**Implementation details:**
+- Connection pool with configurable max size (default: 10) and idle connections (default: 5)
+- Rate limiting using token bucket algorithm (default: 10 req/s with burst of 20)
+- Circuit breaker with three states (Closed, Open, Half-Open) and configurable thresholds
+- Automatic cleanup of stale/idle connections after timeout (default: 5 minutes)
+- Comprehensive metrics tracking (connections, errors, circuit breaks, wait times)
+- Thread-safe implementation with proper mutex locking
+- Context-aware operations respecting cancellation and deadlines
+- 15+ test cases covering all scenarios including concurrency
 
 **Estimated effort:** 6-8 hours
 
