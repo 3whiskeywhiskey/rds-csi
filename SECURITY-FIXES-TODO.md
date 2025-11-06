@@ -43,11 +43,11 @@ This document tracks the security issues identified in the comprehensive securit
 ## High Priority (Fix within 1 week)
 
 ### 3. NQN Format Validation
-- [ ] Add NQN regex validation: `^nqn\.[0-9]{4}-[0-9]{2}\.[a-z0-9.-]+:[a-z0-9._-]+$`
-- [ ] Validate NQN in `VolumeIDToNQN()` function
-- [ ] Add NQN validation before nvme connect operations
-- [ ] Add unit tests for NQN validation
-- [ ] Reject NQNs with shell metacharacters
+- [x] Add NQN regex validation: `^nqn\.[0-9]{4}-[0-9]{2}\.[a-z0-9.-]+:[a-z0-9._-]+$`
+- [x] Validate NQN in `VolumeIDToNQN()` function
+- [x] Add NQN validation before nvme connect operations
+- [x] Add unit tests for NQN validation
+- [x] Reject NQNs with shell metacharacters
 
 **Files to modify:**
 - `pkg/utils/volumeid.go`
