@@ -2,7 +2,9 @@ package utils
 
 import (
 	"fmt"
+	"net"
 	"regexp"
+	"strconv"
 
 	"github.com/google/uuid"
 )
@@ -104,4 +106,87 @@ func ExtractVolumeIDFromNQN(nqn string) (string, error) {
 	}
 
 	return volumeID, nil
+}
+
+// ValidateIPAddress validates that a string is a valid IPv4 or IPv6 address
+func ValidateIPAddress(address string) error {
+	if address == "" {
+		return fmt.Errorf("IP address cannot be empty")
+	}
+
+	// Try to parse as IP
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return fmt.Errorf("invalid IP address: %s", address)
+	}
+
+	return nil
+}
+
+// ValidatePort validates that a port number is in valid range
+// Optionally checks against privileged port range (< 1024)
+func ValidatePort(port int, allowPrivileged bool) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be in range 1-65535: got %d", port)
+	}
+
+	if !allowPrivileged && port < 1024 {
+		return fmt.Errorf("privileged port (< 1024) not allowed: %d", port)
+	}
+
+	return nil
+}
+
+// ValidatePortString validates a port string and returns the port number
+func ValidatePortString(portStr string, allowPrivileged bool) (int, error) {
+	if portStr == "" {
+		return 0, fmt.Errorf("port cannot be empty")
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid port format: %s", portStr)
+	}
+
+	if err := ValidatePort(port, allowPrivileged); err != nil {
+		return 0, err
+	}
+
+	return port, nil
+}
+
+// ValidateNVMEAddress validates an NVMe target address (IP:Port combination)
+func ValidateNVMEAddress(address string, port int) error {
+	// Validate IP address
+	if err := ValidateIPAddress(address); err != nil {
+		return fmt.Errorf("invalid NVMe address: %w", err)
+	}
+
+	// Validate port (NVMe/TCP typically uses non-privileged ports)
+	if err := ValidatePort(port, true); err != nil {
+		return fmt.Errorf("invalid NVMe port: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateNVMETargetContext validates volume context parameters for NVMe/TCP
+// This includes NQN, address, and port validation
+func ValidateNVMETargetContext(nqn, address string, port int, expectedAddress string) error {
+	// Validate NQN (using existing function if available)
+	if nqn == "" {
+		return fmt.Errorf("NQN cannot be empty")
+	}
+
+	// Validate address and port
+	if err := ValidateNVMEAddress(address, port); err != nil {
+		return err
+	}
+
+	// Optionally verify address matches expected RDS address
+	if expectedAddress != "" && address != expectedAddress {
+		return fmt.Errorf("NVMe address %s does not match expected RDS address %s", address, expectedAddress)
+	}
+
+	return nil
 }

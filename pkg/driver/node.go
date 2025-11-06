@@ -87,10 +87,22 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 			nqn, nvmeAddress, nvmePort)
 	}
 
-	// Parse port
-	var port int
-	if _, err := fmt.Sscanf(nvmePort, "%d", &port); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid nvmePort: %s", nvmePort)
+	// SECURITY: Validate port format and range
+	port, err := utils.ValidatePortString(nvmePort, true)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid nvmePort: %v", err)
+	}
+
+	// SECURITY: Validate IP address format
+	if err := utils.ValidateIPAddress(nvmeAddress); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid nvmeAddress: %v", err)
+	}
+
+	// SECURITY: Validate NVMe target context (address + port combination)
+	// Note: expectedAddress is empty here as we don't have RDS address in node plugin
+	// The controller validates this during volume creation
+	if err := utils.ValidateNVMETargetContext(nqn, nvmeAddress, port, ""); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe target context: %v", err)
 	}
 
 	// Get filesystem type from capability or use default

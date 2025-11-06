@@ -276,3 +276,329 @@ func TestExtractVolumeIDFromNQN(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateIPAddress(t *testing.T) {
+	tests := []struct {
+		name      string
+		address   string
+		expectErr bool
+	}{
+		// Valid IPv4
+		{
+			name:      "valid IPv4",
+			address:   "192.168.1.1",
+			expectErr: false,
+		},
+		{
+			name:      "valid IPv4 localhost",
+			address:   "127.0.0.1",
+			expectErr: false,
+		},
+		{
+			name:      "valid IPv4 10.x",
+			address:   "10.42.68.1",
+			expectErr: false,
+		},
+		// Valid IPv6
+		{
+			name:      "valid IPv6",
+			address:   "2001:db8::1",
+			expectErr: false,
+		},
+		{
+			name:      "valid IPv6 localhost",
+			address:   "::1",
+			expectErr: false,
+		},
+		// Invalid
+		{
+			name:      "empty address",
+			address:   "",
+			expectErr: true,
+		},
+		{
+			name:      "invalid IP format",
+			address:   "not-an-ip",
+			expectErr: true,
+		},
+		{
+			name:      "invalid IPv4 octets",
+			address:   "256.256.256.256",
+			expectErr: true,
+		},
+		{
+			name:      "hostname instead of IP",
+			address:   "example.com",
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateIPAddress(tt.address)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("ValidateIPAddress() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+func TestValidatePort(t *testing.T) {
+	tests := []struct {
+		name            string
+		port            int
+		allowPrivileged bool
+		expectErr       bool
+	}{
+		// Valid ports
+		{
+			name:            "valid high port",
+			port:            8080,
+			allowPrivileged: false,
+			expectErr:       false,
+		},
+		{
+			name:            "valid privileged port with allow",
+			port:            80,
+			allowPrivileged: true,
+			expectErr:       false,
+		},
+		{
+			name:            "valid NVMe/TCP port",
+			port:            4420,
+			allowPrivileged: false,
+			expectErr:       false,
+		},
+		{
+			name:            "port 1024 (first non-privileged)",
+			port:            1024,
+			allowPrivileged: false,
+			expectErr:       false,
+		},
+		{
+			name:            "port 65535 (maximum)",
+			port:            65535,
+			allowPrivileged: false,
+			expectErr:       false,
+		},
+		// Invalid ports
+		{
+			name:            "port 0",
+			port:            0,
+			allowPrivileged: true,
+			expectErr:       true,
+		},
+		{
+			name:            "negative port",
+			port:            -1,
+			allowPrivileged: true,
+			expectErr:       true,
+		},
+		{
+			name:            "port too high",
+			port:            65536,
+			allowPrivileged: true,
+			expectErr:       true,
+		},
+		{
+			name:            "privileged port without allow",
+			port:            22,
+			allowPrivileged: false,
+			expectErr:       true,
+		},
+		{
+			name:            "port 1023 without allow",
+			port:            1023,
+			allowPrivileged: false,
+			expectErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePort(tt.port, tt.allowPrivileged)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("ValidatePort() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+func TestValidatePortString(t *testing.T) {
+	tests := []struct {
+		name            string
+		portStr         string
+		allowPrivileged bool
+		expectedPort    int
+		expectErr       bool
+	}{
+		{
+			name:            "valid port string",
+			portStr:         "4420",
+			allowPrivileged: false,
+			expectedPort:    4420,
+			expectErr:       false,
+		},
+		{
+			name:            "valid string with privileged",
+			portStr:         "22",
+			allowPrivileged: true,
+			expectedPort:    22,
+			expectErr:       false,
+		},
+		{
+			name:            "empty string",
+			portStr:         "",
+			allowPrivileged: false,
+			expectErr:       true,
+		},
+		{
+			name:            "non-numeric string",
+			portStr:         "abc",
+			allowPrivileged: false,
+			expectErr:       true,
+		},
+		{
+			name:            "privileged port without allow",
+			portStr:         "80",
+			allowPrivileged: false,
+			expectErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port, err := ValidatePortString(tt.portStr, tt.allowPrivileged)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("ValidatePortString() error = %v, expectErr %v", err, tt.expectErr)
+				return
+			}
+			if !tt.expectErr && port != tt.expectedPort {
+				t.Errorf("ValidatePortString() = %d, expected %d", port, tt.expectedPort)
+			}
+		})
+	}
+}
+
+func TestValidateNVMEAddress(t *testing.T) {
+	tests := []struct {
+		name      string
+		address   string
+		port      int
+		expectErr bool
+	}{
+		{
+			name:      "valid NVMe address",
+			address:   "10.42.68.1",
+			port:      4420,
+			expectErr: false,
+		},
+		{
+			name:      "valid with IPv6",
+			address:   "2001:db8::1",
+			port:      4420,
+			expectErr: false,
+		},
+		{
+			name:      "invalid IP",
+			address:   "not-an-ip",
+			port:      4420,
+			expectErr: true,
+		},
+		{
+			name:      "invalid port",
+			address:   "10.42.68.1",
+			port:      0,
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateNVMEAddress(tt.address, tt.port)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("ValidateNVMEAddress() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+func TestValidateNVMETargetContext(t *testing.T) {
+	tests := []struct {
+		name            string
+		nqn             string
+		address         string
+		port            int
+		expectedAddress string
+		expectErr       bool
+	}{
+		{
+			name:            "valid without expected address",
+			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
+			address:         "10.42.68.1",
+			port:            4420,
+			expectedAddress: "",
+			expectErr:       false,
+		},
+		{
+			name:            "valid with matching expected address",
+			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
+			address:         "10.42.68.1",
+			port:            4420,
+			expectedAddress: "10.42.68.1",
+			expectErr:       false,
+		},
+		{
+			name:            "mismatched expected address",
+			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
+			address:         "10.42.68.1",
+			port:            4420,
+			expectedAddress: "10.42.68.2",
+			expectErr:       true,
+		},
+		{
+			name:            "empty NQN",
+			nqn:             "",
+			address:         "10.42.68.1",
+			port:            4420,
+			expectedAddress: "",
+			expectErr:       true,
+		},
+		{
+			name:            "invalid address",
+			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
+			address:         "invalid-ip",
+			port:            4420,
+			expectedAddress: "",
+			expectErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateNVMETargetContext(tt.nqn, tt.address, tt.port, tt.expectedAddress)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("ValidateNVMETargetContext() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+// Benchmark validation functions
+func BenchmarkValidateIPAddress(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ValidateIPAddress("10.42.68.1")
+	}
+}
+
+func BenchmarkValidatePort(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ValidatePort(4420, false)
+	}
+}
+
+func BenchmarkValidateNVMETargetContext(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ValidateNVMETargetContext("nqn.2000-02.com.mikrotik:pvc-123", "10.42.68.1", 4420, "")
+	}
+}
