@@ -39,8 +39,9 @@ type ClientConfig struct {
 	UseTLS           bool          // Use TLS for API protocol (future)
 
 	// SSH Security Options
-	HostKeyCallback  interface{}   // ssh.HostKeyCallback - custom host key verification (for SSH)
-	InsecureSkipVerify bool        // Skip host key verification (INSECURE - for testing only)
+	HostKey            []byte        // SSH host public key for verification (required for production)
+	HostKeyCallback    interface{}   // ssh.HostKeyCallback - custom host key verification (for SSH)
+	InsecureSkipVerify bool          // Skip host key verification (INSECURE - for testing only)
 }
 
 // NewClient creates a new RDS client based on the configuration

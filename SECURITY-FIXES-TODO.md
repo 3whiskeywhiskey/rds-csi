@@ -5,12 +5,12 @@ This document tracks the security issues identified in the comprehensive securit
 ## Critical Priority (Fix Immediately)
 
 ### 1. SSH Host Key Verification
-- [ ] Store RDS host key in Kubernetes Secret
-- [ ] Implement host key verification in SSH client
-- [ ] Make verification mandatory (remove InsecureIgnoreHostKey)
-- [ ] Add host key mismatch detection and alerting
-- [ ] Update documentation with host key setup instructions
-- [ ] Update deployment manifests to include host key secret
+- [x] Store RDS host key in Kubernetes Secret
+- [x] Implement host key verification in SSH client
+- [x] Make verification mandatory (remove InsecureIgnoreHostKey)
+- [x] Add host key mismatch detection and alerting
+- [x] Update documentation with host key setup instructions
+- [x] Update deployment manifests to include host key secret
 
 **Files to modify:**
 - `pkg/rds/ssh_client.go`

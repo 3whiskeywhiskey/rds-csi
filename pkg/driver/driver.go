@@ -50,10 +50,12 @@ type DriverConfig struct {
 	Version    string
 
 	// RDS connection settings
-	RDSAddress    string
-	RDSPort       int
-	RDSUser       string
-	RDSPrivateKey []byte
+	RDSAddress           string
+	RDSPort              int
+	RDSUser              string
+	RDSPrivateKey        []byte
+	RDSHostKey           []byte // SSH host public key for verification
+	RDSInsecureSkipVerify bool   // Skip host key verification (INSECURE)
 
 	// Mode flags
 	EnableController bool
@@ -80,10 +82,12 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	// Initialize RDS client if controller is enabled
 	if config.EnableController {
 		rdsClient, err := rds.NewClient(rds.ClientConfig{
-			Address:    config.RDSAddress,
-			Port:       config.RDSPort,
-			User:       config.RDSUser,
-			PrivateKey: config.RDSPrivateKey,
+			Address:            config.RDSAddress,
+			Port:               config.RDSPort,
+			User:               config.RDSUser,
+			PrivateKey:         config.RDSPrivateKey,
+			HostKey:            config.RDSHostKey,
+			InsecureSkipVerify: config.RDSInsecureSkipVerify,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create RDS client: %w", err)
