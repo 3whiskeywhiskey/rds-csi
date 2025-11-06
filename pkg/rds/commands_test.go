@@ -221,7 +221,7 @@ func TestValidateCreateVolumeOptions(t *testing.T) {
 			name: "valid options",
 			opts: CreateVolumeOptions{
 				Slot:          "pvc-test-123",
-				FilePath:      "/storage-pool/test.img",
+				FilePath:      "/storage-pool/metal-csi/volumes/test.img",
 				FileSizeBytes: 50 * 1024 * 1024 * 1024,
 				NVMETCPPort:   4420,
 				NVMETCPNQN:    "nqn.2000-02.com.mikrotik:pvc-test-123",
@@ -231,7 +231,7 @@ func TestValidateCreateVolumeOptions(t *testing.T) {
 		{
 			name: "missing slot",
 			opts: CreateVolumeOptions{
-				FilePath:      "/storage-pool/test.img",
+				FilePath:      "/storage-pool/metal-csi/volumes/test.img",
 				FileSizeBytes: 50 * 1024 * 1024 * 1024,
 				NVMETCPNQN:    "nqn.2000-02.com.mikrotik:pvc-test-123",
 			},
@@ -250,7 +250,7 @@ func TestValidateCreateVolumeOptions(t *testing.T) {
 			name: "zero size",
 			opts: CreateVolumeOptions{
 				Slot:       "pvc-test-123",
-				FilePath:   "/storage-pool/test.img",
+				FilePath:   "/storage-pool/metal-csi/volumes/test.img",
 				NVMETCPNQN: "nqn.2000-02.com.mikrotik:pvc-test-123",
 			},
 			expectErr: true,
@@ -259,7 +259,7 @@ func TestValidateCreateVolumeOptions(t *testing.T) {
 			name: "missing NQN",
 			opts: CreateVolumeOptions{
 				Slot:          "pvc-test-123",
-				FilePath:      "/storage-pool/test.img",
+				FilePath:      "/storage-pool/metal-csi/volumes/test.img",
 				FileSizeBytes: 50 * 1024 * 1024 * 1024,
 			},
 			expectErr: true,
