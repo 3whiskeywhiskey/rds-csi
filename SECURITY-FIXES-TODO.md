@@ -148,14 +148,42 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 9. NVMe Operation Timeouts
-- [ ] Add context with timeout to nvme-cli commands
-- [ ] Make timeout configurable
-- [ ] Add healthcheck for stuck operations
-- [ ] Implement automatic cleanup of hung operations
-- [ ] Add metrics for operation duration
+- [x] Add context with timeout to nvme-cli commands
+- [x] Make timeout configurable
+- [x] Add healthcheck for stuck operations
+- [x] Implement automatic cleanup of hung operations
+- [x] Add metrics for operation duration
 
-**Files to modify:**
-- `pkg/nvme/nvme.go`
+**Files modified:**
+- `pkg/nvme/nvme.go` (enhanced with context support and monitoring)
+
+**Implementation details:**
+- Added Config struct with configurable timeouts for all operations:
+  - ConnectTimeout (30s), DisconnectTimeout (15s), ListTimeout (10s)
+  - DeviceWaitTimeout (30s), CommandTimeout (20s)
+  - HealthcheckInterval (5s) for monitoring
+- Context-aware methods:
+  - `ConnectWithContext()`, `DisconnectWithContext()`, `IsConnectedWithContext()`
+  - All use `exec.CommandContext()` for proper cancellation
+  - Automatic timeout from config if no deadline set
+- Operation metrics tracking:
+  - Connect/disconnect count and duration
+  - Error counts and timeout counts
+  - Stuck operation detection
+  - Active operation count
+- Healthcheck goroutine:
+  - Monitors active operations every 5 seconds
+  - Warns about operations exceeding 2x timeout threshold
+  - Tracks stuck operation count in metrics
+- Operation tracking:
+  - Each operation registered with start time and NQN
+  - Automatic cleanup on completion
+  - Active operations map for monitoring
+- Backward compatibility:
+  - Original methods (Connect, Disconnect, IsConnected) delegate to context versions
+  - NewConnector() uses DefaultConfig() automatically
+  - Legacy implementations preserved as *Legacy() methods
+- Metrics string format: "Connects(total=X, errors=Y, avg=Zms) Disconnects(...) Timeouts=N Stuck=M Active=K"
 
 **Estimated effort:** 3-4 hours
 
