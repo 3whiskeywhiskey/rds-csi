@@ -5,7 +5,18 @@ import (
 )
 
 func TestParseVolumeInfo(t *testing.T) {
-	output := `slot="pvc-test-123" type="file" file-path="/storage-pool/test.img" file-size=53687091200 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-123" status="ready"`
+	// Real RouterOS output format (multi-line)
+	output := `type=file slot="pvc-test-123" slot-default="" parent="" fs=-
+               model="/storage-pool/test.img"
+               size=53 687 091 200 mount-filesystem=yes mount-read-only=no
+               compress=no sector-size=512 raid-master=none
+               nvme-tcp-export=yes nvme-tcp-server-port=4420
+               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-123"
+               nvme-tcp-server-allow-host-name="" iscsi-export=no
+               nfs-sharing=no smb-sharing=no media-sharing=no
+               media-interface=none swap=no
+               file-path=/storage-pool/test.img
+               file-size=50.0GiB file-offset=0`
 
 	volume, err := parseVolumeInfo(output)
 	if err != nil {
@@ -24,8 +35,10 @@ func TestParseVolumeInfo(t *testing.T) {
 		t.Errorf("Expected path /storage-pool/test.img, got %s", volume.FilePath)
 	}
 
-	if volume.FileSizeBytes != 53687091200 {
-		t.Errorf("Expected size 53687091200, got %d", volume.FileSizeBytes)
+	// file-size=50.0GiB = 50 * 1024^3 bytes = 53687091200
+	expectedSize := int64(50 * 1024 * 1024 * 1024)
+	if volume.FileSizeBytes != expectedSize {
+		t.Errorf("Expected size %d, got %d", expectedSize, volume.FileSizeBytes)
 	}
 
 	if !volume.NVMETCPExport {
@@ -40,15 +53,23 @@ func TestParseVolumeInfo(t *testing.T) {
 		t.Errorf("Expected NQN nqn.2000-02.com.mikrotik:pvc-test-123, got %s", volume.NVMETCPNQN)
 	}
 
+	// Status should be "ready" for file-type volumes with nvme-tcp-export=yes
 	if volume.Status != "ready" {
 		t.Errorf("Expected status ready, got %s", volume.Status)
 	}
 }
 
 func TestParseVolumeList(t *testing.T) {
-	output := ` 0  slot="pvc-test-1" type="file" file-path="/storage-pool/test1.img" file-size=53687091200 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-1" status="ready"
+	// Real RouterOS /disk print output with multiple volumes (multi-line format)
+	output := ` 0  type=file slot="pvc-test-1" size=53 687 091 200
+               file-path=/storage-pool/test1.img file-size=50.0GiB
+               nvme-tcp-export=yes nvme-tcp-server-port=4420
+               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-1"
 
- 1  slot="pvc-test-2" type="file" file-path="/storage-pool/test2.img" file-size=107374182400 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-2" status="ready"`
+ 1  type=file slot="pvc-test-2" size=107 374 182 400
+               file-path=/storage-pool/test2.img file-size=100.0GiB
+               nvme-tcp-export=yes nvme-tcp-server-port=4420
+               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-2"`
 
 	volumes, err := parseVolumeList(output)
 	if err != nil {
@@ -59,41 +80,52 @@ func TestParseVolumeList(t *testing.T) {
 		t.Errorf("Expected 2 volumes, got %d", len(volumes))
 	}
 
-	if volumes[0].Slot != "pvc-test-1" {
+	if len(volumes) > 0 && volumes[0].Slot != "pvc-test-1" {
 		t.Errorf("Expected first volume slot pvc-test-1, got %s", volumes[0].Slot)
 	}
 
-	if volumes[1].Slot != "pvc-test-2" {
+	if len(volumes) > 1 && volumes[1].Slot != "pvc-test-2" {
 		t.Errorf("Expected second volume slot pvc-test-2, got %s", volumes[1].Slot)
+	}
+
+	// Verify first volume details
+	if len(volumes) > 0 {
+		expectedSize := int64(50 * 1024 * 1024 * 1024) // 50 GiB
+		if volumes[0].FileSizeBytes != expectedSize {
+			t.Errorf("Expected first volume size %d, got %d", expectedSize, volumes[0].FileSizeBytes)
+		}
+		if !volumes[0].NVMETCPExport {
+			t.Error("Expected first volume NVMETCPExport to be true")
+		}
 	}
 }
 
 func TestParseCapacityInfo(t *testing.T) {
-	output := `name: /storage-pool
-type: directory
-size: 0
-creation-time: jan/01/2025 00:00:00
-
-Total: 7.23TiB
-Free: 5.12TiB
-Used: 2.11TiB`
+	// Real RouterOS /file print detail output format with space-separated numbers
+	output := `name=/storage-pool type=directory size=7 681 574 174 720
+               free=5 632 440 000 000 use=27%
+               creation-time=jan/01/2025 00:00:00`
 
 	capacity, err := parseCapacityInfo(output)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	// 7.23 TiB = 7.23 * 1024^4 bytes
-	tib := int64(1024 * 1024 * 1024 * 1024)
-	expectedTotal := int64(7.23 * float64(tib))
-	if capacity.TotalBytes < expectedTotal-1024*1024 || capacity.TotalBytes > expectedTotal+1024*1024 {
-		t.Errorf("Expected total bytes around %d, got %d", expectedTotal, capacity.TotalBytes)
+	// Expected values from space-separated numbers
+	expectedTotal := int64(7681574174720)  // size=7 681 574 174 720
+	if capacity.TotalBytes != expectedTotal {
+		t.Errorf("Expected total bytes %d, got %d", expectedTotal, capacity.TotalBytes)
 	}
 
-	// 5.12 TiB
-	expectedFree := int64(5.12 * float64(tib))
-	if capacity.FreeBytes < expectedFree-1024*1024 || capacity.FreeBytes > expectedFree+1024*1024 {
-		t.Errorf("Expected free bytes around %d, got %d", expectedFree, capacity.FreeBytes)
+	expectedFree := int64(5632440000000)  // free=5 632 440 000 000
+	if capacity.FreeBytes != expectedFree {
+		t.Errorf("Expected free bytes %d, got %d", expectedFree, capacity.FreeBytes)
+	}
+
+	// Used should be calculated as Total - Free
+	expectedUsed := expectedTotal - expectedFree
+	if capacity.UsedBytes != expectedUsed {
+		t.Errorf("Expected used bytes %d, got %d", expectedUsed, capacity.UsedBytes)
 	}
 }
 

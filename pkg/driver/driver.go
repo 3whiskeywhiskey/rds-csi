@@ -175,7 +175,7 @@ func (d *Driver) Run(endpoint string) error {
 	// Initialize node service if enabled
 	if d.nodeID != "" {
 		klog.Info("Node service enabled")
-		// d.ns = NewNodeServer(d) // TODO: Implement in Milestone 3
+		d.ns = NewNodeServer(d, d.nodeID)
 	}
 
 	// Start gRPC server
