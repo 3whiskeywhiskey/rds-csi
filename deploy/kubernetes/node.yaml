@@ -1,0 +1,164 @@
+---
+# Node DaemonSet - runs on all worker nodes
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rds-csi-node
+  namespace: kube-system
+  labels:
+    app: rds-csi-node
+spec:
+  selector:
+    matchLabels:
+      app: rds-csi-node
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: rds-csi-node
+    spec:
+      serviceAccountName: rds-csi-node
+      hostNetwork: true  # Required for NVMe/TCP connections
+      dnsPolicy: ClusterFirstWithHostNet
+      priorityClassName: system-node-critical
+
+      # Only run on nodes with NVMe/TCP support
+      nodeSelector:
+        kubernetes.io/os: linux
+
+      # Tolerate all taints to run on all nodes
+      tolerations:
+        - operator: Exists
+
+      containers:
+        # RDS CSI Driver Node
+        - name: rds-csi-driver
+          image: git.srvlab.io/whiskey/rds-csi-driver:latest
+          imagePullPolicy: Always
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--node-id=$(NODE_ID)"
+            - "--enable-controller=false"
+            - "--enable-node=true"
+            - "--v=5"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true  # Required for mount operations and NVMe access
+            capabilities:
+              add: ["SYS_ADMIN"]  # Required for mount syscalls
+            allowPrivilegeEscalation: true
+          volumeMounts:
+            # CSI socket directory
+            - name: plugin-dir
+              mountPath: /csi
+
+            # Kubelet directories for volume staging and publishing
+            - name: pods-mount-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+
+            # Device directory for NVMe devices
+            - name: device-dir
+              mountPath: /dev
+
+            # Sys directory for NVMe device discovery
+            - name: sys-dir
+              mountPath: /sys
+              mountPropagation: HostToContainer
+
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # CSI node-driver-registrar sidecar
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
+            - "--v=5"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: DRIVER_REG_SOCK_PATH
+              value: /var/lib/kubelet/plugins/rds.csi.srvlab.io/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+        # CSI livenessprobe sidecar
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.12.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+      volumes:
+        # Plugin directory for CSI socket
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/rds.csi.srvlab.io/
+            type: DirectoryOrCreate
+
+        # Registration directory for kubelet
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+
+        # Kubelet pods directory
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+
+        # Device directory for NVMe devices
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+
+        # Sys directory for NVMe device discovery
+        - name: sys-dir
+          hostPath:
+            path: /sys
+            type: Directory

@@ -1,0 +1,29 @@
+---
+# Example Pod using RDS storage
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rds-test-pod
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:latest
+      volumeMounts:
+        - name: rds-volume
+          mountPath: /data
+      command:
+        - sh
+        - -c
+        - |
+          echo "RDS CSI Driver Test" > /data/test.txt
+          echo "Volume mounted successfully!"
+          df -h /data
+          ls -la /data
+          cat /data/test.txt
+          echo "Sleeping forever..."
+          sleep infinity
+  volumes:
+    - name: rds-volume
+      persistentVolumeClaim:
+        claimName: rds-test-pvc

@@ -198,14 +198,38 @@ spec:
 
 See [docs/configuration.md](docs/configuration.md) for comprehensive configuration reference.
 
+## Kubernetes Deployment
+
+### Prerequisites
+
+- Kubernetes v1.20+ with CSI support
+- Linux nodes with kernel 5.0+ (`nvme-tcp` module)
+- `nvme-cli` installed on all nodes
+- Network connectivity from nodes to RDS
+
+### Quick Deploy
+
+```bash
+# 1. Update RDS credentials and configuration
+vi deploy/kubernetes/controller.yaml
+
+# 2. Deploy the driver
+./deploy/kubernetes/deploy.sh
+
+# 3. Create test PVC and Pod
+kubectl apply -f examples/pvc.yaml
+kubectl apply -f examples/pod.yaml
+```
+
+For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubernetes-setup.md).
+
 ## Documentation
 
+- **[Kubernetes Setup Guide](docs/kubernetes-setup.md)** - Complete deployment guide
 - [Architecture](docs/architecture.md) - System design and component interactions
-- [Installation Guide](docs/installation.md) - Detailed deployment instructions
-- [Configuration Reference](docs/configuration.md) - All configuration options
 - [RDS Commands Reference](docs/rds-commands.md) - RouterOS CLI commands used
-- [Development Guide](docs/development.md) - Building and testing the driver
-- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+- [Development Guide](CLAUDE.md) - Development notes and context
+- [Testing Guide](TESTING.md) - Test procedures
 
 ## Troubleshooting
 

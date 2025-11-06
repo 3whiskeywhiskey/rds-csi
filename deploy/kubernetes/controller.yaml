@@ -1,0 +1,194 @@
+---
+# Secret for RDS SSH credentials
+# NOTE: Replace with your actual credentials before deploying
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rds-csi-secret
+  namespace: kube-system
+type: Opaque
+stringData:
+  # RDS SSH private key (ed25519 format)
+  # Replace this with your actual private key
+  rds-private-key: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    # REPLACE WITH YOUR ACTUAL PRIVATE KEY
+    -----END OPENSSH PRIVATE KEY-----
+
+---
+# ConfigMap for RDS connection settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rds-csi-config
+  namespace: kube-system
+data:
+  # RDS connection settings
+  rds-address: "10.42.241.3"  # Replace with your RDS IP
+  rds-port: "22"               # SSH port
+  rds-user: "metal-csi"        # SSH user on RouterOS
+  rds-volume-base-path: "/storage-pool/metal-csi/volumes"  # Base path for volumes
+
+---
+# Controller Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rds-csi-controller
+  namespace: kube-system
+  labels:
+    app: rds-csi-controller
+spec:
+  replicas: 1  # Single controller for simplicity
+  selector:
+    matchLabels:
+      app: rds-csi-controller
+  template:
+    metadata:
+      labels:
+        app: rds-csi-controller
+    spec:
+      serviceAccountName: rds-csi-controller
+      priorityClassName: system-cluster-critical
+
+      # Tolerate control-plane taints
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+
+      containers:
+        # RDS CSI Driver Controller
+        - name: rds-csi-driver
+          image: git.srvlab.io/whiskey/rds-csi-driver:latest
+          imagePullPolicy: Always
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--node-id=$(NODE_ID)"
+            - "--enable-controller=true"
+            - "--enable-node=false"
+            - "--rds-address=$(RDS_ADDRESS)"
+            - "--rds-port=$(RDS_PORT)"
+            - "--rds-user=$(RDS_USER)"
+            - "--rds-private-key-path=/etc/rds-csi/rds-private-key"
+            - "--rds-volume-base-path=$(RDS_VOLUME_BASE_PATH)"
+            - "--v=5"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: RDS_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: rds-csi-config
+                  key: rds-address
+            - name: RDS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: rds-csi-config
+                  key: rds-port
+            - name: RDS_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: rds-csi-config
+                  key: rds-user
+            - name: RDS_VOLUME_BASE_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: rds-csi-config
+                  key: rds-volume-base-path
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: rds-credentials
+              mountPath: /etc/rds-csi
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # CSI external-provisioner sidecar
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v4.0.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+            - "--timeout=300s"
+            - "--leader-election=true"
+            - "--leader-election-namespace=kube-system"
+            - "--default-fstype=ext4"
+            - "--feature-gates=Topology=false"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+        # CSI external-resizer sidecar (for future volume expansion)
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.10.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+            - "--timeout=300s"
+            - "--leader-election=true"
+            - "--leader-election-namespace=kube-system"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+        # CSI livenessprobe sidecar
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.12.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: rds-credentials
+          secret:
+            secretName: rds-csi-secret
+            defaultMode: 0400

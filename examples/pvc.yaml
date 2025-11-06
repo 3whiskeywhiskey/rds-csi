@@ -1,0 +1,14 @@
+---
+# Example PersistentVolumeClaim using RDS storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rds-test-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce  # Single node read-write access
+  storageClassName: rds-nvme
+  resources:
+    requests:
+      storage: 10Gi  # Request 10 GiB volume
