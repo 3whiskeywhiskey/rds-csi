@@ -106,6 +106,21 @@ func (c *connector) Connect(target Target) (string, error) {
 		return "", fmt.Errorf("device did not appear: %w", err)
 	}
 
+	// Wait for device node to be accessible in /dev
+	// Give udev time to create the device node and set permissions
+	for i := 0; i < 10; i++ {
+		if _, err := os.Stat(devicePath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Final check that device is accessible
+	if _, err := os.Stat(devicePath); err != nil {
+		_ = c.Disconnect(target.NQN)
+		return "", fmt.Errorf("device %s not accessible: %w", devicePath, err)
+	}
+
 	klog.V(2).Infof("Successfully connected to NVMe target, device: %s", devicePath)
 	return devicePath, nil
 }
@@ -158,15 +173,15 @@ func (c *connector) IsConnected(nqn string) (bool, error) {
 
 // GetDevicePath returns the block device path for a connected NVMe target
 func (c *connector) GetDevicePath(nqn string) (string, error) {
-	// Scan /sys/class/nvme for devices
-	devices, err := filepath.Glob("/sys/class/nvme/nvme*")
+	// Scan /sys/class/nvme for controllers
+	controllers, err := filepath.Glob("/sys/class/nvme/nvme*")
 	if err != nil {
 		return "", fmt.Errorf("failed to scan nvme devices: %w", err)
 	}
 
-	for _, device := range devices {
+	for _, controller := range controllers {
 		// Read subsystem NQN
-		nqnPath := filepath.Join(device, "subsysnqn")
+		nqnPath := filepath.Join(controller, "subsysnqn")
 		data, err := os.ReadFile(nqnPath)
 		if err != nil {
 			klog.V(5).Infof("Failed to read %s: %v", nqnPath, err)
@@ -175,18 +190,30 @@ func (c *connector) GetDevicePath(nqn string) (string, error) {
 
 		deviceNQN := strings.TrimSpace(string(data))
 		if deviceNQN == nqn {
-			// Found matching device, get namespace
-			deviceName := filepath.Base(device)
+			// Found matching controller, now find the block device in /sys/class/block
+			controllerName := filepath.Base(controller)
 
-			// Look for namespace (e.g., nvme0n1)
-			namespaces, err := filepath.Glob(filepath.Join(device, deviceName+"n*"))
-			if err != nil || len(namespaces) == 0 {
-				continue
+			// Search for block devices matching this controller
+			// For NVMe-oF, the device is usually nvmeXnY (not nvmeXcYnZ)
+			blockDevices, err := filepath.Glob("/sys/class/block/" + controllerName + "n*")
+			if err != nil {
+				return "", fmt.Errorf("failed to scan block devices: %w", err)
 			}
 
-			// Return first namespace
-			namespaceName := filepath.Base(namespaces[0])
-			return "/dev/" + namespaceName, nil
+			// Return first namespace found
+			for _, blockDev := range blockDevices {
+				deviceName := filepath.Base(blockDev)
+				// Skip controller-specific paths like nvme1c1n1, prefer nvme1n1
+				if !strings.Contains(deviceName, "c") {
+					return "/dev/" + deviceName, nil
+				}
+			}
+
+			// If no simple path found, use any available
+			if len(blockDevices) > 0 {
+				deviceName := filepath.Base(blockDevices[0])
+				return "/dev/" + deviceName, nil
+			}
 		}
 	}
 

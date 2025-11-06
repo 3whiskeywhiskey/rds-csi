@@ -15,8 +15,14 @@ parameters:
   # Filesystem type (ext4, ext3, xfs)
   csi.storage.k8s.io/fstype: ext4
 
+  # NVMe/TCP target address (high-speed storage interface)
+  nvmeAddress: "10.42.68.1"
+
   # NVMe/TCP port (default: 4420)
   nvmePort: "4420"
+
+  # Volume base path on RDS
+  volumePath: "/storage-pool/metal-csi"
 
 # Volume binding mode
 volumeBindingMode: Immediate

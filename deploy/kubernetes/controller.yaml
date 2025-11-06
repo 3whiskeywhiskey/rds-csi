@@ -12,9 +12,12 @@ stringData:
   # Replace this with your actual private key
   rds-private-key: |
     -----BEGIN OPENSSH PRIVATE KEY-----
-    # REPLACE WITH YOUR ACTUAL PRIVATE KEY
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+    QyNTUxOQAAACAayjrDH/gC+zjfu4AdFUt4E4vltpCcgxVgySU9XLV35QAAAJCIqsYhiKrG
+    IQAAAAtzc2gtZWQyNTUxOQAAACAayjrDH/gC+zjfu4AdFUt4E4vltpCcgxVgySU9XLV35Q
+    AAAEBStGYSGwibjyFLTF5lgaVjKJNnuFuPN5PiVOmYIH3LoxrKOsMf+AL7ON+7gB0VS3gT
+    i+W2kJyDFWDJJT1ctXflAAAACW1ldGFsLWNzaQECAwQ=
     -----END OPENSSH PRIVATE KEY-----
-
 ---
 # ConfigMap for RDS connection settings
 apiVersion: v1
@@ -23,11 +26,11 @@ metadata:
   name: rds-csi-config
   namespace: kube-system
 data:
-  # RDS connection settings
-  rds-address: "10.42.241.3"  # Replace with your RDS IP
+  # RDS connection settings (SSH management interface)
+  rds-address: "10.42.241.3"  # RDS management IP for SSH
   rds-port: "22"               # SSH port
   rds-user: "metal-csi"        # SSH user on RouterOS
-  rds-volume-base-path: "/storage-pool/metal-csi/volumes"  # Base path for volumes
+  rds-volume-base-path: "/storage-pool/metal-csi"  # Base path for volumes
 
 ---
 # Controller Deployment
@@ -66,16 +69,14 @@ spec:
           image: ghcr.io/3whiskeywhiskey/rds-csi-driver:latest
           imagePullPolicy: Always
           args:
-            - "--endpoint=$(CSI_ENDPOINT)"
-            - "--node-id=$(NODE_ID)"
-            - "--enable-controller=true"
-            - "--enable-node=false"
-            - "--rds-address=$(RDS_ADDRESS)"
-            - "--rds-port=$(RDS_PORT)"
-            - "--rds-user=$(RDS_USER)"
-            - "--rds-private-key-path=/etc/rds-csi/rds-private-key"
-            - "--rds-volume-base-path=$(RDS_VOLUME_BASE_PATH)"
-            - "--v=5"
+            - "-endpoint=$(CSI_ENDPOINT)"
+            - "-node-id=$(NODE_ID)"
+            - "-controller"
+            - "-rds-address=$(RDS_ADDRESS)"
+            - "-rds-port=$(RDS_PORT)"
+            - "-rds-user=$(RDS_USER)"
+            - "-rds-key-file=/etc/rds-csi/rds-private-key"
+            - "-v=5"
           env:
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
@@ -128,29 +129,6 @@ spec:
             - "--leader-election-namespace=kube-system"
             - "--default-fstype=ext4"
             - "--feature-gates=Topology=false"
-          env:
-            - name: ADDRESS
-              value: /var/lib/csi/sockets/pluginproxy/csi.sock
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /var/lib/csi/sockets/pluginproxy/
-          resources:
-            requests:
-              cpu: 10m
-              memory: 64Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-
-        # CSI external-resizer sidecar (for future volume expansion)
-        - name: csi-resizer
-          image: registry.k8s.io/sig-storage/csi-resizer:v1.10.0
-          args:
-            - "--csi-address=$(ADDRESS)"
-            - "--v=5"
-            - "--timeout=300s"
-            - "--leader-election=true"
-            - "--leader-election-namespace=kube-system"
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock

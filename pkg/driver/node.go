@@ -22,10 +22,11 @@ const (
 	deviceTimeout = 30 * time.Second
 
 	// VolumeContext keys
-	volumeContextNQN        = "nqn"
-	volumeContextAddress    = "rdsAddress"
-	volumeContextPort       = "nvmePort"
-	volumeContextFSType     = "fsType"
+	volumeContextNQN         = "nqn"
+	volumeContextAddress     = "rdsAddress"
+	volumeContextNVMEAddress = "nvmeAddress"
+	volumeContextPort        = "nvmePort"
+	volumeContextFSType      = "fsType"
 )
 
 // NodeServer implements the CSI Node service
@@ -73,13 +74,17 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	// Extract volume context
 	volumeContext := req.GetVolumeContext()
 	nqn := volumeContext[volumeContextNQN]
-	rdsAddress := volumeContext[volumeContextAddress]
+	nvmeAddress := volumeContext[volumeContextNVMEAddress]
+	// Fall back to rdsAddress if nvmeAddress not set (backward compatibility)
+	if nvmeAddress == "" {
+		nvmeAddress = volumeContext[volumeContextAddress]
+	}
 	nvmePort := volumeContext[volumeContextPort]
 
-	if nqn == "" || rdsAddress == "" || nvmePort == "" {
+	if nqn == "" || nvmeAddress == "" || nvmePort == "" {
 		return nil, status.Errorf(codes.InvalidArgument,
-			"missing required volume context: nqn=%s, rdsAddress=%s, nvmePort=%s",
-			nqn, rdsAddress, nvmePort)
+			"missing required volume context: nqn=%s, nvmeAddress=%s, nvmePort=%s",
+			nqn, nvmeAddress, nvmePort)
 	}
 
 	// Parse port
@@ -97,13 +102,13 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	klog.V(2).Infof("Staging volume %s: NQN=%s, Address=%s:%d, FSType=%s",
-		volumeID, nqn, rdsAddress, port, fsType)
+		volumeID, nqn, nvmeAddress, port, fsType)
 
 	// Step 1: Connect to NVMe/TCP target
 	target := nvme.Target{
 		Transport:     "tcp",
 		NQN:           nqn,
-		TargetAddress: rdsAddress,
+		TargetAddress: nvmeAddress,
 		TargetPort:    port,
 	}
 

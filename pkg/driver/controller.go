@@ -14,11 +14,12 @@ import (
 
 const (
 	// Default values for storage parameters
-	defaultVolumeBasePath = "/storage-pool/kubernetes-volumes"
+	defaultVolumeBasePath = "/storage-pool/metal-csi"
 	defaultNVMETCPPort    = 4420
 
 	// Parameter keys for StorageClass
 	paramRDSAddress  = "rdsAddress"
+	paramNVMEAddress = "nvmeAddress"
 	paramNVMEPort    = "nvmePort"
 	paramSSHPort     = "sshPort"
 	paramFSType      = "fsType"
@@ -99,10 +100,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 				VolumeId:      volumeID,
 				CapacityBytes: existingVolume.FileSizeBytes,
 				VolumeContext: map[string]string{
-					"rdsAddress": cs.getRDSAddress(params),
-					"nvmePort":   fmt.Sprintf("%d", existingVolume.NVMETCPPort),
-					"nqn":        existingVolume.NVMETCPNQN,
-					"volumePath": existingVolume.FilePath,
+					"rdsAddress":  cs.getRDSAddress(params),
+					"nvmeAddress": cs.getNVMEAddress(params),
+					"nvmePort":    fmt.Sprintf("%d", existingVolume.NVMETCPPort),
+					"nqn":         existingVolume.NVMETCPNQN,
+					"volumePath":  existingVolume.FilePath,
 				},
 			},
 		}, nil
@@ -164,10 +166,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			VolumeId:      volumeID,
 			CapacityBytes: requiredBytes,
 			VolumeContext: map[string]string{
-				"rdsAddress": cs.getRDSAddress(params),
-				"nvmePort":   fmt.Sprintf("%d", nvmePort),
-				"nqn":        nqn,
-				"volumePath": filePath,
+				"rdsAddress":  cs.getRDSAddress(params),
+				"nvmeAddress": cs.getNVMEAddress(params),
+				"nvmePort":    fmt.Sprintf("%d", nvmePort),
+				"nqn":         nqn,
+				"volumePath":  filePath,
 			},
 		},
 	}, nil
@@ -368,6 +371,16 @@ func (cs *ControllerServer) getRDSAddress(params map[string]string) string {
 	}
 	// Fall back to driver's RDS client address
 	return cs.driver.rdsClient.GetAddress()
+}
+
+// getNVMEAddress gets the NVMe/TCP target address from params or falls back to RDS address
+func (cs *ControllerServer) getNVMEAddress(params map[string]string) string {
+	// Prefer nvmeAddress if specified (for separate storage network)
+	if addr, ok := params[paramNVMEAddress]; ok {
+		return addr
+	}
+	// Fall back to RDS address if nvmeAddress not specified
+	return cs.getRDSAddress(params)
 }
 
 // containsString checks if a string contains a substring

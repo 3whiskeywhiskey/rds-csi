@@ -196,8 +196,9 @@ func (m *mounter) IsFormatted(device string) (bool, error) {
 	cmd := m.execCommand("blkid", "-o", "value", "-s", "TYPE", device)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// blkid returns non-zero if no filesystem found
-		if strings.Contains(err.Error(), "exit status 2") {
+		// blkid returns exit status 2 if no filesystem found
+		// blkid returns exit status 1 if device not found or other error
+		if strings.Contains(err.Error(), "exit status 2") || strings.Contains(err.Error(), "exit status 1") {
 			return false, nil
 		}
 		return false, fmt.Errorf("blkid failed: %w", err)

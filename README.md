@@ -38,28 +38,47 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 │                     └──────────┬─────────────────────┘     │
 │                                │                            │
 └────────────────────────────────┼────────────────────────────┘
-                                 │ SSH (RouterOS CLI)
-                                 │ NVMe/TCP
-                                 ▼
-                    ┌────────────────────────────┐
-                    │  MikroTik RDS              │
-                    │  - Btrfs RAID Storage      │
-                    │  - NVMe/TCP Export         │
-                    │  - File-backed Volumes     │
-                    └────────────────────────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              │                  │                  │
+          SSH │ (Management)     │ (Data Plane)     │ NVMe/TCP
+        :22   │                  │                  │ :4420
+              ▼                  ▼                  ▼
+   ┌────────────────────────────────────────────────────┐
+   │  MikroTik RDS                                      │
+   │  - Management IP: 10.42.241.3 (1Gbit)             │
+   │  - Storage IP: 10.42.68.1 (25Gbit)                │
+   │  - Btrfs RAID Storage                             │
+   │  - NVMe/TCP Export                                │
+   │  - File-backed Volumes                            │
+   └────────────────────────────────────────────────────┘
 ```
+
+**Key Architecture Features:**
+
+- **Dual-IP Design**: Separates management (SSH) and data plane (NVMe/TCP) traffic
+  - Management interface (1Gbit): Controller uses for volume provisioning via SSH
+  - Storage interface (25Gbit): Node uses for high-speed NVMe/TCP block access
+- **Two-Phase Mounting**:
+  - **Stage**: Node connects NVMe/TCP, formats filesystem, mounts to staging path
+  - **Publish**: Bind mount from staging to pod-specific path
+- **File-backed Volumes**: Btrfs sparse files with NVMe/TCP export for flexibility
+- **Multi-arch Support**: Runs on both amd64 and arm64 nodes
 
 ## Status
 
 **Current Phase**: 🚧 **Alpha / In Development**
 
 - [x] Project setup and documentation
-- [ ] CSI Identity service
-- [ ] Controller service (CreateVolume, DeleteVolume)
-- [ ] Node service (mount/unmount operations)
-- [ ] Kubernetes deployment manifests
-- [ ] E2E testing in production cluster
+- [x] CSI Identity service
+- [x] Controller service (CreateVolume, DeleteVolume)
+- [x] Node service (mount/unmount operations)
+- [x] Kubernetes deployment manifests
+- [x] E2E testing in production cluster
 - [ ] Helm chart
+- [ ] Production hardening and monitoring
+
+**Latest**: ✅ v0.1.6 - Successfully deployed and tested in production cluster with working volume lifecycle
 
 See [ROADMAP.md](ROADMAP.md) for detailed implementation plan.
 
@@ -187,12 +206,15 @@ spec:
 
 | Parameter | Description | Default | Required |
 |-----------|-------------|---------|----------|
-| `rdsAddress` | RDS server IP address | - | Yes |
+| `rdsAddress` | RDS management IP address (SSH) | - | Yes (via ConfigMap) |
+| `nvmeAddress` | RDS storage IP address (NVMe/TCP data plane) | Same as `rdsAddress` | No |
 | `nvmePort` | NVMe/TCP target port | `4420` | No |
 | `sshPort` | SSH port for management | `22` | No |
-| `fsType` | Filesystem type (ext4, xfs) | `ext4` | No |
-| `volumePath` | Base path for volumes on RDS | `/storage-pool/volumes` | No |
+| `fsType` | Filesystem type (ext4, xfs, ext3) | `ext4` | No |
+| `volumePath` | Base path for volumes on RDS | `/storage-pool/metal-csi` | No |
 | `nqnPrefix` | NVMe Qualified Name prefix | `nqn.2000-02.com.mikrotik` | No |
+
+**Note**: `nvmeAddress` allows using a separate high-speed network for storage traffic while management operations use `rdsAddress`.
 
 ### Driver Configuration
 
