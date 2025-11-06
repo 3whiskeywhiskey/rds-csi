@@ -63,7 +63,7 @@ spec:
       containers:
         # RDS CSI Driver Controller
         - name: rds-csi-driver
-          image: git.srvlab.io/whiskey/rds-csi-driver:latest
+          image: ghcr.io/3whiskeywhiskey/rds-csi-driver:latest
           imagePullPolicy: Always
           args:
             - "--endpoint=$(CSI_ENDPOINT)"

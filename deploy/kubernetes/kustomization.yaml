@@ -11,7 +11,7 @@ resources:
 
 # Images can be customized here
 images:
-  - name: git.srvlab.io/whiskey/rds-csi-driver
+  - name: ghcr.io/3whiskeywhiskey/rds-csi-driver
     newTag: latest
 
 # ConfigMap generator for RDS settings
