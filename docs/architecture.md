@@ -520,12 +520,35 @@ Node plugin requires:
 - Prefer scheduling pods on nodes with direct RDS access
 - Handle multi-RDS scenarios (future)
 
-### High Availability (v1.0.0)
-- Multiple controller replicas with leader election
-- Active-passive failover (< 10s downtime)
-- Distributed state management (etcd or custom)
+### High Availability (v1.0.0+)
+
+**Current Limitation**: Single RDS server at 10.42.68.1 is a single point of failure.
+
+**Planned Enhancements** (detailed in [high-availability.md](high-availability.md)):
+
+1. **Phase 1 - Active-Passive Failover** (Milestone 5)
+   - Multiple RDS servers with active/passive roles
+   - Rsync-based replication between RDS units
+   - Health monitoring and automatic promotion
+   - RTO: 2-5 minutes, RPO: <30 seconds
+
+2. **Phase 2 - CSI Snapshots for DR** (Milestone 6)
+   - Btrfs snapshots on RDS for point-in-time recovery
+   - Periodic snapshot transfer to secondary RDS
+   - Restore from snapshot capability
+   - RPO: configurable (15min - 6hr)
+
+3. **Phase 3 - NVMe Multipathing** (Future, requires ANA support)
+   - Native NVMe multipath with Asymmetric Namespace Access
+   - Sub-second failover (<1s)
+   - Transparent to applications
+   - Requires MikroTik RDS ANA support or SPDK gateway
+
+**See Also**:
+- [High Availability Architecture](high-availability.md) - Detailed HA approaches and trade-offs
+- [ANA Protocol Deep Dive](ana-protocol.md) - NVMe multipathing technical details
 
 ---
 
-**Last Updated**: 2025-11-05
+**Last Updated**: 2025-11-07
 **Version**: 1.0

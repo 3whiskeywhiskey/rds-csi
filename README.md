@@ -249,6 +249,8 @@ For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubern
 
 - **[Kubernetes Setup Guide](docs/kubernetes-setup.md)** - Complete deployment guide
 - [Architecture](docs/architecture.md) - System design and component interactions
+- [High Availability](docs/high-availability.md) - Multi-RDS HA approaches and implementation
+- [ANA Protocol](docs/ana-protocol.md) - NVMe multipathing deep dive
 - [RDS Commands Reference](docs/rds-commands.md) - RouterOS CLI commands used
 - [Development Guide](CLAUDE.md) - Development notes and context
 - [Testing Guide](TESTING.md) - Test procedures
