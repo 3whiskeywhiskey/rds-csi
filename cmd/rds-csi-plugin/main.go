@@ -19,12 +19,12 @@ var (
 	driverName = flag.String("driver-name", "rds.csi.srvlab.io", "Name of the CSI driver")
 
 	// RDS configuration
-	rdsAddress    = flag.String("rds-address", "", "RDS server IP address (required for controller)")
-	rdsPort       = flag.Int("rds-port", 22, "RDS SSH port")
-	rdsUser       = flag.String("rds-user", "admin", "RDS SSH user")
-	rdsKeyFile    = flag.String("rds-key-file", "/etc/rds-csi/ssh-key/id_rsa", "Path to RDS SSH private key")
-	rdsHostKey    = flag.String("rds-host-key", "", "Path to RDS SSH host public key (required for secure verification)")
-	rdsInsecure   = flag.Bool("rds-insecure-skip-verify", false, "Skip SSH host key verification (INSECURE - for testing only)")
+	rdsAddress  = flag.String("rds-address", "", "RDS server IP address (required for controller)")
+	rdsPort     = flag.Int("rds-port", 22, "RDS SSH port")
+	rdsUser     = flag.String("rds-user", "admin", "RDS SSH user")
+	rdsKeyFile  = flag.String("rds-key-file", "/etc/rds-csi/ssh-key/id_rsa", "Path to RDS SSH private key")
+	rdsHostKey  = flag.String("rds-host-key", "", "Path to RDS SSH host public key (required for secure verification)")
+	rdsInsecure = flag.Bool("rds-insecure-skip-verify", false, "Skip SSH host key verification (INSECURE - for testing only)")
 
 	// Mode flags
 	controllerMode = flag.Bool("controller", false, "Run in controller mode")

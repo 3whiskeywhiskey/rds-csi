@@ -17,7 +17,7 @@ type sshClient struct {
 	port               int
 	user               string
 	privateKey         []byte
-	hostKey            []byte            // Expected SSH host public key
+	hostKey            []byte // Expected SSH host public key
 	timeout            time.Duration
 	sshClient          *ssh.Client
 	hostKeyCallback    ssh.HostKeyCallback
@@ -51,7 +51,7 @@ func newSSHClient(config ClientConfig) (*sshClient, error) {
 		} else {
 			return nil, fmt.Errorf("HostKeyCallback must be of type ssh.HostKeyCallback")
 		}
-	} else if config.HostKey != nil && len(config.HostKey) > 0 {
+	} else if len(config.HostKey) > 0 {
 		// Create host key callback from provided public key
 		expectedKey, err := parseHostKey(config.HostKey)
 		if err != nil {

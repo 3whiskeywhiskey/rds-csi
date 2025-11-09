@@ -51,11 +51,11 @@ type DriverConfig struct {
 	Version    string
 
 	// RDS connection settings
-	RDSAddress           string
-	RDSPort              int
-	RDSUser              string
-	RDSPrivateKey        []byte
-	RDSHostKey           []byte // SSH host public key for verification
+	RDSAddress            string
+	RDSPort               int
+	RDSUser               string
+	RDSPrivateKey         []byte
+	RDSHostKey            []byte // SSH host public key for verification
 	RDSInsecureSkipVerify bool   // Skip host key verification (INSECURE)
 
 	// Mode flags
