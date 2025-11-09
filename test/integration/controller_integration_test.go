@@ -41,7 +41,8 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 		Port:    mockRDS.Port(),
 		User:    "admin",
 		// No auth for mock server
-		PrivateKey: nil,
+		PrivateKey:         nil,
+		InsecureSkipVerify: true, // Skip host key verification for mock server
 	})
 	if err != nil {
 		t.Fatalf("Failed to create RDS client: %v", err)
