@@ -328,7 +328,15 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 }
 
 func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
-	// Parse: /disk print detail where slot=pvc-123
+	// Parse: /disk print detail where slot=pvc-123 OR mount-point="storage-pool"
+
+	// Check for mount-point query (capacity query)
+	if strings.Contains(command, "mount-point=") {
+		// Return mock filesystem capacity info
+		return s.formatMountPointCapacity(), 0
+	}
+
+	// Check for slot query
 	slot := ""
 	if strings.Contains(command, "slot=") {
 		re := regexp.MustCompile(`slot=([^\s]+)`)
@@ -383,6 +391,14 @@ Total: 7.23TiB
 Free: 5.42TiB
 `
 	return output, 0
+}
+
+func (s *MockRDSServer) formatMountPointCapacity() string {
+	// Return mock capacity info for mount point query
+	// This simulates: /disk print detail where mount-point="storage-pool"
+	// RouterOS format uses size= and free= with space-separated numbers
+	return `slot=storage-pool type=partition mount-point=storage-pool file-system=btrfs size=7 949 127 950 336 free=5 963 595 964 416 use=25%
+`
 }
 
 func extractParam(command, param string) string {
