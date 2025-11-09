@@ -138,7 +138,7 @@ func (s *MockRDSServer) acceptConnections() {
 }
 
 func (s *MockRDSServer) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Perform SSH handshake
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.config)
@@ -146,7 +146,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 		klog.Errorf("Failed to handshake: %v", err)
 		return
 	}
-	defer sshConn.Close()
+	defer func() { _ = sshConn.Close() }()
 
 	klog.V(4).Infof("New SSH connection from %s", sshConn.RemoteAddr())
 
@@ -171,7 +171,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 }
 
 func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
+	defer func() { _ = channel.Close() }()
 
 	for req := range requests {
 		klog.V(4).Infof("Mock RDS received request type: %s, payload len: %d", req.Type, len(req.Payload))
@@ -276,7 +276,7 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 
 	var nvmePort int
 	if nvmePortStr != "" {
-		fmt.Sscanf(nvmePortStr, "%d", &nvmePort)
+		_, _ = fmt.Sscanf(nvmePortStr, "%d", &nvmePort)
 	} else {
 		nvmePort = 4420 // default
 	}

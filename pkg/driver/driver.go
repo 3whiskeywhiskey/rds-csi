@@ -3,9 +3,10 @@ package driver
 import (
 	"fmt"
 
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 )
 
 const (

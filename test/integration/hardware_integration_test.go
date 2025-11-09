@@ -85,7 +85,7 @@ func TestHardwareIntegration(t *testing.T) {
 		}
 		t.Logf("✅ Successfully connected to RDS")
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test connection status
 	t.Run("IsConnected", func(t *testing.T) {

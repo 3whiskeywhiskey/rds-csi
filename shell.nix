@@ -9,7 +9,7 @@ pkgs.mkShell {
 
     # Go development tools
     golangci-lint
-    goimports
+    gotools  # includes goimports
 
     # Container tools
     docker

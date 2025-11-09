@@ -7,8 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
 )
 
 var (

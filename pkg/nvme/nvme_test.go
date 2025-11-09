@@ -34,8 +34,8 @@ func TestHelperProcess(t *testing.T) {
 	}
 
 	// Output mock data
-	os.Stdout.WriteString(os.Getenv("STDOUT"))
-	os.Stderr.WriteString(os.Getenv("STDERR"))
+	_, _ = os.Stdout.WriteString(os.Getenv("STDOUT"))
+	_, _ = os.Stderr.WriteString(os.Getenv("STDERR"))
 
 	// Exit with specified code
 	exitCode, _ := strconv.Atoi(os.Getenv("EXIT_CODE"))
@@ -267,10 +267,7 @@ func TestTargetValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Basic validation checks
-			valid := true
-			if tt.target.NQN == "" {
-				valid = false
-			}
+			valid := tt.target.NQN != ""
 			if tt.target.TargetAddress == "" {
 				valid = false
 			}
@@ -292,7 +289,7 @@ func TestNewConnector(t *testing.T) {
 	}
 
 	// Verify it implements the interface
-	var _ Connector = c
+	var _ = Connector(c)
 }
 
 // TestGetDevicePathWithMockFilesystem tests device path discovery

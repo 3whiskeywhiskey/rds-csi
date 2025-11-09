@@ -141,7 +141,7 @@ func (c *sshClient) IsConnected() bool {
 	if err != nil {
 		return false
 	}
-	session.Close()
+	_ = session.Close()
 	return true
 }
 
@@ -158,7 +158,7 @@ func (c *sshClient) runCommand(command string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Capture stdout and stderr
 	var stdout, stderr bytes.Buffer

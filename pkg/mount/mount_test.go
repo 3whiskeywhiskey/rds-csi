@@ -32,8 +32,8 @@ func TestHelperProcess(t *testing.T) {
 	}
 
 	// Output mock data
-	os.Stdout.WriteString(os.Getenv("STDOUT"))
-	os.Stderr.WriteString(os.Getenv("STDERR"))
+	_, _ = os.Stdout.WriteString(os.Getenv("STDOUT"))
+	_, _ = os.Stderr.WriteString(os.Getenv("STDERR"))
 
 	// Exit with specified code
 	exitCode, _ := strconv.Atoi(os.Getenv("EXIT_CODE"))
@@ -387,7 +387,7 @@ func TestNewMounter(t *testing.T) {
 	}
 
 	// Verify it implements the interface
-	var _ Mounter = m
+	var _ = Mounter(m)
 }
 
 func TestMountCreateTargetDirectory(t *testing.T) {

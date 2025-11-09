@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
-	"git.srvlab.io/whiskey/rds-csi-driver/test/mock"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/test/mock"
 )
 
 // TestControllerIntegrationWithMockRDS tests the full controller flow with a mock RDS server
@@ -50,7 +51,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	if err := rdsClient.Connect(); err != nil {
 		t.Fatalf("Failed to connect to mock RDS: %v", err)
 	}
-	defer rdsClient.Close()
+	defer func() { _ = rdsClient.Close() }()
 
 	// Create driver with mock RDS client
 	drv := &driver.Driver{}

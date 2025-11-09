@@ -51,7 +51,7 @@ func TestDebugCapacityQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test the exact query used by GetCapacity
 	t.Logf("\n=== Testing capacity query for: %s ===", volumeBasePath)
@@ -80,7 +80,7 @@ func runCapacityOutput(t *testing.T, client *ssh.Client, command string) {
 		t.Errorf("Failed to create session: %v", err)
 		return
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(command)
 	if err != nil {
