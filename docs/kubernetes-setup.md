@@ -100,6 +100,34 @@ ssh-keygen -t ed25519 -f rds-csi-key -C "rds-csi-driver"
 # /user ssh-keys import public-key-file=rds-csi-key.pub user=metal-csi
 ```
 
+### Step 1.5: Get RDS SSH Host Key (IMPORTANT for Security)
+
+**SECURITY:** The CSI driver requires the RDS SSH host key for verification to prevent man-in-the-middle attacks.
+
+```bash
+# Get the RDS host public key (replace 10.42.241.3 with your RDS IP)
+ssh-keyscan -t ed25519 10.42.241.3 2>/dev/null | cut -d' ' -f2- > rds-host-key.pub
+
+# Verify the fingerprint matches your RDS server
+# On your RDS (RouterOS), run:
+#   /system ssh-key print
+# Or generate fingerprint from the saved key:
+ssh-keygen -lf rds-host-key.pub
+
+# The fingerprint should match what you see when you first SSH to the RDS:
+ssh 10.42.241.3
+# It will show: "ED25519 key fingerprint is SHA256:xxxx..."
+```
+
+**Alternative method** - Extract from known_hosts:
+
+```bash
+# If you've already connected to the RDS, get the key from known_hosts
+ssh-keygen -H -F 10.42.241.3 | grep "^[^#]" | cut -d' ' -f2- > rds-host-key.pub
+```
+
+**IMPORTANT:** Verify the host key fingerprint before deployment to ensure you have the correct key!
+
 ### Step 2: Configure RDS User
 
 On your MikroTik RouterOS device:
@@ -120,7 +148,7 @@ On your MikroTik RouterOS device:
 Edit `deploy/kubernetes/controller.yaml`:
 
 ```yaml
-# Update Secret with your private key
+# Update Secret with your private key AND host key
 apiVersion: v1
 kind: Secret
 metadata:
@@ -130,6 +158,9 @@ stringData:
     -----BEGIN OPENSSH PRIVATE KEY-----
     # Paste your private key here (from rds-csi-key)
     -----END OPENSSH PRIVATE KEY-----
+  rds-host-key: |
+    # Paste your RDS host public key here (from rds-host-key.pub)
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIxxx...
 
 ---
 # Update ConfigMap with your RDS settings
@@ -143,6 +174,12 @@ data:
   rds-user: "metal-csi"
   rds-volume-base-path: "/storage-pool/metal-csi/volumes"
 ```
+
+**SECURITY NOTE:** If you need to skip host key verification for testing (NOT RECOMMENDED), you can add this arg to the controller container:
+```yaml
+- "-rds-insecure-skip-verify=true"
+```
+**WARNING:** This is INSECURE and should NEVER be used in production! Always use proper host key verification.
 
 ### Step 4: Deploy RBAC
 

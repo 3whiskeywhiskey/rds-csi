@@ -17,6 +17,7 @@ type sshClient struct {
 	port               int
 	user               string
 	privateKey         []byte
+	hostKey            []byte            // Expected SSH host public key
 	timeout            time.Duration
 	sshClient          *ssh.Client
 	hostKeyCallback    ssh.HostKeyCallback
@@ -50,6 +51,13 @@ func newSSHClient(config ClientConfig) (*sshClient, error) {
 		} else {
 			return nil, fmt.Errorf("HostKeyCallback must be of type ssh.HostKeyCallback")
 		}
+	} else if config.HostKey != nil && len(config.HostKey) > 0 {
+		// Create host key callback from provided public key
+		expectedKey, err := parseHostKey(config.HostKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse host key: %w", err)
+		}
+		hostKeyCallback = createHostKeyCallback(expectedKey, config.Address)
 	}
 
 	return &sshClient{
@@ -57,6 +65,7 @@ func newSSHClient(config ClientConfig) (*sshClient, error) {
 		port:               config.Port,
 		user:               config.User,
 		privateKey:         config.PrivateKey,
+		hostKey:            config.HostKey,
 		timeout:            config.Timeout,
 		hostKeyCallback:    hostKeyCallback,
 		insecureSkipVerify: config.InsecureSkipVerify,
@@ -76,15 +85,13 @@ func (c *sshClient) Connect() error {
 	var hostKeyCallback ssh.HostKeyCallback
 	if c.hostKeyCallback != nil {
 		hostKeyCallback = c.hostKeyCallback
-		klog.V(4).Info("Using custom host key verification")
+		klog.V(4).Info("Using host key verification")
 	} else if c.insecureSkipVerify {
 		hostKeyCallback = ssh.InsecureIgnoreHostKey()
-		klog.Warning("INSECURE: Skipping SSH host key verification - not recommended for production")
+		klog.Warning("SECURITY WARNING: Skipping SSH host key verification - INSECURE and not recommended for production!")
 	} else {
-		// Default: use InsecureIgnoreHostKey for backward compatibility
-		// In production, users should provide their own HostKeyCallback
-		hostKeyCallback = ssh.InsecureIgnoreHostKey()
-		klog.V(4).Info("Using InsecureIgnoreHostKey (default) - configure HostKeyCallback for production security")
+		// No host key verification configured - this is a security error
+		return fmt.Errorf("SSH host key verification not configured: must provide HostKey or enable InsecureSkipVerify (not recommended)")
 	}
 
 	sshConfig := &ssh.ClientConfig{
@@ -267,4 +274,48 @@ func indexString(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// parseHostKey parses an SSH public key from various formats
+// Supports: OpenSSH authorized_keys format, SSH known_hosts format, raw public key
+func parseHostKey(keyData []byte) (ssh.PublicKey, error) {
+	// Try parsing as OpenSSH public key (ssh-rsa AAAA..., ssh-ed25519 AAAA..., etc.)
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey(keyData)
+	if err == nil {
+		return pubKey, nil
+	}
+
+	// Try parsing as raw public key
+	pubKey, err = ssh.ParsePublicKey(keyData)
+	if err == nil {
+		return pubKey, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse host key in any supported format")
+}
+
+// createHostKeyCallback creates an SSH host key callback that verifies against expected key
+func createHostKeyCallback(expectedKey ssh.PublicKey, hostname string) ssh.HostKeyCallback {
+	return func(h string, remote net.Addr, key ssh.PublicKey) error {
+		// Compare the key type first
+		if key.Type() != expectedKey.Type() {
+			return fmt.Errorf("SSH host key type mismatch for %s: expected %s, got %s", hostname, expectedKey.Type(), key.Type())
+		}
+
+		// Compare the key fingerprints
+		expectedFingerprint := ssh.FingerprintSHA256(expectedKey)
+		actualFingerprint := ssh.FingerprintSHA256(key)
+
+		if expectedFingerprint != actualFingerprint {
+			klog.Errorf("SSH HOST KEY VERIFICATION FAILED for %s!", hostname)
+			klog.Errorf("Expected fingerprint: %s", expectedFingerprint)
+			klog.Errorf("Actual fingerprint:   %s", actualFingerprint)
+			klog.Errorf("This could indicate a man-in-the-middle attack or host key change!")
+			return fmt.Errorf("SSH host key verification failed for %s: fingerprint mismatch (expected %s, got %s)",
+				hostname, expectedFingerprint, actualFingerprint)
+		}
+
+		klog.V(4).Infof("SSH host key verified for %s: %s", hostname, actualFingerprint)
+		return nil
+	}
 }
