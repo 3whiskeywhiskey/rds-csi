@@ -300,8 +300,13 @@ install-tools:
 	@echo "Installing development tools..."
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install golang.org/x/tools/cmd/goimports@latest
-	go install github.com/kubernetes-csi/csi-test/cmd/csi-sanity@latest
 	@echo "Tools installed."
+
+.PHONY: install-sanity
+install-sanity:
+	@echo "Installing CSI sanity test tool..."
+	go install github.com/kubernetes-csi/csi-test/v5/cmd/csi-sanity@latest
+	@echo "CSI sanity tool installed."
 
 # Deployment targets
 .PHONY: deploy
