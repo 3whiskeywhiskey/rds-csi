@@ -234,14 +234,14 @@ func (m *mounter) GetDeviceStats(path string) (*DeviceStats, error) {
 	stats := &DeviceStats{}
 
 	// Parse size fields
-	fmt.Sscanf(fields[0], "%d", &stats.TotalBytes)
-	fmt.Sscanf(fields[1], "%d", &stats.UsedBytes)
-	fmt.Sscanf(fields[2], "%d", &stats.AvailableBytes)
+	_, _ = fmt.Sscanf(fields[0], "%d", &stats.TotalBytes)
+	_, _ = fmt.Sscanf(fields[1], "%d", &stats.UsedBytes)
+	_, _ = fmt.Sscanf(fields[2], "%d", &stats.AvailableBytes)
 
 	// Parse inode fields
-	fmt.Sscanf(fields[3], "%d", &stats.TotalInodes)
-	fmt.Sscanf(fields[4], "%d", &stats.UsedInodes)
-	fmt.Sscanf(fields[5], "%d", &stats.AvailableInodes)
+	_, _ = fmt.Sscanf(fields[3], "%d", &stats.TotalInodes)
+	_, _ = fmt.Sscanf(fields[4], "%d", &stats.UsedInodes)
+	_, _ = fmt.Sscanf(fields[5], "%d", &stats.AvailableInodes)
 
 	return stats, nil
 }

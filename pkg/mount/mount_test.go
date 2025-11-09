@@ -141,36 +141,36 @@ func TestUnmount(t *testing.T) {
 
 func TestIsLikelyMountPoint(t *testing.T) {
 	tests := []struct {
-		name           string
-		createPath     bool
-		findmntOutput  string
+		name            string
+		createPath      bool
+		findmntOutput   string
 		findmntExitCode int
-		expectedResult bool
-		expectError    bool
+		expectedResult  bool
+		expectError     bool
 	}{
 		{
-			name:           "is mount point",
-			createPath:     true,
-			findmntOutput:  "/mnt/test\n",  // findmnt returns path with newline
+			name:            "is mount point",
+			createPath:      true,
+			findmntOutput:   "/mnt/test\n", // findmnt returns path with newline
 			findmntExitCode: 0,
-			expectedResult: true,
-			expectError:    false,
+			expectedResult:  true,
+			expectError:     false,
 		},
 		{
-			name:           "not mount point",
-			createPath:     true,
-			findmntOutput:  "",
+			name:            "not mount point",
+			createPath:      true,
+			findmntOutput:   "",
 			findmntExitCode: 1,
-			expectedResult: false,
-			expectError:    false,
+			expectedResult:  false,
+			expectError:     false,
 		},
 		{
-			name:           "path does not exist",
-			createPath:     false,
-			findmntOutput:  "",
+			name:            "path does not exist",
+			createPath:      false,
+			findmntOutput:   "",
 			findmntExitCode: 0,
-			expectedResult: false,
-			expectError:    false,
+			expectedResult:  false,
+			expectError:     false,
 		},
 	}
 
@@ -204,11 +204,11 @@ func TestIsLikelyMountPoint(t *testing.T) {
 
 func TestFormat(t *testing.T) {
 	tests := []struct {
-		name          string
-		device        string
-		fsType        string
-		isFormatted   bool
-		expectError   bool
+		name        string
+		device      string
+		fsType      string
+		isFormatted bool
+		expectError bool
 	}{
 		{
 			name:        "skip already formatted",
@@ -258,36 +258,36 @@ func TestFormat(t *testing.T) {
 
 func TestIsFormatted(t *testing.T) {
 	tests := []struct {
-		name          string
-		device        string
-		blkidOutput   string
-		blkidExitCode int
+		name           string
+		device         string
+		blkidOutput    string
+		blkidExitCode  int
 		expectedResult bool
-		expectError   bool
+		expectError    bool
 	}{
 		{
-			name:          "formatted ext4",
-			device:        "/dev/nvme0n1",
-			blkidOutput:   "ext4",
-			blkidExitCode: 0,
+			name:           "formatted ext4",
+			device:         "/dev/nvme0n1",
+			blkidOutput:    "ext4",
+			blkidExitCode:  0,
 			expectedResult: true,
-			expectError:   false,
+			expectError:    false,
 		},
 		{
-			name:          "formatted xfs",
-			device:        "/dev/nvme0n1",
-			blkidOutput:   "xfs",
-			blkidExitCode: 0,
+			name:           "formatted xfs",
+			device:         "/dev/nvme0n1",
+			blkidOutput:    "xfs",
+			blkidExitCode:  0,
 			expectedResult: true,
-			expectError:   false,
+			expectError:    false,
 		},
 		{
-			name:          "not formatted",
-			device:        "/dev/nvme0n1",
-			blkidOutput:   "",
-			blkidExitCode: 2,
+			name:           "not formatted",
+			device:         "/dev/nvme0n1",
+			blkidOutput:    "",
+			blkidExitCode:  2,
 			expectedResult: false,
-			expectError:   false,
+			expectError:    false,
 		},
 	}
 
@@ -313,10 +313,10 @@ func TestIsFormatted(t *testing.T) {
 
 func TestGetDeviceStats(t *testing.T) {
 	tests := []struct {
-		name        string
-		path        string
-		dfOutput    string
-		expectError bool
+		name          string
+		path          string
+		dfOutput      string
+		expectError   bool
 		expectedStats *DeviceStats
 	}{
 		{
@@ -334,10 +334,10 @@ func TestGetDeviceStats(t *testing.T) {
 			},
 		},
 		{
-			name:        "invalid output",
-			path:        "/mnt/test",
-			dfOutput:    "invalid output",
-			expectError: true,
+			name:          "invalid output",
+			path:          "/mnt/test",
+			dfOutput:      "invalid output",
+			expectError:   true,
 			expectedStats: nil,
 		},
 	}

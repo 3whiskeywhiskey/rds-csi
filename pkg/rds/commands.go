@@ -433,9 +433,10 @@ func normalizeRouterOSOutput(output string) string {
 
 // extractMountPoint extracts the mount point from a full path
 // Examples:
-//   /storage-pool/metal-csi/volumes → storage-pool
-//   /nvme1/kubernetes → nvme1
-//   storage-pool/volumes → storage-pool
+//
+//	/storage-pool/metal-csi/volumes → storage-pool
+//	/nvme1/kubernetes → nvme1
+//	storage-pool/volumes → storage-pool
 func extractMountPoint(path string) string {
 	// Remove leading slash if present
 	path = strings.TrimPrefix(path, "/")

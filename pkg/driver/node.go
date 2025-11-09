@@ -18,8 +18,8 @@ const (
 	// Default filesystem type if not specified
 	defaultFSType = "ext4"
 
-	// Device connection timeout
-	deviceTimeout = 30 * time.Second
+	// Device connection timeout (reserved for future use)
+	// deviceTimeout = 30 * time.Second
 
 	// VolumeContext keys
 	volumeContextNQN         = "nqn"
@@ -32,10 +32,10 @@ const (
 // NodeServer implements the CSI Node service
 type NodeServer struct {
 	csi.UnimplementedNodeServer
-	driver      *Driver
-	nvmeConn    nvme.Connector
-	mounter     mount.Mounter
-	nodeID      string
+	driver   *Driver
+	nvmeConn nvme.Connector
+	mounter  mount.Mounter
+	nodeID   string
 }
 
 // NewNodeServer creates a new Node service

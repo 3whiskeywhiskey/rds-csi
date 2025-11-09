@@ -94,7 +94,7 @@ func (c *sshClient) Connect() error {
 	}
 
 	// Add authentication if private key is provided
-	if c.privateKey != nil && len(c.privateKey) > 0 {
+	if len(c.privateKey) > 0 {
 		// Parse private key
 		signer, err := ssh.ParsePrivateKey(c.privateKey)
 		if err != nil {

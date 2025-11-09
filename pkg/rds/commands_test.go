@@ -112,12 +112,12 @@ func TestParseCapacityInfo(t *testing.T) {
 	}
 
 	// Expected values from space-separated numbers
-	expectedTotal := int64(7681574174720)  // size=7 681 574 174 720
+	expectedTotal := int64(7681574174720) // size=7 681 574 174 720
 	if capacity.TotalBytes != expectedTotal {
 		t.Errorf("Expected total bytes %d, got %d", expectedTotal, capacity.TotalBytes)
 	}
 
-	expectedFree := int64(5632440000000)  // free=5 632 440 000 000
+	expectedFree := int64(5632440000000) // free=5 632 440 000 000
 	if capacity.FreeBytes != expectedFree {
 		t.Errorf("Expected free bytes %d, got %d", expectedFree, capacity.FreeBytes)
 	}

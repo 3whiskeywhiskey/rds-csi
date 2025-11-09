@@ -25,7 +25,11 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	if err := mockRDS.Start(); err != nil {
 		t.Fatalf("Failed to start mock RDS server: %v", err)
 	}
-	defer mockRDS.Stop()
+	defer func() {
+		if err := mockRDS.Stop(); err != nil {
+			t.Logf("Warning: failed to stop mock RDS server: %v", err)
+		}
+	}()
 
 	// Wait for server to be ready
 	time.Sleep(100 * time.Millisecond)

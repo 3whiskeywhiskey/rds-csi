@@ -156,7 +156,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 	// Handle channels
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
@@ -181,7 +181,7 @@ func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.
 			if len(req.Payload) > 4 {
 				// Parse command from payload (SSH exec request format)
 				cmdLen := uint32(req.Payload[0])<<24 | uint32(req.Payload[1])<<16 |
-				         uint32(req.Payload[2])<<8 | uint32(req.Payload[3])
+					uint32(req.Payload[2])<<8 | uint32(req.Payload[3])
 
 				klog.V(4).Infof("Mock RDS command length: %d, total payload: %d", cmdLen, len(req.Payload))
 
@@ -195,25 +195,25 @@ func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.
 					// Send response
 					if response != "" {
 						klog.V(4).Infof("Mock RDS sending response (%d bytes)", len(response))
-						channel.Write([]byte(response))
+						_, _ = channel.Write([]byte(response))
 					}
 
 					// Send exit status
-					req.Reply(true, nil)
-					channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: uint32(exitStatus)}))
+					_ = req.Reply(true, nil)
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: uint32(exitStatus)}))
 					klog.V(4).Infof("Mock RDS sent exit status: %d", exitStatus)
 					return
 				}
 			}
 			klog.Warningf("Mock RDS: Invalid exec payload format")
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 
 		case "shell":
 			// Not supported for now
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 
 		default:
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 		}
 	}
 }
