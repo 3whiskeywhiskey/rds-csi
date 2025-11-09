@@ -1,7 +1,7 @@
 # RDS CSI Driver Makefile
 
 # Image configuration
-REGISTRY ?= ghcr.io/whiskey
+REGISTRY ?= ghcr.io/3whiskeywhiskey
 IMAGE_NAME ?= rds-csi-driver
 IMAGE_TAG ?= dev
 IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
