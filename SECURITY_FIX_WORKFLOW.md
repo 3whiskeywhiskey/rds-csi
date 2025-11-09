@@ -22,7 +22,7 @@ We have 11 security fix branches to merge in order:
 For each fix:
 1. ✅ Merge branch to dev
 2. ✅ Push to GitHub → triggers CI/CD
-3. ✅ Wait for image build (ghcr.io/3whiskeywhiskey/rds-csi-driver:dev)
+3. ✅ Wait for image build (ghcr.io/3whiskeywhiskey/rds-csi:dev)
 4. ✅ Deploy to cluster: `./scripts/deploy-dev.sh --wait`
 5. ✅ Test thoroughly: `./scripts/test-security-fix.sh <N>`
 6. ✅ Verify existing PVCs are healthy

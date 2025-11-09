@@ -25,8 +25,8 @@ When you push to the `dev` branch, GitHub Actions automatically:
    - Authenticates to GitHub Container Registry (ghcr.io)
    - Builds for linux/amd64 and linux/arm64
    - Tags with:
-     - `ghcr.io/3whiskeywhiskey/rds-csi-driver:dev`
-     - `ghcr.io/3whiskeywhiskey/rds-csi-driver:dev-<git-sha>`
+     - `ghcr.io/3whiskeywhiskey/rds-csi:dev`
+     - `ghcr.io/3whiskeywhiskey/rds-csi:dev-<git-sha>`
    - Pushes to registry
 
 ### Expected Duration
@@ -104,7 +104,7 @@ make docker-multiarch IMAGE_TAG=dev
 
 **Pull the image to verify:**
 ```bash
-docker pull ghcr.io/3whiskeywhiskey/rds-csi-driver:dev
+docker pull ghcr.io/3whiskeywhiskey/rds-csi:dev
 ```
 
 ### Workflow Triggers
@@ -119,8 +119,8 @@ Once CI/CD completes successfully:
 
 1. **Verify image exists:**
    ```bash
-   docker pull ghcr.io/3whiskeywhiskey/rds-csi-driver:dev
-   docker inspect ghcr.io/3whiskeywhiskey/rds-csi-driver:dev | jq '.[0].Config.Labels'
+   docker pull ghcr.io/3whiskeywhiskey/rds-csi:dev
+   docker inspect ghcr.io/3whiskeywhiskey/rds-csi:dev | jq '.[0].Config.Labels'
    ```
 
 2. **Deploy to cluster:**
@@ -163,13 +163,13 @@ To modify the workflow, edit this file and push to dev branch.
 
 **Check if image is ready:**
 ```bash
-docker pull ghcr.io/3whiskeywhiskey/rds-csi-driver:dev && echo "✅ Image ready"
+docker pull ghcr.io/3whiskeywhiskey/rds-csi:dev && echo "✅ Image ready"
 ```
 
 **Watch for new image:**
 ```bash
 while true; do
-  if docker pull ghcr.io/3whiskeywhiskey/rds-csi-driver:dev 2>&1 | grep -q "Downloaded newer image"; then
+  if docker pull ghcr.io/3whiskeywhiskey/rds-csi:dev 2>&1 | grep -q "Downloaded newer image"; then
     echo "✅ New image available!"
     break
   fi

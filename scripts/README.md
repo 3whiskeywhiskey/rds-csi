@@ -18,8 +18,8 @@ Deploys the RDS CSI driver with the `:dev` container image tag.
 ```
 
 **What it does:**
-1. Updates the controller deployment image to `ghcr.io/3whiskeywhiskey/rds-csi-driver:dev`
-2. Updates the node daemonset image to `ghcr.io/3whiskeywhiskey/rds-csi-driver:dev`
+1. Updates the controller deployment image to `ghcr.io/3whiskeywhiskey/rds-csi:dev`
+2. Updates the node daemonset image to `ghcr.io/3whiskeywhiskey/rds-csi:dev`
 3. Shows current pod status
 4. Optionally waits for rollout completion
 
@@ -90,7 +90,7 @@ GitHub Actions will automatically:
 - Run `make verify` (format, vet, lint, test)
 - Run `make test-integration`
 - Build multi-arch image (amd64/arm64)
-- Push to `ghcr.io/3whiskeywhiskey/rds-csi-driver:dev`
+- Push to `ghcr.io/3whiskeywhiskey/rds-csi:dev`
 
 Monitor the build: https://github.com/3whiskeywhiskey/rds-csi-driver/actions
 
