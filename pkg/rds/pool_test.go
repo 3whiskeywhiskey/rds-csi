@@ -115,7 +115,7 @@ func TestNewConnectionPool(t *testing.T) {
 				t.Errorf("Unexpected error: %v", err)
 			}
 			if pool != nil {
-				defer pool.Close()
+				defer func() { _ = pool.Close() }()
 			}
 		})
 	}
@@ -125,7 +125,7 @@ func TestPoolGetPut(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:   5,
@@ -135,7 +135,7 @@ func TestPoolGetPut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -182,7 +182,7 @@ func TestPoolGetPut(t *testing.T) {
 		t.Error("Expected to reuse same connection but got different one")
 	}
 
-	pool.Put(client2)
+	_ = pool.Put(client2)
 }
 
 func TestPoolMaxSize(t *testing.T) {
@@ -190,7 +190,7 @@ func TestPoolMaxSize(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:   maxSize,
@@ -200,7 +200,7 @@ func TestPoolMaxSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -233,7 +233,7 @@ func TestPoolMaxSize(t *testing.T) {
 
 	// Clean up
 	for i := 1; i < len(clients); i++ {
-		pool.Put(clients[i])
+		_ = pool.Put(clients[i])
 	}
 }
 
@@ -242,7 +242,7 @@ func TestPoolRateLimit(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:   100,
@@ -253,7 +253,7 @@ func TestPoolRateLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -265,7 +265,7 @@ func TestPoolRateLimit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get connection %d: %v", i, err)
 		}
-		pool.Put(client)
+		_ = pool.Put(client)
 	}
 	elapsed := time.Since(start)
 
@@ -288,7 +288,7 @@ func TestPoolCircuitBreaker(t *testing.T) {
 				return nil, errors.New("connection failed")
 			}
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:                 10,
@@ -300,7 +300,7 @@ func TestPoolCircuitBreaker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -335,14 +335,14 @@ func TestPoolCircuitBreaker(t *testing.T) {
 	if client == nil {
 		t.Fatal("Got nil client after circuit recovery")
 	}
-	pool.Put(client)
+	_ = pool.Put(client)
 }
 
 func TestPoolConcurrency(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:   10,
@@ -352,7 +352,7 @@ func TestPoolConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -395,7 +395,7 @@ func TestPoolClose(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:   5,
@@ -411,8 +411,8 @@ func TestPoolClose(t *testing.T) {
 	// Get some connections and return them
 	client1, _ := pool.Get(ctx)
 	client2, _ := pool.Get(ctx)
-	pool.Put(client1)
-	pool.Put(client2)
+	_ = pool.Put(client1)
+	_ = pool.Put(client2)
 
 	// Close pool
 	if err := pool.Close(); err != nil {
@@ -443,7 +443,7 @@ func TestPoolIdleTimeout(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:     5,
@@ -454,7 +454,7 @@ func TestPoolIdleTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -463,7 +463,7 @@ func TestPoolIdleTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get connection: %v", err)
 	}
-	pool.Put(client1)
+	_ = pool.Put(client1)
 
 	// Wait for idle timeout
 	time.Sleep(idleTimeout + 50*time.Millisecond)
@@ -481,14 +481,14 @@ func TestPoolIdleTimeout(t *testing.T) {
 		}
 	}
 
-	pool.Put(client2)
+	_ = pool.Put(client2)
 }
 
 func TestPoolDisconnectedConnection(t *testing.T) {
 	pool, err := NewConnectionPool(PoolConfig{
 		Factory: func() (RDSClient, error) {
 			client := &mockRDSClient{}
-			client.Connect()
+			_ = client.Connect()
 			return client, nil
 		},
 		MaxSize:   5,
@@ -498,7 +498,7 @@ func TestPoolDisconnectedConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pool: %v", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	ctx := context.Background()
 
@@ -510,11 +510,11 @@ func TestPoolDisconnectedConnection(t *testing.T) {
 
 	// Disconnect it
 	if mock, ok := client.(*mockRDSClient); ok {
-		mock.Close()
+		_ = mock.Close()
 	}
 
 	// Return disconnected connection
-	pool.Put(client)
+	_ = pool.Put(client)
 
 	// Should not be in idle pool
 	metrics := pool.GetMetrics()

@@ -24,25 +24,25 @@ var (
 
 // ConnectionPool manages a pool of RDS client connections with rate limiting
 type ConnectionPool struct {
-	factory    func() (RDSClient, error)
-	maxSize    int
-	maxIdle    int
-	idleTime   time.Duration
-	limiter    *rate.Limiter
-	breaker    *CircuitBreaker
-	mu         sync.Mutex
-	idle       []pooledConnection
-	active     int
-	closed     bool
-	metrics    *PoolMetrics
-	waitQueue  chan struct{}
+	factory   func() (RDSClient, error)
+	maxSize   int
+	maxIdle   int
+	idleTime  time.Duration
+	limiter   *rate.Limiter
+	breaker   *CircuitBreaker
+	mu        sync.Mutex
+	idle      []pooledConnection
+	active    int
+	closed    bool
+	metrics   *PoolMetrics
+	waitQueue chan struct{}
 }
 
 // pooledConnection wraps an RDSClient with metadata
 type pooledConnection struct {
-	client     RDSClient
-	lastUsed   time.Time
-	inUse      bool
+	client   RDSClient
+	lastUsed time.Time
+	inUse    bool
 }
 
 // PoolConfig configures the connection pool
@@ -87,12 +87,12 @@ type PoolMetrics struct {
 
 // CircuitBreaker implements circuit breaker pattern for connection failures
 type CircuitBreaker struct {
-	mu            sync.Mutex
-	threshold     int
-	timeout       time.Duration
-	failures      int
-	lastFailTime  time.Time
-	state         CircuitState
+	mu           sync.Mutex
+	threshold    int
+	timeout      time.Duration
+	failures     int
+	lastFailTime time.Time
+	state        CircuitState
 }
 
 // CircuitState represents the state of a circuit breaker
@@ -288,11 +288,25 @@ func (p *ConnectionPool) Close() error {
 	return nil
 }
 
-// GetMetrics returns current pool metrics
+// GetMetrics returns a snapshot of current pool metrics
 func (p *ConnectionPool) GetMetrics() PoolMetrics {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return *p.metrics
+
+	// Return a copy of metrics without the mutex to avoid copying lock value
+	p.metrics.mu.RLock()
+	defer p.metrics.mu.RUnlock()
+
+	return PoolMetrics{
+		totalConnections:  p.metrics.totalConnections,
+		activeConnections: p.metrics.activeConnections,
+		idleConnections:   p.metrics.idleConnections,
+		connectionErrors:  p.metrics.connectionErrors,
+		circuitBreaks:     p.metrics.circuitBreaks,
+		rateLimitHits:     p.metrics.rateLimitHits,
+		waitTimeTotal:     p.metrics.waitTimeTotal,
+		waitCount:         p.metrics.waitCount,
+	}
 }
 
 // updateMetrics updates the metrics (must be called with lock held)
