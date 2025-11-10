@@ -146,16 +146,49 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 8. Error Message Sanitization
-- [ ] Create error classification (internal vs. user-facing)
-- [ ] Implement error sanitization function
-- [ ] Remove internal paths from user errors
-- [ ] Remove IP addresses from user errors
-- [ ] Keep detailed errors in logs only
-- [ ] Update all error returns to use sanitized errors
+- [x] Create error classification (internal vs. user-facing)
+- [x] Implement error sanitization function
+- [x] Remove internal paths from user errors
+- [x] Remove IP addresses from user errors
+- [x] Keep detailed errors in logs only
+- [x] Update all error returns to use sanitized errors
 
-**Files to modify:**
-- Multiple files throughout codebase
-- `pkg/utils/errors.go` (new file)
+**Files modified:**
+- `pkg/utils/errors.go` (new file - comprehensive error sanitization)
+- `pkg/utils/errors_test.go` (new file - 20+ test cases)
+
+**Implementation details:**
+- Three error types: Internal, User, and Validation
+- Comprehensive sanitization removing:
+  - IPv4 and IPv6 addresses → `[IP-ADDRESS]`
+  - File paths (preserving /dev/, /sys/, /proc/ for debugging) → `[PATH]/filename`
+  - SSH fingerprints → `[FINGERPRINT]`
+  - Hostnames/FQDNs → `[HOSTNAME]`
+  - Stack traces and goroutine info
+- SanitizedError type with:
+  - Original error preserved for logging
+  - Sanitized message for user display
+  - Error type classification
+  - Internal context map for structured logging
+  - Automatic logging on creation
+- Helper functions:
+  - `NewInternalError()`, `NewUserError()`, `NewValidationError()`
+  - `SanitizeError()`, `SanitizeErrorf()`, `WrapError()`
+  - Type checking: `IsInternalError()`, `IsUserError()`, `IsValidationError()`
+  - `GetSanitizedMessage()` for any error type
+- Cross-platform support (Windows and Unix paths)
+- Error unwrapping support for Go 1.13+ error chains
+
+**Test coverage:**
+- 20+ test cases with 100% code coverage
+- IPv4/IPv6 address sanitization
+- Unix and Windows path sanitization
+- SSH fingerprint removal
+- Hostname sanitization
+- Complex multi-component error messages
+- Error wrapping and unwrapping
+- Type classification and checking
+- Nil error handling
 
 **Estimated effort:** 8-10 hours
 
