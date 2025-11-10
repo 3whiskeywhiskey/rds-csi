@@ -336,13 +336,13 @@ func TestIsPathSafe(t *testing.T) {
 func BenchmarkValidateFilePath(b *testing.B) {
 	path := "/storage-pool/kubernetes-volumes/pvc-12345678-1234-1234-1234-123456789abc.img"
 	for i := 0; i < b.N; i++ {
-		ValidateFilePath(path)
+		_ = ValidateFilePath(path)
 	}
 }
 
 func BenchmarkValidateFilePathMalicious(b *testing.B) {
 	path := "/storage-pool/kubernetes-volumes/pvc-123; rm -rf /"
 	for i := 0; i < b.N; i++ {
-		ValidateFilePath(path)
+		_ = ValidateFilePath(path)
 	}
 }

@@ -8,25 +8,25 @@ import (
 
 // Shell metacharacters that could be used for command injection
 var dangerousCharacters = []string{
-	";",  // Command separator
-	"|",  // Pipe
-	"&",  // Background/AND
-	"$",  // Variable expansion
-	"`",  // Command substitution
-	"(",  // Subshell
-	")",  // Subshell
-	"<",  // Input redirection
-	">",  // Output redirection
-	"\n", // Newline (command separator)
-	"\r", // Carriage return
-	"*",  // Glob wildcard
-	"?",  // Glob wildcard
-	"[",  // Glob wildcard
-	"]",  // Glob wildcard
-	"'",  // String delimiter (can break out of quotes)
-	"\"", // String delimiter (can break out of quotes)
-	"\\", // Escape character
-	"\t", // Tab (can cause parsing issues)
+	";",    // Command separator
+	"|",    // Pipe
+	"&",    // Background/AND
+	"$",    // Variable expansion
+	"`",    // Command substitution
+	"(",    // Subshell
+	")",    // Subshell
+	"<",    // Input redirection
+	">",    // Output redirection
+	"\n",   // Newline (command separator)
+	"\r",   // Carriage return
+	"*",    // Glob wildcard
+	"?",    // Glob wildcard
+	"[",    // Glob wildcard
+	"]",    // Glob wildcard
+	"'",    // String delimiter (can break out of quotes)
+	"\"",   // String delimiter (can break out of quotes)
+	"\\",   // Escape character
+	"\t",   // Tab (can cause parsing issues)
 	"\x00", // Null byte
 }
 
@@ -119,6 +119,11 @@ func SanitizeBasePath(basePath string) (string, error) {
 		return "", fmt.Errorf("base path cannot be empty")
 	}
 
+	// Check for double slashes BEFORE cleaning (filepath.Clean normalizes them)
+	if strings.Contains(basePath, "//") {
+		return "", fmt.Errorf("base path contains double slashes: %s", basePath)
+	}
+
 	// Clean the path
 	cleanPath := filepath.Clean(basePath)
 
@@ -132,11 +137,6 @@ func SanitizeBasePath(basePath string) (string, error) {
 		if strings.Contains(cleanPath, char) {
 			return "", fmt.Errorf("base path contains dangerous character %q: %s", char, cleanPath)
 		}
-	}
-
-	// No double slashes
-	if strings.Contains(cleanPath, "//") {
-		return "", fmt.Errorf("base path contains double slashes: %s", cleanPath)
 	}
 
 	return cleanPath, nil
