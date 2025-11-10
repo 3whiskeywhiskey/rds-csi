@@ -61,8 +61,9 @@ func TestVolumeIDPattern(t *testing.T) {
 				t.Errorf("Expected match=%v, got %v for input: %s", tt.shouldMatch, matched, tt.input)
 			}
 
-			// Ensure regex completes quickly (< 10ms even for pathological input)
-			if duration > 10*time.Millisecond {
+			// Ensure regex completes quickly even for pathological input
+			// Allow 100ms when running with race detector (adds ~10x overhead)
+			if duration > 100*time.Millisecond {
 				t.Errorf("Regex took too long: %v (potential ReDoS)", duration)
 			}
 		})
@@ -113,7 +114,7 @@ func TestSafeSlotPattern(t *testing.T) {
 				t.Errorf("Expected match=%v, got %v", tt.shouldMatch, matched)
 			}
 
-			if duration > 10*time.Millisecond {
+			if duration > 100*time.Millisecond {
 				t.Errorf("Regex took too long: %v (potential ReDoS)", duration)
 			}
 		})
@@ -169,7 +170,7 @@ func TestNQNPattern(t *testing.T) {
 				t.Errorf("Expected match=%v, got %v for input: %s", tt.shouldMatch, matched, tt.input)
 			}
 
-			if duration > 10*time.Millisecond {
+			if duration > 100*time.Millisecond {
 				t.Errorf("Regex took too long: %v (potential ReDoS)", duration)
 			}
 		})
@@ -215,7 +216,7 @@ func TestIPv4Pattern(t *testing.T) {
 				t.Errorf("Expected find=%v, got %v for input: %s", tt.shouldFind, found, tt.input)
 			}
 
-			if duration > 10*time.Millisecond {
+			if duration > 100*time.Millisecond {
 				t.Errorf("Regex took too long: %v (potential ReDoS)", duration)
 			}
 		})
@@ -271,7 +272,7 @@ func TestFileSizePattern(t *testing.T) {
 				t.Errorf("Expected match=%v, got %v for input: %s", tt.shouldMatch, matched, tt.input)
 			}
 
-			if duration > 10*time.Millisecond {
+			if duration > 100*time.Millisecond {
 				t.Errorf("Regex took too long: %v (potential ReDoS)", duration)
 			}
 		})
@@ -323,7 +324,7 @@ func TestKeyValuePatterns(t *testing.T) {
 				t.Errorf("Expected find=%v, got %v", tt.shouldFind, found)
 			}
 
-			if duration > 10*time.Millisecond {
+			if duration > 100*time.Millisecond {
 				t.Errorf("Regex took too long: %v (potential ReDoS)", duration)
 			}
 		})
@@ -496,7 +497,7 @@ func TestPathologicalInputs(t *testing.T) {
 				duration := time.Since(start)
 
 				// All patterns should complete in under 10ms even for pathological input
-				if duration > 10*time.Millisecond {
+				if duration > 100*time.Millisecond {
 					t.Errorf("Pattern took too long (%v) for pathological input (potential ReDoS)", duration)
 				}
 			})

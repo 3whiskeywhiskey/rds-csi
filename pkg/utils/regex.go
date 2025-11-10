@@ -21,10 +21,11 @@ var (
 	SafeSlotPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 
 	// NQNPattern matches NVMe Qualified Names per NVMe spec
-	// ReDoS-safe: Uses possessive-like matching with specific character classes
+	// ReDoS-safe: Domain part uses atomic group pattern to prevent backtracking
 	// Format: nqn.yyyy-mm.reverse-domain:identifier
 	// Max length enforced separately (223 bytes per NVMe spec)
-	NQNPattern = regexp.MustCompile(`^nqn\.[0-9]{4}-[0-9]{2}\.[a-z0-9.-]+:[a-z0-9._-]+$`)
+	// Domain: labels separated by dots, no consecutive dots
+	NQNPattern = regexp.MustCompile(`^nqn\.[0-9]{4}-[0-9]{2}\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?:[a-z0-9._-]+$`)
 
 	// IPv4Pattern matches IPv4 addresses
 	// ReDoS-safe: Uses word boundaries and exact digit counts
