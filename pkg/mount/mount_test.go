@@ -623,7 +623,7 @@ func TestMountWithValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewMounter()
 			err := m.Mount(tt.source, tt.target, tt.fsType, tt.options)
-			
+
 			if tt.expectErr {
 				if err == nil {
 					t.Errorf("Mount() expected error but got nil")
@@ -639,13 +639,13 @@ func TestMountWithValidation(t *testing.T) {
 func BenchmarkValidateMountOptions(b *testing.B) {
 	options := []string{"nosuid", "nodev", "noexec", "ro"}
 	for i := 0; i < b.N; i++ {
-		ValidateMountOptions(options)
+		_ = ValidateMountOptions(options)
 	}
 }
 
 func BenchmarkSanitizeMountOptions(b *testing.B) {
 	options := []string{"bind", "ro"}
 	for i := 0; i < b.N; i++ {
-		SanitizeMountOptions(options, true)
+		_, _ = SanitizeMountOptions(options, true)
 	}
 }

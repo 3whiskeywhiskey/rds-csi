@@ -26,13 +26,13 @@ var defaultSecureMountOptions = []string{
 // Whitelist of allowed mount options (beyond the defaults)
 var allowedMountOptions = map[string]bool{
 	// Security options
-	"nosuid":   true,
-	"nodev":    true,
-	"noexec":   true,
-	"ro":       true,
-	"rw":       true,
-	"relatime": true,
-	"noatime":  true,
+	"nosuid":     true,
+	"nodev":      true,
+	"noexec":     true,
+	"ro":         true,
+	"rw":         true,
+	"relatime":   true,
+	"noatime":    true,
 	"nodiratime": true,
 
 	// Filesystem-specific options that are generally safe
@@ -46,9 +46,9 @@ var allowedMountOptions = map[string]bool{
 	"_netdev":  true,
 
 	// Bind mount options
-	"bind":     true,
-	"rbind":    true,
-	"remount":  true,
+	"bind":    true,
+	"rbind":   true,
+	"remount": true,
 
 	// Additional safe options
 	"strictatime": true,
