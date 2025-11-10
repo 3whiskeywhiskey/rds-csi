@@ -472,7 +472,14 @@ func (c *connector) ConnectWithContext(ctx context.Context, target Target) (stri
 	}
 
 	// Execute with context
-	cmd := exec.CommandContext(ctx, "nvme", args...)
+	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
+	var cmd *exec.Cmd
+	if c.execCommand != nil {
+		// For testing: use the mock execCommand (no context support)
+		cmd = c.execCommand("nvme", args...)
+	} else {
+		cmd = exec.CommandContext(ctx, "nvme", args...)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		c.metrics.mu.Lock()
@@ -541,7 +548,14 @@ func (c *connector) DisconnectWithContext(ctx context.Context, nqn string) error
 	}
 
 	// Execute with context
-	cmd := exec.CommandContext(ctx, "nvme", "disconnect", "-n", nqn)
+	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
+	var cmd *exec.Cmd
+	if c.execCommand != nil {
+		// For testing: use the mock execCommand (no context support)
+		cmd = c.execCommand("nvme", "disconnect", "-n", nqn)
+	} else {
+		cmd = exec.CommandContext(ctx, "nvme", "disconnect", "-n", nqn)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		c.metrics.mu.Lock()
@@ -575,7 +589,14 @@ func (c *connector) IsConnectedWithContext(ctx context.Context, nqn string) (boo
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, "nvme", "list-subsys", "-o", "json")
+	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
+	var cmd *exec.Cmd
+	if c.execCommand != nil {
+		// For testing: use the mock execCommand (no context support)
+		cmd = c.execCommand("nvme", "list-subsys", "-o", "json")
+	} else {
+		cmd = exec.CommandContext(ctx, "nvme", "list-subsys", "-o", "json")
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(output), "No NVMe subsystems") {
