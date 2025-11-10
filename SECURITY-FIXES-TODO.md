@@ -23,13 +23,13 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 2. File Path Command Injection Prevention
-- [ ] Add `validateFilePath()` function in `pkg/utils/`
-- [ ] Check for shell metacharacters: `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, `\n`, `\r`
-- [ ] Implement whitelist of allowed base paths
-- [ ] Add path traversal protection using `filepath.Clean()`
-- [ ] Call validation in `validateCreateVolumeOptions()`
-- [ ] Add unit tests for path validation
-- [ ] Add integration tests with malicious paths
+- [x] Add `validateFilePath()` function in `pkg/utils/`
+- [x] Check for shell metacharacters: `;`, `|`, `&`, `$`, `` ` ``, `(`, `)`, `<`, `>`, `\n`, `\r`
+- [x] Implement whitelist of allowed base paths
+- [x] Add path traversal protection using `filepath.Clean()`
+- [x] Call validation in `validateCreateVolumeOptions()`
+- [x] Add unit tests for path validation
+- [x] Add integration tests with malicious paths
 
 **Files to modify:**
 - `pkg/utils/validation.go` (new file)
