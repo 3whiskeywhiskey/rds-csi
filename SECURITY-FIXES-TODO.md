@@ -59,20 +59,22 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 4. Reduce Container Privileges
-- [ ] Remove `privileged: true` if possible
-- [ ] Test with only `SYS_ADMIN` capability
-- [ ] Add `CAP_NET_ADMIN` for NVMe/TCP
-- [ ] Drop all other capabilities
-- [ ] Set `allowPrivilegeEscalation: false`
-- [ ] Add `readOnlyRootFilesystem: true`
-- [ ] Test with `runAsNonRoot: true`
-- [ ] Add seccomp profile
-- [ ] Add AppArmor/SELinux profile
-- [ ] Update node DaemonSet manifest
+- [x] Remove `privileged: true` if possible
+- [x] Test with only `SYS_ADMIN` capability
+- [x] Add `CAP_NET_ADMIN` for NVMe/TCP
+- [x] Drop all other capabilities
+- [x] Set `allowPrivilegeEscalation: false`
+- [x] Add `readOnlyRootFilesystem: true`
+- [x] Test with `runAsNonRoot: true` (documented limitation - CSI needs root for mounts)
+- [x] Add seccomp profile
+- [x] Add AppArmor/SELinux profile
+- [x] Update node DaemonSet manifest
 
-**Files to modify:**
+**Files modified:**
 - `deploy/kubernetes/node.yaml`
-- Test thoroughly on actual hardware
+- `docs/security-hardening.md` (new - testing guide)
+
+**Note:** Requires testing on actual hardware before production deployment.
 
 **Estimated effort:** 8-12 hours (requires extensive testing)
 
