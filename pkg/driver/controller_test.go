@@ -315,16 +315,7 @@ func TestUnimplementedMethods(t *testing.T) {
 		}
 	})
 
-	t.Run("ControllerExpandVolume", func(t *testing.T) {
-		_, err := cs.ControllerExpandVolume(context.Background(), &csi.ControllerExpandVolumeRequest{})
-		if err == nil {
-			t.Error("Expected unimplemented error")
-		}
-		st, _ := status.FromError(err)
-		if st.Code() != codes.Unimplemented {
-			t.Errorf("Expected Unimplemented code, got %v", st.Code())
-		}
-	})
+	// Note: ControllerExpandVolume is now implemented, so it's not in this test
 }
 
 func TestParseEndpoint(t *testing.T) {

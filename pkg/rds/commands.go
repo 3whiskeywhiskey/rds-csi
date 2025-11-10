@@ -49,6 +49,60 @@ func (c *sshClient) CreateVolume(opts CreateVolumeOptions) error {
 	return nil
 }
 
+// ResizeVolume resizes an existing volume on RDS
+func (c *sshClient) ResizeVolume(slot string, newSizeBytes int64) error {
+	klog.V(2).Infof("Resizing volume %s to %d bytes", slot, newSizeBytes)
+
+	// Validate slot name
+	if err := validateSlotName(slot); err != nil {
+		return err
+	}
+
+	// Validate new size
+	if newSizeBytes <= 0 {
+		return fmt.Errorf("new size must be positive")
+	}
+
+	// Get current volume to check it exists and get current size
+	currentVolume, err := c.GetVolume(slot)
+	if err != nil {
+		return fmt.Errorf("failed to get current volume info: %w", err)
+	}
+
+	// Verify we're expanding (not shrinking)
+	if newSizeBytes < currentVolume.FileSizeBytes {
+		return fmt.Errorf("shrinking volumes is not supported (current: %d bytes, requested: %d bytes)",
+			currentVolume.FileSizeBytes, newSizeBytes)
+	}
+
+	// If size is the same, nothing to do
+	if newSizeBytes == currentVolume.FileSizeBytes {
+		klog.V(2).Infof("Volume %s is already at requested size, skipping resize", slot)
+		return nil
+	}
+
+	// Convert size to human-readable format
+	sizeStr := formatBytes(newSizeBytes)
+
+	// Build /disk set command
+	cmd := fmt.Sprintf(`/disk set [find slot=%s] file-size=%s`, slot, sizeStr)
+
+	// Execute command with retry
+	_, err = c.runCommandWithRetry(cmd, 3)
+	if err != nil {
+		return fmt.Errorf("failed to resize volume: %w", err)
+	}
+
+	// Verify new size
+	updatedVolume, err := c.GetVolume(slot)
+	if err != nil {
+		return fmt.Errorf("failed to verify resize: %w", err)
+	}
+
+	klog.V(2).Infof("Successfully resized volume %s from %d to %d bytes", slot, currentVolume.FileSizeBytes, updatedVolume.FileSizeBytes)
+	return nil
+}
+
 // DeleteVolume removes a volume from RDS
 func (c *sshClient) DeleteVolume(slot string) error {
 	klog.V(2).Infof("Deleting volume %s", slot)
