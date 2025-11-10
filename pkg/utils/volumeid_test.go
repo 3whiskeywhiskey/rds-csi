@@ -277,6 +277,141 @@ func TestExtractVolumeIDFromNQN(t *testing.T) {
 	}
 }
 
+func TestValidateNQN(t *testing.T) {
+	tests := []struct {
+		name      string
+		nqn       string
+		expectErr bool
+	}{
+		// Valid NQNs
+		{
+			name:      "valid MikroTik NQN",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			expectErr: false,
+		},
+		{
+			name:      "valid NQN with hyphens in identifier",
+			nqn:       "nqn.2014-08.org.nvmexpress:subsystem-name",
+			expectErr: false,
+		},
+		{
+			name:      "valid NQN with underscores",
+			nqn:       "nqn.2014-08.com.example:storage_01",
+			expectErr: false,
+		},
+		{
+			name:      "valid NQN with dots in domain",
+			nqn:       "nqn.2019-12.io.example.storage:vol-123",
+			expectErr: false,
+		},
+		// Empty NQN
+		{
+			name:      "empty NQN",
+			nqn:       "",
+			expectErr: true,
+		},
+		// Invalid format
+		{
+			name:      "missing nqn prefix",
+			nqn:       "2000-02.com.mikrotik:pvc-123",
+			expectErr: true,
+		},
+		{
+			name:      "invalid date format",
+			nqn:       "nqn.00-02.com.mikrotik:pvc-123",
+			expectErr: true,
+		},
+		{
+			name:      "missing colon separator",
+			nqn:       "nqn.2000-02.com.mikrotik-pvc-123",
+			expectErr: true,
+		},
+		{
+			name:      "uppercase in domain",
+			nqn:       "nqn.2000-02.COM.mikrotik:pvc-123",
+			expectErr: true,
+		},
+		// Command injection attempts
+		{
+			name:      "semicolon injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-123; rm -rf /",
+			expectErr: true,
+		},
+		{
+			name:      "pipe injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-123 | cat /etc/passwd",
+			expectErr: true,
+		},
+		{
+			name:      "ampersand injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-123 && ls",
+			expectErr: true,
+		},
+		{
+			name:      "dollar sign injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-$USER",
+			expectErr: true,
+		},
+		{
+			name:      "backtick injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-`whoami`",
+			expectErr: true,
+		},
+		{
+			name:      "parenthesis injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-(test)",
+			expectErr: true,
+		},
+		{
+			name:      "redirect injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-123 > /tmp/evil",
+			expectErr: true,
+		},
+		{
+			name:      "newline injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-123\nrm -rf /",
+			expectErr: true,
+		},
+		{
+			name:      "space in NQN",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc 123",
+			expectErr: true,
+		},
+		{
+			name:      "quote injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-'test'",
+			expectErr: true,
+		},
+		{
+			name:      "double quote injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-\"test\"",
+			expectErr: true,
+		},
+		{
+			name:      "backslash injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-test\\n",
+			expectErr: true,
+		},
+		{
+			name:      "wildcard injection",
+			nqn:       "nqn.2000-02.com.mikrotik:pvc-*",
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateNQN(tt.nqn)
+			if tt.expectErr && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectErr && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateIPAddress(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -585,20 +720,34 @@ func TestValidateNVMETargetContext(t *testing.T) {
 }
 
 // Benchmark validation functions
+func BenchmarkValidateNQN(b *testing.B) {
+	nqn := "nqn.2000-02.com.mikrotik:pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	for i := 0; i < b.N; i++ {
+		_ = ValidateNQN(nqn)
+	}
+}
+
+func BenchmarkValidateNQNMalicious(b *testing.B) {
+	nqn := "nqn.2000-02.com.mikrotik:pvc-123; rm -rf /"
+	for i := 0; i < b.N; i++ {
+		_ = ValidateNQN(nqn)
+	}
+}
+
 func BenchmarkValidateIPAddress(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		ValidateIPAddress("10.42.68.1")
+		_ = ValidateIPAddress("10.42.68.1")
 	}
 }
 
 func BenchmarkValidatePort(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		ValidatePort(4420, false)
+		_ = ValidatePort(4420, false)
 	}
 }
 
 func BenchmarkValidateNVMETargetContext(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		ValidateNVMETargetContext("nqn.2000-02.com.mikrotik:pvc-123", "10.42.68.1", 4420, "")
+		_ = ValidateNVMETargetContext("nqn.2000-02.com.mikrotik:pvc-123", "10.42.68.1", 4420, "")
 	}
 }
