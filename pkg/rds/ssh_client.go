@@ -9,6 +9,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
 )
 
 // sshClient implements RDSClient using SSH protocol to connect to RouterOS
@@ -81,6 +83,10 @@ func (c *sshClient) GetAddress() string {
 func (c *sshClient) Connect() error {
 	klog.V(4).Infof("Connecting to RDS at %s:%d as user %s", c.address, c.port, c.user)
 
+	// Log authentication attempt
+	secLogger := security.GetLogger()
+	secLogger.LogSSHConnectionAttempt(c.user, c.address)
+
 	// Configure SSH client with host key callback
 	var hostKeyCallback ssh.HostKeyCallback
 	if c.hostKeyCallback != nil {
@@ -119,11 +125,16 @@ func (c *sshClient) Connect() error {
 	addr := fmt.Sprintf("%s:%d", c.address, c.port)
 	client, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
+		// Log authentication failure
+		secLogger.LogSSHConnectionFailure(c.user, c.address, err)
 		return fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
 
 	c.sshClient = client
 	klog.V(4).Infof("Successfully connected to RDS at %s:%d", c.address, c.port)
+
+	// Log successful authentication
+	secLogger.LogSSHConnectionSuccess(c.user, c.address)
 	return nil
 }
 
@@ -311,11 +322,20 @@ func createHostKeyCallback(expectedKey ssh.PublicKey, hostname string) ssh.HostK
 			klog.Errorf("Expected fingerprint: %s", expectedFingerprint)
 			klog.Errorf("Actual fingerprint:   %s", actualFingerprint)
 			klog.Errorf("This could indicate a man-in-the-middle attack or host key change!")
+
+			// Log critical security event
+			secLogger := security.GetLogger()
+			secLogger.LogSSHHostKeyMismatch(hostname, expectedFingerprint, actualFingerprint)
+
 			return fmt.Errorf("SSH host key verification failed for %s: fingerprint mismatch (expected %s, got %s)",
 				hostname, expectedFingerprint, actualFingerprint)
 		}
 
 		klog.V(4).Infof("SSH host key verified for %s: %s", hostname, actualFingerprint)
+
+		// Log successful host key verification
+		secLogger := security.GetLogger()
+		secLogger.LogSSHHostKeyVerified(hostname, actualFingerprint)
 		return nil
 	}
 }

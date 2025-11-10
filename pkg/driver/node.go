@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -10,6 +11,7 @@ import (
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
@@ -115,6 +117,12 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	klog.V(2).Infof("Staging volume %s: NQN=%s, Address=%s:%d, FSType=%s",
 		volumeID, nqn, nvmeAddress, port, fsType)
 
+	// Log volume stage request
+	secLogger := security.GetLogger()
+	secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeUnknown, nil, 0)
+
+	startTime := time.Now()
+
 	// Step 1: Connect to NVMe/TCP target
 	target := nvme.Target{
 		Transport:     "tcp",
@@ -125,6 +133,8 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	devicePath, err := ns.nvmeConn.Connect(target)
 	if err != nil {
+		// Log volume stage failure
+		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to connect to NVMe target: %v", err)
 	}
 
@@ -134,6 +144,8 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if err := ns.mounter.Format(devicePath, fsType); err != nil {
 		// Cleanup on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
+		// Log volume stage failure
+		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to format device: %v", err)
 	}
 
@@ -146,10 +158,16 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if err := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); err != nil {
 		// Cleanup on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
+		// Log volume stage failure
+		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to mount device: %v", err)
 	}
 
 	klog.V(2).Infof("Successfully staged volume %s to %s", volumeID, stagingPath)
+
+	// Log volume stage success
+	secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeSuccess, nil, time.Since(startTime))
+
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
@@ -171,8 +189,22 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
 	}
 
+	// Derive NQN from volume ID for logging
+	nqn, err := volumeIDToNQN(volumeID)
+	if err != nil {
+		nqn = "" // Will use empty NQN in logs
+	}
+
+	// Log volume unstage request
+	secLogger := security.GetLogger()
+	secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeUnknown, nil, 0)
+
+	startTime := time.Now()
+
 	// Step 1: Unmount from staging path
 	if err := ns.mounter.Unmount(stagingPath); err != nil {
+		// Log volume unstage failure
+		secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to unmount staging path: %v", err)
 	}
 
@@ -180,11 +212,15 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 
 	// Step 2: Disconnect from NVMe/TCP target
 	// Derive NQN from volume ID (same as what was used during CreateVolume)
-	nqn, err := volumeIDToNQN(volumeID)
-	if err != nil {
-		// Log but don't fail - volume might have been disconnected already
-		klog.Warningf("Failed to derive NQN from volume ID %s: %v", volumeID, err)
-	} else {
+	if nqn == "" {
+		nqn, err = volumeIDToNQN(volumeID)
+		if err != nil {
+			// Log but don't fail - volume might have been disconnected already
+			klog.Warningf("Failed to derive NQN from volume ID %s: %v", volumeID, err)
+		}
+	}
+
+	if nqn != "" {
 		if err := ns.nvmeConn.Disconnect(nqn); err != nil {
 			// Log but don't fail - disconnection issues shouldn't block unstaging
 			klog.Warningf("Failed to disconnect NVMe device for volume %s: %v", volumeID, err)
@@ -194,6 +230,10 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	}
 
 	klog.V(2).Infof("Successfully unstaged volume %s", volumeID)
+
+	// Log volume unstage success
+	secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeSuccess, nil, time.Since(startTime))
+
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
@@ -241,12 +281,24 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		mountOptions = append(mountOptions, mnt.MountFlags...)
 	}
 
+	// Log volume publish request
+	secLogger := security.GetLogger()
+	secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeUnknown, nil, 0)
+
+	startTime := time.Now()
+
 	// Bind mount from staging to target
 	if err := ns.mounter.Mount(stagingPath, targetPath, "", mountOptions); err != nil {
+		// Log volume publish failure
+		secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to bind mount: %v", err)
 	}
 
 	klog.V(2).Infof("Successfully published volume %s to %s", volumeID, targetPath)
+
+	// Log volume publish success
+	secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
+
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
@@ -265,12 +317,24 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		return nil, status.Error(codes.InvalidArgument, "target path is required")
 	}
 
+	// Log volume unpublish request
+	secLogger := security.GetLogger()
+	secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeUnknown, nil, 0)
+
+	startTime := time.Now()
+
 	// Unmount from target path
 	if err := ns.mounter.Unmount(targetPath); err != nil {
+		// Log volume unpublish failure
+		secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to unmount target path: %v", err)
 	}
 
 	klog.V(2).Infof("Successfully unpublished volume %s from %s", volumeID, targetPath)
+
+	// Log volume unpublish success
+	secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
+
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 

@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -10,6 +11,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
@@ -143,6 +145,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// Create volume on RDS
 	klog.V(2).Infof("Creating volume %s on RDS (size: %d bytes, path: %s, nqn: %s)", volumeID, requiredBytes, filePath, nqn)
 
+	// Log volume create request
+	secLogger := security.GetLogger()
+	secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeUnknown, nil, 0)
+
 	createOpts := rds.CreateVolumeOptions{
 		Slot:          volumeID,
 		FilePath:      filePath,
@@ -151,7 +157,11 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		NVMETCPNQN:    nqn,
 	}
 
+	startTime := time.Now()
 	if err := cs.driver.rdsClient.CreateVolume(createOpts); err != nil {
+		// Log volume create failure
+		secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeFailure, err, time.Since(startTime))
+
 		// Check if this is a capacity error
 		if containsString(err.Error(), "not enough space") {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS: %v", err)
@@ -160,6 +170,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	klog.V(2).Infof("Successfully created volume %s on RDS", volumeID)
+
+	// Log volume create success
+	secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeSuccess, nil, time.Since(startTime))
 
 	// Return volume information
 	return &csi.CreateVolumeResponse{
@@ -192,13 +205,25 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Log volume delete request
+	secLogger := security.GetLogger()
+	secLogger.LogVolumeDelete(volumeID, "", security.OutcomeUnknown, nil, 0)
+
 	// Delete volume from RDS (idempotent)
+	startTime := time.Now()
 	if err := cs.driver.rdsClient.DeleteVolume(volumeID); err != nil {
 		klog.Errorf("Failed to delete volume %s: %v", volumeID, err)
+
+		// Log volume delete failure
+		secLogger.LogVolumeDelete(volumeID, "", security.OutcomeFailure, err, time.Since(startTime))
+
 		return nil, status.Errorf(codes.Internal, "failed to delete volume: %v", err)
 	}
 
 	klog.V(2).Infof("Successfully deleted volume %s", volumeID)
+
+	// Log volume delete success
+	secLogger.LogVolumeDelete(volumeID, "", security.OutcomeSuccess, nil, time.Since(startTime))
 
 	return &csi.DeleteVolumeResponse{}, nil
 }
