@@ -11,42 +11,42 @@ type SecurityMetrics struct {
 	mu sync.RWMutex
 
 	// Authentication metrics
-	SSHConnectionAttempts int64 `json:"ssh_connection_attempts"`
+	SSHConnectionAttempts  int64 `json:"ssh_connection_attempts"`
 	SSHConnectionSuccesses int64 `json:"ssh_connection_successes"`
-	SSHConnectionFailures int64 `json:"ssh_connection_failures"`
-	SSHHostKeyMismatches  int64 `json:"ssh_host_key_mismatches"`
-	SSHAuthFailures       int64 `json:"ssh_auth_failures"`
+	SSHConnectionFailures  int64 `json:"ssh_connection_failures"`
+	SSHHostKeyMismatches   int64 `json:"ssh_host_key_mismatches"`
+	SSHAuthFailures        int64 `json:"ssh_auth_failures"`
 
 	// Volume operation metrics
-	VolumeCreateRequests  int64 `json:"volume_create_requests"`
-	VolumeCreateSuccesses int64 `json:"volume_create_successes"`
-	VolumeCreateFailures  int64 `json:"volume_create_failures"`
-	VolumeDeleteRequests  int64 `json:"volume_delete_requests"`
-	VolumeDeleteSuccesses int64 `json:"volume_delete_successes"`
-	VolumeDeleteFailures  int64 `json:"volume_delete_failures"`
-	VolumeStageRequests   int64 `json:"volume_stage_requests"`
-	VolumeStageSuccesses  int64 `json:"volume_stage_successes"`
-	VolumeStageFailures   int64 `json:"volume_stage_failures"`
-	VolumeUnstageRequests  int64 `json:"volume_unstage_requests"`
-	VolumeUnstageSuccesses int64 `json:"volume_unstage_successes"`
-	VolumeUnstageFailures  int64 `json:"volume_unstage_failures"`
-	VolumePublishRequests  int64 `json:"volume_publish_requests"`
-	VolumePublishSuccesses int64 `json:"volume_publish_successes"`
-	VolumePublishFailures  int64 `json:"volume_publish_failures"`
+	VolumeCreateRequests     int64 `json:"volume_create_requests"`
+	VolumeCreateSuccesses    int64 `json:"volume_create_successes"`
+	VolumeCreateFailures     int64 `json:"volume_create_failures"`
+	VolumeDeleteRequests     int64 `json:"volume_delete_requests"`
+	VolumeDeleteSuccesses    int64 `json:"volume_delete_successes"`
+	VolumeDeleteFailures     int64 `json:"volume_delete_failures"`
+	VolumeStageRequests      int64 `json:"volume_stage_requests"`
+	VolumeStageSuccesses     int64 `json:"volume_stage_successes"`
+	VolumeStageFailures      int64 `json:"volume_stage_failures"`
+	VolumeUnstageRequests    int64 `json:"volume_unstage_requests"`
+	VolumeUnstageSuccesses   int64 `json:"volume_unstage_successes"`
+	VolumeUnstageFailures    int64 `json:"volume_unstage_failures"`
+	VolumePublishRequests    int64 `json:"volume_publish_requests"`
+	VolumePublishSuccesses   int64 `json:"volume_publish_successes"`
+	VolumePublishFailures    int64 `json:"volume_publish_failures"`
 	VolumeUnpublishRequests  int64 `json:"volume_unpublish_requests"`
 	VolumeUnpublishSuccesses int64 `json:"volume_unpublish_successes"`
 	VolumeUnpublishFailures  int64 `json:"volume_unpublish_failures"`
 
 	// Network access metrics
-	NVMEConnectAttempts int64 `json:"nvme_connect_attempts"`
+	NVMEConnectAttempts  int64 `json:"nvme_connect_attempts"`
 	NVMEConnectSuccesses int64 `json:"nvme_connect_successes"`
-	NVMEConnectFailures int64 `json:"nvme_connect_failures"`
-	NVMEDisconnects     int64 `json:"nvme_disconnects"`
+	NVMEConnectFailures  int64 `json:"nvme_connect_failures"`
+	NVMEDisconnects      int64 `json:"nvme_disconnects"`
 
 	// Data access metrics
-	MountAttempts  int64 `json:"mount_attempts"`
-	MountSuccesses int64 `json:"mount_successes"`
-	MountFailures  int64 `json:"mount_failures"`
+	MountAttempts    int64 `json:"mount_attempts"`
+	MountSuccesses   int64 `json:"mount_successes"`
+	MountFailures    int64 `json:"mount_failures"`
 	UnmountAttempts  int64 `json:"unmount_attempts"`
 	UnmountSuccesses int64 `json:"unmount_successes"`
 	UnmountFailures  int64 `json:"unmount_failures"`
@@ -66,12 +66,12 @@ type SecurityMetrics struct {
 	CriticalEvents int64 `json:"critical_events"`
 
 	// Timing metrics
-	LastSSHConnection       time.Time     `json:"last_ssh_connection"`
-	LastVolumeOperation     time.Time     `json:"last_volume_operation"`
-	LastSecurityViolation   time.Time     `json:"last_security_violation"`
+	LastSSHConnection        time.Time     `json:"last_ssh_connection"`
+	LastVolumeOperation      time.Time     `json:"last_volume_operation"`
+	LastSecurityViolation    time.Time     `json:"last_security_violation"`
 	AverageOperationDuration time.Duration `json:"average_operation_duration_ms"`
-	totalOperationTime      time.Duration
-	totalOperations         int64
+	totalOperationTime       time.Duration
+	totalOperations          int64
 }
 
 // globalMetrics is the global security metrics instance
@@ -340,6 +340,62 @@ func (m *SecurityMetrics) Snapshot() SecurityMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	snapshot := *m
-	return snapshot
+	// Manually copy fields to avoid copying the mutex
+	return SecurityMetrics{
+		SSHConnectionAttempts:  m.SSHConnectionAttempts,
+		SSHConnectionSuccesses: m.SSHConnectionSuccesses,
+		SSHConnectionFailures:  m.SSHConnectionFailures,
+		SSHHostKeyMismatches:   m.SSHHostKeyMismatches,
+		SSHAuthFailures:        m.SSHAuthFailures,
+
+		VolumeCreateRequests:     m.VolumeCreateRequests,
+		VolumeCreateSuccesses:    m.VolumeCreateSuccesses,
+		VolumeCreateFailures:     m.VolumeCreateFailures,
+		VolumeDeleteRequests:     m.VolumeDeleteRequests,
+		VolumeDeleteSuccesses:    m.VolumeDeleteSuccesses,
+		VolumeDeleteFailures:     m.VolumeDeleteFailures,
+		VolumeStageRequests:      m.VolumeStageRequests,
+		VolumeStageSuccesses:     m.VolumeStageSuccesses,
+		VolumeStageFailures:      m.VolumeStageFailures,
+		VolumeUnstageRequests:    m.VolumeUnstageRequests,
+		VolumeUnstageSuccesses:   m.VolumeUnstageSuccesses,
+		VolumeUnstageFailures:    m.VolumeUnstageFailures,
+		VolumePublishRequests:    m.VolumePublishRequests,
+		VolumePublishSuccesses:   m.VolumePublishSuccesses,
+		VolumePublishFailures:    m.VolumePublishFailures,
+		VolumeUnpublishRequests:  m.VolumeUnpublishRequests,
+		VolumeUnpublishSuccesses: m.VolumeUnpublishSuccesses,
+		VolumeUnpublishFailures:  m.VolumeUnpublishFailures,
+
+		NVMEConnectAttempts:  m.NVMEConnectAttempts,
+		NVMEConnectSuccesses: m.NVMEConnectSuccesses,
+		NVMEConnectFailures:  m.NVMEConnectFailures,
+		NVMEDisconnects:      m.NVMEDisconnects,
+
+		MountAttempts:    m.MountAttempts,
+		MountSuccesses:   m.MountSuccesses,
+		MountFailures:    m.MountFailures,
+		UnmountAttempts:  m.UnmountAttempts,
+		UnmountSuccesses: m.UnmountSuccesses,
+		UnmountFailures:  m.UnmountFailures,
+
+		ValidationFailures:       m.ValidationFailures,
+		InvalidParameters:        m.InvalidParameters,
+		CommandInjectionAttempts: m.CommandInjectionAttempts,
+		PathTraversalAttempts:    m.PathTraversalAttempts,
+		RateLimitExceeded:        m.RateLimitExceeded,
+		CircuitBreakerOpens:      m.CircuitBreakerOpens,
+
+		InfoEvents:     m.InfoEvents,
+		WarningEvents:  m.WarningEvents,
+		ErrorEvents:    m.ErrorEvents,
+		CriticalEvents: m.CriticalEvents,
+
+		LastSSHConnection:        m.LastSSHConnection,
+		LastVolumeOperation:      m.LastVolumeOperation,
+		LastSecurityViolation:    m.LastSecurityViolation,
+		AverageOperationDuration: m.AverageOperationDuration,
+		totalOperationTime:       m.totalOperationTime,
+		totalOperations:          m.totalOperations,
+	}
 }

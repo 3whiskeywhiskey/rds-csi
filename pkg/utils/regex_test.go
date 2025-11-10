@@ -10,43 +10,43 @@ import (
 // TestVolumeIDPattern tests the volume ID regex for correctness and ReDoS resistance
 func TestVolumeIDPattern(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
+		name        string
+		input       string
 		shouldMatch bool
 	}{
 		{
-			name:      "valid UUID format",
-			input:     "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			name:        "valid UUID format",
+			input:       "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 			shouldMatch: true,
 		},
 		{
-			name:      "invalid - missing prefix",
-			input:     "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			name:        "invalid - missing prefix",
+			input:       "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - wrong prefix",
-			input:     "vol-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			name:        "invalid - wrong prefix",
+			input:       "vol-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - uppercase UUID",
-			input:     "pvc-A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+			name:        "invalid - uppercase UUID",
+			input:       "pvc-A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - too short",
-			input:     "pvc-a1b2c3d4",
+			name:        "invalid - too short",
+			input:       "pvc-a1b2c3d4",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - too long",
-			input:     "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890-extra",
+			name:        "invalid - too long",
+			input:       "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890-extra",
 			shouldMatch: false,
 		},
 		{
-			name:      "ReDoS attempt - repeated characters",
-			input:     "pvc-" + strings.Repeat("a", 10000),
+			name:        "ReDoS attempt - repeated characters",
+			input:       "pvc-" + strings.Repeat("a", 10000),
 			shouldMatch: false,
 		},
 	}
@@ -73,33 +73,33 @@ func TestVolumeIDPattern(t *testing.T) {
 // TestSafeSlotPattern tests slot name validation for ReDoS resistance
 func TestSafeSlotPattern(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
+		name        string
+		input       string
 		shouldMatch bool
 	}{
 		{
-			name:      "valid alphanumeric",
-			input:     "pvc-123-abc",
+			name:        "valid alphanumeric",
+			input:       "pvc-123-abc",
 			shouldMatch: true,
 		},
 		{
-			name:      "valid with hyphens",
-			input:     "my-volume-name",
+			name:        "valid with hyphens",
+			input:       "my-volume-name",
 			shouldMatch: true,
 		},
 		{
-			name:      "invalid - special characters",
-			input:     "volume_name!@#",
+			name:        "invalid - special characters",
+			input:       "volume_name!@#",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - spaces",
-			input:     "volume name",
+			name:        "invalid - spaces",
+			input:       "volume name",
 			shouldMatch: false,
 		},
 		{
-			name:      "ReDoS attempt - very long input",
-			input:     strings.Repeat("a", 100000),
+			name:        "ReDoS attempt - very long input",
+			input:       strings.Repeat("a", 100000),
 			shouldMatch: true, // Valid pattern, but should complete quickly
 		},
 	}
@@ -124,38 +124,38 @@ func TestSafeSlotPattern(t *testing.T) {
 // TestNQNPattern tests NVMe NQN validation for correctness and performance
 func TestNQNPattern(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
+		name        string
+		input       string
 		shouldMatch bool
 	}{
 		{
-			name:      "valid MikroTik NQN",
-			input:     "nqn.2000-02.com.mikrotik:pvc-abc123",
+			name:        "valid MikroTik NQN",
+			input:       "nqn.2000-02.com.mikrotik:pvc-abc123",
 			shouldMatch: true,
 		},
 		{
-			name:      "valid with underscores",
-			input:     "nqn.2024-01.com.example:volume_name",
+			name:        "valid with underscores",
+			input:       "nqn.2024-01.com.example:volume_name",
 			shouldMatch: true,
 		},
 		{
-			name:      "invalid - missing date",
-			input:     "nqn.com.mikrotik:volume",
+			name:        "invalid - missing date",
+			input:       "nqn.com.mikrotik:volume",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - wrong date format",
-			input:     "nqn.2000-2.com.mikrotik:volume",
+			name:        "invalid - wrong date format",
+			input:       "nqn.2000-2.com.mikrotik:volume",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - uppercase in domain",
-			input:     "nqn.2000-02.COM.mikrotik:volume",
+			name:        "invalid - uppercase in domain",
+			input:       "nqn.2000-02.COM.mikrotik:volume",
 			shouldMatch: false,
 		},
 		{
-			name:      "ReDoS attempt - many dots",
-			input:     "nqn.2000-02." + strings.Repeat("a.", 10000) + ":volume",
+			name:        "ReDoS attempt - many dots",
+			input:       "nqn.2000-02." + strings.Repeat("a.", 10000) + ":volume",
 			shouldMatch: false,
 		},
 	}
@@ -180,28 +180,28 @@ func TestNQNPattern(t *testing.T) {
 // TestIPv4Pattern tests IPv4 address matching
 func TestIPv4Pattern(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
+		name       string
+		input      string
 		shouldFind bool
 	}{
 		{
-			name:      "valid IPv4",
-			input:     "Connection to 192.168.1.1 failed",
+			name:       "valid IPv4",
+			input:      "Connection to 192.168.1.1 failed",
 			shouldFind: true,
 		},
 		{
-			name:      "valid private IP",
-			input:     "Server at 10.0.0.1 is down",
+			name:       "valid private IP",
+			input:      "Server at 10.0.0.1 is down",
 			shouldFind: true,
 		},
 		{
-			name:      "no IPv4",
-			input:     "Connection failed",
+			name:       "no IPv4",
+			input:      "Connection failed",
 			shouldFind: false,
 		},
 		{
-			name:      "ReDoS attempt - many dots (should complete quickly)",
-			input:     strings.Repeat("1.", 10000) + "1",
+			name:       "ReDoS attempt - many dots (should complete quickly)",
+			input:      strings.Repeat("1.", 10000) + "1",
 			shouldFind: true, // Will find 1.1.1.1 which is valid
 		},
 	}
@@ -226,38 +226,38 @@ func TestIPv4Pattern(t *testing.T) {
 // TestFileSizePattern tests file size parsing
 func TestFileSizePattern(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
+		name        string
+		input       string
 		shouldMatch bool
 	}{
 		{
-			name:      "integer GB",
-			input:     "10GB",
+			name:        "integer GB",
+			input:       "10GB",
 			shouldMatch: true,
 		},
 		{
-			name:      "decimal TiB",
-			input:     "5.5TiB",
+			name:        "decimal TiB",
+			input:       "5.5TiB",
 			shouldMatch: true,
 		},
 		{
-			name:      "integer MB",
-			input:     "1024MB",
+			name:        "integer MB",
+			input:       "1024MB",
 			shouldMatch: true,
 		},
 		{
-			name:      "invalid - three decimal places",
-			input:     "5.555GB",
+			name:        "invalid - three decimal places",
+			input:       "5.555GB",
 			shouldMatch: false,
 		},
 		{
-			name:      "invalid - no unit",
-			input:     "1024",
+			name:        "invalid - no unit",
+			input:       "1024",
 			shouldMatch: false,
 		},
 		{
-			name:      "ReDoS attempt - many digits",
-			input:     strings.Repeat("9", 10000) + "GB",
+			name:        "ReDoS attempt - many digits",
+			input:       strings.Repeat("9", 10000) + "GB",
 			shouldMatch: true, // Valid but should complete quickly
 		},
 	}
@@ -282,27 +282,27 @@ func TestFileSizePattern(t *testing.T) {
 // TestKeyValuePatterns tests RouterOS command output parsing
 func TestKeyValuePatterns(t *testing.T) {
 	tests := []struct {
-		name      string
-		pattern   string
-		input     string
+		name       string
+		pattern    string
+		input      string
 		shouldFind bool
 	}{
 		{
-			name:      "quoted value",
-			pattern:   "quoted",
-			input:     `slot="pvc-123" type="file"`,
+			name:       "quoted value",
+			pattern:    "quoted",
+			input:      `slot="pvc-123" type="file"`,
 			shouldFind: true,
 		},
 		{
-			name:      "unquoted value",
-			pattern:   "unquoted",
-			input:     `size=10GB free=5GB`,
+			name:       "unquoted value",
+			pattern:    "unquoted",
+			input:      `size=10GB free=5GB`,
 			shouldFind: true,
 		},
 		{
-			name:      "ReDoS attempt - quoted with many chars",
-			pattern:   "quoted",
-			input:     `slot="` + strings.Repeat("a", 100000) + `"`,
+			name:       "ReDoS attempt - quoted with many chars",
+			pattern:    "quoted",
+			input:      `slot="` + strings.Repeat("a", 100000) + `"`,
 			shouldFind: true,
 		},
 	}
@@ -439,8 +439,8 @@ func TestSafeFindStringSubmatch(t *testing.T) {
 func BenchmarkVolumeIDPattern(b *testing.B) {
 	inputs := []string{
 		"pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890", // Valid
-		"invalid",                                   // Short invalid
-		"pvc-" + strings.Repeat("a", 1000),         // Long invalid
+		"invalid",                          // Short invalid
+		"pvc-" + strings.Repeat("a", 1000), // Long invalid
 	}
 
 	for _, input := range inputs {
@@ -473,10 +473,10 @@ func BenchmarkIPv4Pattern(b *testing.B) {
 func TestPathologicalInputs(t *testing.T) {
 	// These are intentionally designed to be worst-case for poorly written regexes
 	pathologicalInputs := []string{
-		strings.Repeat("a", 10000),                    // Long repeated character
-		strings.Repeat("a", 10000) + "X",              // Long repeated + non-match at end
-		strings.Repeat("ab", 5000),                     // Repeated pattern
-		strings.Repeat(".", 10000),                     // Many special regex chars
+		strings.Repeat("a", 10000),                            // Long repeated character
+		strings.Repeat("a", 10000) + "X",                      // Long repeated + non-match at end
+		strings.Repeat("ab", 5000),                            // Repeated pattern
+		strings.Repeat(".", 10000),                            // Many special regex chars
 		strings.Repeat("(", 1000) + strings.Repeat(")", 1000), // Nested parens
 	}
 

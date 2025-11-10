@@ -67,13 +67,13 @@ type EventType string
 
 const (
 	// Authentication events
-	EventSSHConnectionAttempt   EventType = "ssh_connection_attempt"
-	EventSSHConnectionSuccess   EventType = "ssh_connection_success"
-	EventSSHConnectionFailure   EventType = "ssh_connection_failure"
-	EventSSHHostKeyVerified     EventType = "ssh_host_key_verified"
-	EventSSHHostKeyMismatch     EventType = "ssh_host_key_mismatch"
-	EventSSHAuthSuccess         EventType = "ssh_auth_success"
-	EventSSHAuthFailure         EventType = "ssh_auth_failure"
+	EventSSHConnectionAttempt EventType = "ssh_connection_attempt"
+	EventSSHConnectionSuccess EventType = "ssh_connection_success"
+	EventSSHConnectionFailure EventType = "ssh_connection_failure"
+	EventSSHHostKeyVerified   EventType = "ssh_host_key_verified"
+	EventSSHHostKeyMismatch   EventType = "ssh_host_key_mismatch"
+	EventSSHAuthSuccess       EventType = "ssh_auth_success"
+	EventSSHAuthFailure       EventType = "ssh_auth_failure"
 
 	// Volume operation events
 	EventVolumeCreateRequest    EventType = "volume_create_request"
@@ -102,20 +102,20 @@ const (
 	EventNVMEDisconnect     EventType = "nvme_disconnect"
 
 	// Data access events
-	EventMountAttempt  EventType = "mount_attempt"
-	EventMountSuccess  EventType = "mount_success"
-	EventMountFailure  EventType = "mount_failure"
+	EventMountAttempt   EventType = "mount_attempt"
+	EventMountSuccess   EventType = "mount_success"
+	EventMountFailure   EventType = "mount_failure"
 	EventUnmountAttempt EventType = "unmount_attempt"
 	EventUnmountSuccess EventType = "unmount_success"
 	EventUnmountFailure EventType = "unmount_failure"
 
 	// Security violation events
-	EventValidationFailure      EventType = "validation_failure"
-	EventInvalidParameter       EventType = "invalid_parameter"
+	EventValidationFailure       EventType = "validation_failure"
+	EventInvalidParameter        EventType = "invalid_parameter"
 	EventCommandInjectionAttempt EventType = "command_injection_attempt"
-	EventPathTraversalAttempt   EventType = "path_traversal_attempt"
-	EventRateLimitExceeded      EventType = "rate_limit_exceeded"
-	EventCircuitBreakerOpen     EventType = "circuit_breaker_open"
+	EventPathTraversalAttempt    EventType = "path_traversal_attempt"
+	EventRateLimitExceeded       EventType = "rate_limit_exceeded"
+	EventCircuitBreakerOpen      EventType = "circuit_breaker_open"
 )
 
 // SecurityEvent represents a security-relevant event in the system
@@ -129,13 +129,13 @@ type SecurityEvent struct {
 	Message   string        `json:"message"`
 
 	// Identity fields
-	SourceIP   string `json:"source_ip,omitempty"`
-	TargetIP   string `json:"target_ip,omitempty"`
-	Username   string `json:"username,omitempty"`
-	NodeID     string `json:"node_id,omitempty"`
-	Namespace  string `json:"namespace,omitempty"`
-	PodName    string `json:"pod_name,omitempty"`
-	PVCName    string `json:"pvc_name,omitempty"`
+	SourceIP  string `json:"source_ip,omitempty"`
+	TargetIP  string `json:"target_ip,omitempty"`
+	Username  string `json:"username,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	PodName   string `json:"pod_name,omitempty"`
+	PVCName   string `json:"pvc_name,omitempty"`
 
 	// Resource fields
 	VolumeID   string `json:"volume_id,omitempty"`
