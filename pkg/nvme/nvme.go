@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 	"k8s.io/klog/v2"
 )
 
@@ -63,6 +64,18 @@ func NewConnector() Connector {
 func (c *connector) Connect(target Target) (string, error) {
 	klog.V(2).Infof("Connecting to NVMe/TCP target: %s at %s:%d",
 		target.NQN, target.TargetAddress, target.TargetPort)
+
+	// SECURITY: Validate NQN format before using in commands
+	if err := utils.ValidateNQN(target.NQN); err != nil {
+		return "", fmt.Errorf("invalid target NQN: %w", err)
+	}
+
+	// Validate host NQN if specified
+	if target.HostNQN != "" {
+		if err := utils.ValidateNQN(target.HostNQN); err != nil {
+			return "", fmt.Errorf("invalid host NQN: %w", err)
+		}
+	}
 
 	// Check if already connected
 	connected, err := c.IsConnected(target.NQN)
@@ -129,6 +142,11 @@ func (c *connector) Connect(target Target) (string, error) {
 func (c *connector) Disconnect(nqn string) error {
 	klog.V(2).Infof("Disconnecting from NVMe target: %s", nqn)
 
+	// SECURITY: Validate NQN format before using in commands
+	if err := utils.ValidateNQN(nqn); err != nil {
+		return fmt.Errorf("invalid NQN: %w", err)
+	}
+
 	// Check if connected
 	connected, err := c.IsConnected(nqn)
 	if err != nil {
@@ -154,6 +172,11 @@ func (c *connector) Disconnect(nqn string) error {
 
 // IsConnected checks if NVMe target is currently connected
 func (c *connector) IsConnected(nqn string) (bool, error) {
+	// SECURITY: Validate NQN format
+	if err := utils.ValidateNQN(nqn); err != nil {
+		return false, fmt.Errorf("invalid NQN: %w", err)
+	}
+
 	// List all NVMe subsystems
 	cmd := c.execCommand("nvme", "list-subsys", "-o", "json")
 	output, err := cmd.CombinedOutput()
