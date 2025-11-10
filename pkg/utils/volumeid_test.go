@@ -416,13 +416,13 @@ func TestValidateNQN(t *testing.T) {
 func BenchmarkValidateNQN(b *testing.B) {
 	nqn := "nqn.2000-02.com.mikrotik:pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	for i := 0; i < b.N; i++ {
-		ValidateNQN(nqn)
+		_ = ValidateNQN(nqn)
 	}
 }
 
 func BenchmarkValidateNQNMalicious(b *testing.B) {
 	nqn := "nqn.2000-02.com.mikrotik:pvc-123; rm -rf /"
 	for i := 0; i < b.N; i++ {
-		ValidateNQN(nqn)
+		_ = ValidateNQN(nqn)
 	}
 }
