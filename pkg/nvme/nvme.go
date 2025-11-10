@@ -105,16 +105,16 @@ func DefaultConfig() Config {
 
 // Metrics tracks NVMe operation statistics
 type Metrics struct {
-	mu                    sync.RWMutex
-	connectCount          int64
-	disconnectCount       int64
-	connectErrors         int64
-	disconnectErrors      int64
-	connectDurationTotal  time.Duration
+	mu                      sync.RWMutex
+	connectCount            int64
+	disconnectCount         int64
+	connectErrors           int64
+	disconnectErrors        int64
+	connectDurationTotal    time.Duration
 	disconnectDurationTotal time.Duration
-	timeoutCount          int64
-	stuckOperations       int64
-	activeOperations      int
+	timeoutCount            int64
+	stuckOperations         int64
+	activeOperations        int
 }
 
 // String returns human-readable metrics
@@ -169,6 +169,8 @@ func (c *connector) Connect(target Target) (string, error) {
 }
 
 // DEPRECATED: Old implementation kept for reference
+//
+//nolint:unused // kept for reference during migration
 func (c *connector) connectLegacy(target Target) (string, error) {
 	klog.V(2).Infof("Connecting to NVMe/TCP target: %s at %s:%d",
 		target.NQN, target.TargetAddress, target.TargetPort)
@@ -254,6 +256,8 @@ func (c *connector) Disconnect(nqn string) error {
 }
 
 // DEPRECATED: Old implementation kept for reference
+//
+//nolint:unused // kept for reference during migration
 func (c *connector) disconnectLegacy(nqn string) error {
 	klog.V(2).Infof("Disconnecting from NVMe target: %s", nqn)
 
@@ -298,6 +302,8 @@ func (c *connector) IsConnected(nqn string) (bool, error) {
 }
 
 // DEPRECATED: Old implementation kept for reference
+//
+//nolint:unused // kept for reference during migration
 func (c *connector) isConnectedLegacy(nqn string) (bool, error) {
 	// List all NVMe subsystems
 	cmd := c.execCommand("nvme", "list-subsys", "-o", "json")
@@ -395,13 +401,13 @@ func (c *connector) WaitForDevice(nqn string, timeout time.Duration) (string, er
 // NewConnectorWithConfig creates a connector with custom configuration
 func NewConnectorWithConfig(config Config) Connector {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	c := &connector{
-		execCommand:      exec.Command,
-		config:           config,
-		metrics:          &Metrics{},
-		activeOperations: make(map[string]*operationTracker),
-		healthcheckDone:  make(chan struct{}),
+		execCommand:       exec.Command,
+		config:            config,
+		metrics:           &Metrics{},
+		activeOperations:  make(map[string]*operationTracker),
+		healthcheckDone:   make(chan struct{}),
 		healthcheckCancel: cancel,
 	}
 
@@ -603,7 +609,7 @@ func (c *connector) IsConnectedWithContext(ctx context.Context, nqn string) (boo
 			return false, nil
 		}
 		if ctx.Err() != nil {
-			return false, nil  // Timeout is not fatal for this check
+			return false, nil // Timeout is not fatal for this check
 		}
 		klog.V(4).Infof("nvme list-subsys failed (may be normal): %v", err)
 		return false, nil
@@ -690,7 +696,7 @@ func (c *connector) checkStuckOperations() {
 		}
 
 		if duration > threshold {
-			klog.Warningf("Stuck NVMe operation detected: %s on NQN %s (duration: %v)", 
+			klog.Warningf("Stuck NVMe operation detected: %s on NQN %s (duration: %v)",
 				op.operation, op.nqn, duration)
 
 			c.metrics.mu.Lock()
