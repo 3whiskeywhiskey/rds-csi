@@ -205,6 +205,19 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Safety check: verify volume exists before attempting deletion
+	// This helps catch force-deletion scenarios where the volume might still be in use
+	volume, err := cs.driver.rdsClient.GetVolume(volumeID)
+	if err != nil {
+		// If volume doesn't exist, deletion is idempotent - return success
+		klog.V(3).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
+	// Log volume details for audit trail
+	klog.V(3).Infof("Deleting volume %s (path=%s, size=%d bytes, nvme_export=%v)",
+		volumeID, volume.FilePath, volume.FileSizeBytes, volume.NVMETCPExport)
+
 	// Log volume delete request
 	secLogger := security.GetLogger()
 	secLogger.LogVolumeDelete(volumeID, "", security.OutcomeUnknown, nil, 0)

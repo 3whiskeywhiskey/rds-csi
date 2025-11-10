@@ -82,6 +82,11 @@ spec:
             - "-rds-user=$(RDS_USER)"
             - "-rds-key-file=/etc/rds-csi/rds-private-key"
             - "-rds-host-key=/etc/rds-csi/rds-host-key"
+            # Orphan reconciler settings (optional - enable to detect and cleanup orphaned volumes)
+            # - "-enable-orphan-reconciler"
+            # - "-orphan-check-interval=1h"
+            # - "-orphan-grace-period=5m"
+            # - "-orphan-dry-run=false"  # Set to false to actually delete orphans
             - "-v=5"
             # SECURITY: For testing only, you can skip host key verification with:
             # - "-rds-insecure-skip-verify=true"

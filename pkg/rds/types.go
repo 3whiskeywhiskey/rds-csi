@@ -1,6 +1,9 @@
 package rds
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // VolumeInfo represents an RDS volume
 type VolumeInfo struct {
@@ -29,4 +32,13 @@ type CreateVolumeOptions struct {
 	FileSizeBytes int64  // Size in bytes
 	NVMETCPPort   int    // NVMe/TCP port (default 4420)
 	NVMETCPNQN    string // NVMe Qualified Name
+}
+
+// VolumeNotFoundError is returned when a volume is not found
+type VolumeNotFoundError struct {
+	Slot string
+}
+
+func (e *VolumeNotFoundError) Error() string {
+	return fmt.Sprintf("volume not found: %s", e.Slot)
 }

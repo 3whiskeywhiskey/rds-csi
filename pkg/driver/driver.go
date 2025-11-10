@@ -1,12 +1,15 @@
 package driver
 
 import (
+	"context"
 	"fmt"
-
-	"github.com/container-storage-interface/spec/lib/go/csi"
-	"k8s.io/klog/v2"
+	"time"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -38,6 +41,9 @@ type Driver struct {
 	// RDS client (interface allows different implementations: SSH, API, mock)
 	rdsClient rds.RDSClient
 
+	// Orphan reconciler (optional)
+	reconciler *reconciler.OrphanReconciler
+
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
 	cscaps []*csi.ControllerServiceCapability
@@ -57,6 +63,15 @@ type DriverConfig struct {
 	RDSPrivateKey         []byte
 	RDSHostKey            []byte // SSH host public key for verification
 	RDSInsecureSkipVerify bool   // Skip host key verification (INSECURE)
+
+	// Kubernetes client (required for orphan reconciler)
+	K8sClient kubernetes.Interface
+
+	// Orphan reconciler settings
+	EnableOrphanReconciler bool
+	OrphanCheckInterval    time.Duration
+	OrphanGracePeriod      time.Duration
+	OrphanDryRun           bool
 
 	// Mode flags
 	EnableController bool
@@ -114,6 +129,27 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	// Add node service capabilities
 	if config.EnableNode {
 		driver.addNodeServiceCapabilities()
+	}
+
+	// Initialize orphan reconciler if enabled and we have controller + k8s client
+	if config.EnableController && config.EnableOrphanReconciler && config.K8sClient != nil {
+		reconcilerConfig := reconciler.OrphanReconcilerConfig{
+			RDSClient:     driver.rdsClient,
+			K8sClient:     config.K8sClient,
+			CheckInterval: config.OrphanCheckInterval,
+			GracePeriod:   config.OrphanGracePeriod,
+			DryRun:        config.OrphanDryRun,
+			Enabled:       true,
+		}
+
+		orphanReconciler, err := reconciler.NewOrphanReconciler(reconcilerConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create orphan reconciler: %w", err)
+		}
+
+		driver.reconciler = orphanReconciler
+		klog.Infof("Orphan reconciler enabled (interval=%v, grace_period=%v, dry_run=%v)",
+			config.OrphanCheckInterval, config.OrphanGracePeriod, config.OrphanDryRun)
 	}
 
 	return driver, nil
@@ -183,6 +219,15 @@ func (d *Driver) Run(endpoint string) error {
 		d.ns = NewNodeServer(d, d.nodeID)
 	}
 
+	// Start orphan reconciler if configured
+	if d.reconciler != nil {
+		ctx := context.Background()
+		if err := d.reconciler.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start orphan reconciler: %w", err)
+		}
+		klog.Info("Orphan reconciler started")
+	}
+
 	// Start gRPC server
 	server := NewNonBlockingGRPCServer(endpoint)
 	if err := server.Start(d.ids, d.cs, d.ns); err != nil {
@@ -198,6 +243,12 @@ func (d *Driver) Run(endpoint string) error {
 // Stop stops the driver and cleans up resources
 func (d *Driver) Stop() {
 	klog.Info("Stopping RDS CSI driver")
+
+	// Stop orphan reconciler if running
+	if d.reconciler != nil {
+		d.reconciler.Stop()
+		klog.Info("Orphan reconciler stopped")
+	}
 
 	if d.rdsClient != nil {
 		if err := d.rdsClient.Close(); err != nil {
