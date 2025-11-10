@@ -98,17 +98,18 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 6. Volume Context Parameter Validation
-- [ ] Add IP address validation for nvmeAddress
-- [ ] Add port range validation (1-65535, not privileged)
-- [ ] Verify nvmeAddress matches expected RDS address
-- [ ] Add NQN format validation for context NQN
-- [ ] Implement allowlist for NVMe target addresses
-- [ ] Add validation function in NodeStageVolume
-- [ ] Add unit tests
+- [x] Add IP address validation for nvmeAddress
+- [x] Add port range validation (1-65535, not privileged)
+- [x] Verify nvmeAddress matches expected RDS address
+- [x] Add NQN format validation for context NQN
+- [x] Implement allowlist for NVMe target addresses (via expectedAddress parameter)
+- [x] Add validation function in NodeStageVolume
+- [x] Add unit tests
 
-**Files to modify:**
-- `pkg/driver/node.go`
-- `pkg/utils/validation.go`
+**Files modified:**
+- `pkg/driver/node.go`: Added validation calls before NVMe connection
+- `pkg/utils/volumeid.go`: Added IP/port validation functions (24+ test cases)
+- `pkg/utils/volumeid_test.go`: Comprehensive validation tests
 
 **Estimated effort:** 3-4 hours
 

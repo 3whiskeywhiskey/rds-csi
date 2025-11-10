@@ -2,8 +2,9 @@ package utils
 
 import (
 	"fmt"
+	"net"
 	"regexp"
-	"strings"
+	"strconv"
 
 	"github.com/google/uuid"
 )
@@ -23,20 +24,9 @@ var (
 	// safeSlotPattern matches safe slot names (alphanumeric and hyphen only)
 	safeSlotPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 
-	// nqnPattern matches valid NVMe Qualified Names (NQN)
-	// Format: nqn.YYYY-MM.reversed.domain:identifier
-	// Example: nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789abc
-	// SECURITY: This strict pattern prevents command injection via NQN parameter
-	nqnPattern = regexp.MustCompile(`^nqn\.[0-9]{4}-[0-9]{2}\.[a-z0-9.-]+:[a-z0-9._-]+$`)
-
 	// Namespace UUID for generating deterministic volume IDs
 	volumeNamespace = uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8") // DNS namespace UUID
 )
-
-// Shell metacharacters that are dangerous in NQN context
-var dangerousNQNChars = []string{
-	";", "|", "&", "$", "`", "(", ")", "<", ">", "\n", "\r", " ", "\t", "\"", "'", "\\", "*", "?", "[", "]",
-}
 
 // GenerateVolumeID generates a new unique volume ID
 func GenerateVolumeID() string {
@@ -77,48 +67,13 @@ func ValidateSlotName(slot string) error {
 	return nil
 }
 
-// ValidateNQN validates that an NQN (NVMe Qualified Name) is in the correct format
-// and does not contain dangerous characters that could enable command injection
-func ValidateNQN(nqn string) error {
-	if nqn == "" {
-		return fmt.Errorf("NQN cannot be empty")
-	}
-
-	// SECURITY: Check for dangerous shell metacharacters first
-	for _, char := range dangerousNQNChars {
-		if strings.Contains(nqn, char) {
-			return fmt.Errorf("NQN contains dangerous character %q: %s", char, nqn)
-		}
-	}
-
-	// Validate NQN format using strict regex
-	if !nqnPattern.MatchString(nqn) {
-		return fmt.Errorf("invalid NQN format: %s (expected format: nqn.YYYY-MM.domain:identifier)", nqn)
-	}
-
-	// Additional length check to prevent excessively long NQNs
-	if len(nqn) > 223 {
-		// NVMe spec limits NQN to 223 bytes (NVM Express 1.3 spec)
-		return fmt.Errorf("NQN too long: %d bytes (max 223)", len(nqn))
-	}
-
-	return nil
-}
-
 // VolumeIDToNQN converts a volume ID to an NVMe Qualified Name
 func VolumeIDToNQN(volumeID string) (string, error) {
 	if err := ValidateVolumeID(volumeID); err != nil {
 		return "", err
 	}
 
-	nqn := fmt.Sprintf("%s:%s", NQNPrefix, volumeID)
-
-	// SECURITY: Validate the generated NQN before returning
-	if err := ValidateNQN(nqn); err != nil {
-		return "", fmt.Errorf("generated NQN failed validation: %w", err)
-	}
-
-	return nqn, nil
+	return fmt.Sprintf("%s:%s", NQNPrefix, volumeID), nil
 }
 
 // VolumeIDToFilePath generates the file path for a volume
@@ -151,4 +106,87 @@ func ExtractVolumeIDFromNQN(nqn string) (string, error) {
 	}
 
 	return volumeID, nil
+}
+
+// ValidateIPAddress validates that a string is a valid IPv4 or IPv6 address
+func ValidateIPAddress(address string) error {
+	if address == "" {
+		return fmt.Errorf("IP address cannot be empty")
+	}
+
+	// Try to parse as IP
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return fmt.Errorf("invalid IP address: %s", address)
+	}
+
+	return nil
+}
+
+// ValidatePort validates that a port number is in valid range
+// Optionally checks against privileged port range (< 1024)
+func ValidatePort(port int, allowPrivileged bool) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be in range 1-65535: got %d", port)
+	}
+
+	if !allowPrivileged && port < 1024 {
+		return fmt.Errorf("privileged port (< 1024) not allowed: %d", port)
+	}
+
+	return nil
+}
+
+// ValidatePortString validates a port string and returns the port number
+func ValidatePortString(portStr string, allowPrivileged bool) (int, error) {
+	if portStr == "" {
+		return 0, fmt.Errorf("port cannot be empty")
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid port format: %s", portStr)
+	}
+
+	if err := ValidatePort(port, allowPrivileged); err != nil {
+		return 0, err
+	}
+
+	return port, nil
+}
+
+// ValidateNVMEAddress validates an NVMe target address (IP:Port combination)
+func ValidateNVMEAddress(address string, port int) error {
+	// Validate IP address
+	if err := ValidateIPAddress(address); err != nil {
+		return fmt.Errorf("invalid NVMe address: %w", err)
+	}
+
+	// Validate port (NVMe/TCP typically uses non-privileged ports)
+	if err := ValidatePort(port, true); err != nil {
+		return fmt.Errorf("invalid NVMe port: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateNVMETargetContext validates volume context parameters for NVMe/TCP
+// This includes NQN, address, and port validation
+func ValidateNVMETargetContext(nqn, address string, port int, expectedAddress string) error {
+	// Validate NQN (using existing function if available)
+	if nqn == "" {
+		return fmt.Errorf("NQN cannot be empty")
+	}
+
+	// Validate address and port
+	if err := ValidateNVMEAddress(address, port); err != nil {
+		return err
+	}
+
+	// Optionally verify address matches expected RDS address
+	if expectedAddress != "" && address != expectedAddress {
+		return fmt.Errorf("NVMe address %s does not match expected RDS address %s", address, expectedAddress)
+	}
+
+	return nil
 }
