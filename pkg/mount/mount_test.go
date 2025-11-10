@@ -423,3 +423,229 @@ func TestFormatUnsupportedFilesystem(t *testing.T) {
 		t.Errorf("Expected 'unsupported filesystem type' error, got: %v", err)
 	}
 }
+
+func TestValidateMountOptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		options   []string
+		expectErr bool
+	}{
+		// Valid options
+		{
+			name:      "no options",
+			options:   []string{},
+			expectErr: false,
+		},
+		{
+			name:      "safe options",
+			options:   []string{"nosuid", "nodev", "noexec"},
+			expectErr: false,
+		},
+		{
+			name:      "read-only option",
+			options:   []string{"ro"},
+			expectErr: false,
+		},
+		{
+			name:      "relatime option",
+			options:   []string{"relatime"},
+			expectErr: false,
+		},
+		{
+			name:      "bind mount options",
+			options:   []string{"bind", "ro"},
+			expectErr: false,
+		},
+		// Dangerous options
+		{
+			name:      "suid not allowed",
+			options:   []string{"suid"},
+			expectErr: true,
+		},
+		{
+			name:      "dev not allowed",
+			options:   []string{"dev"},
+			expectErr: true,
+		},
+		{
+			name:      "exec not allowed",
+			options:   []string{"exec"},
+			expectErr: true,
+		},
+		{
+			name:      "mixed with dangerous option",
+			options:   []string{"ro", "suid", "nosuid"},
+			expectErr: true,
+		},
+		// Non-whitelisted options
+		{
+			name:      "non-whitelisted option",
+			options:   []string{"custom-option"},
+			expectErr: true,
+		},
+		{
+			name:      "acl not whitelisted",
+			options:   []string{"acl"},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateMountOptions(tt.options)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("ValidateMountOptions() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+func TestSanitizeMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     []string
+		isBindMount bool
+		expectErr   bool
+		expectOpts  []string
+	}{
+		{
+			name:        "regular mount - no changes",
+			options:     []string{"ro"},
+			isBindMount: false,
+			expectErr:   false,
+			expectOpts:  []string{"ro"},
+		},
+		{
+			name:        "bind mount - add secure defaults",
+			options:     []string{"bind"},
+			isBindMount: true,
+			expectErr:   false,
+			expectOpts:  []string{"nosuid", "nodev", "noexec", "bind"},
+		},
+		{
+			name:        "bind mount - already has nosuid",
+			options:     []string{"bind", "nosuid"},
+			isBindMount: true,
+			expectErr:   false,
+			expectOpts:  []string{"nodev", "noexec", "bind", "nosuid"},
+		},
+		{
+			name:        "bind mount - dangerous option rejected",
+			options:     []string{"bind", "suid"},
+			isBindMount: true,
+			expectErr:   true,
+			expectOpts:  nil,
+		},
+		{
+			name:        "empty options on bind mount",
+			options:     []string{},
+			isBindMount: true,
+			expectErr:   false,
+			expectOpts:  []string{"nosuid", "nodev", "noexec"},
+		},
+		{
+			name:        "bind mount with ro",
+			options:     []string{"bind", "ro"},
+			isBindMount: true,
+			expectErr:   false,
+			expectOpts:  []string{"nosuid", "nodev", "noexec", "bind", "ro"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := SanitizeMountOptions(tt.options, tt.isBindMount)
+			if (err != nil) != tt.expectErr {
+				t.Errorf("SanitizeMountOptions() error = %v, expectErr %v", err, tt.expectErr)
+				return
+			}
+			if !tt.expectErr {
+				// Check that all expected options are present
+				// Order doesn't matter, so convert to map
+				resultMap := make(map[string]bool)
+				for _, opt := range result {
+					resultMap[opt] = true
+				}
+				for _, expected := range tt.expectOpts {
+					if !resultMap[expected] {
+						t.Errorf("SanitizeMountOptions() missing expected option: %s, got: %v", expected, result)
+					}
+				}
+				// Check no extra options
+				if len(result) != len(tt.expectOpts) {
+					t.Errorf("SanitizeMountOptions() got %d options, expected %d: %v", len(result), len(tt.expectOpts), result)
+				}
+			}
+		})
+	}
+}
+
+func TestMountWithValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		target    string
+		fsType    string
+		options   []string
+		expectErr bool
+		errString string
+	}{
+		{
+			name:      "mount with dangerous suid option",
+			source:    "/dev/nvme0n1",
+			target:    "/mnt/test",
+			fsType:    "ext4",
+			options:   []string{"suid"},
+			expectErr: true,
+			errString: "dangerous mount option",
+		},
+		{
+			name:      "mount with dangerous dev option",
+			source:    "/dev/nvme0n1",
+			target:    "/mnt/test",
+			fsType:    "ext4",
+			options:   []string{"dev"},
+			expectErr: true,
+			errString: "dangerous mount option",
+		},
+		{
+			name:      "mount with non-whitelisted option",
+			source:    "/dev/nvme0n1",
+			target:    "/mnt/test",
+			fsType:    "ext4",
+			options:   []string{"custom-unsafe-option"},
+			expectErr: true,
+			errString: "not in whitelist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewMounter()
+			err := m.Mount(tt.source, tt.target, tt.fsType, tt.options)
+			
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("Mount() expected error but got nil")
+				} else if !strings.Contains(err.Error(), tt.errString) {
+					t.Errorf("Mount() error = %v, expected to contain %q", err, tt.errString)
+				}
+			}
+		})
+	}
+}
+
+// Benchmark mount option validation
+func BenchmarkValidateMountOptions(b *testing.B) {
+	options := []string{"nosuid", "nodev", "noexec", "ro"}
+	for i := 0; i < b.N; i++ {
+		ValidateMountOptions(options)
+	}
+}
+
+func BenchmarkSanitizeMountOptions(b *testing.B) {
+	options := []string{"bind", "ro"}
+	for i := 0; i < b.N; i++ {
+		SanitizeMountOptions(options, true)
+	}
+}

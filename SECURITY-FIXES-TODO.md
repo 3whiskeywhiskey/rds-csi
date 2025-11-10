@@ -81,18 +81,17 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 5. Mount Options Validation
-- [ ] Create mount options whitelist
-- [ ] Implement `validateMountOptions()` function
-- [ ] Reject dangerous options: `suid`, `dev`, `exec`
-- [ ] Enforce `nosuid,nodev,noexec` by default for bind mounts
-- [ ] Add configuration for allowed mount options
-- [ ] Add unit tests
-- [ ] Log all mount operations with options
+- [x] Create mount options whitelist
+- [x] Implement `validateMountOptions()` function
+- [x] Reject dangerous options: `suid`, `dev`, `exec`
+- [x] Enforce `nosuid,nodev,noexec` by default for bind mounts
+- [x] Add configuration for allowed mount options
+- [x] Add unit tests
+- [x] Log all mount operations with options
 
-**Files to modify:**
-- `pkg/mount/mount.go`
-- `pkg/driver/node.go`
-- `pkg/mount/mount_test.go`
+**Files modified:**
+- `pkg/mount/mount.go`: Added validation and sanitization logic
+- `pkg/mount/mount_test.go`: Added comprehensive tests (17+ test cases)
 
 **Estimated effort:** 3-4 hours
 
