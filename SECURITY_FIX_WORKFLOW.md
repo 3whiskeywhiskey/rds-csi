@@ -76,15 +76,47 @@ git push github dev
 ```
 
 ### Results
-- [ ] CI/CD passed
-- [ ] Deployment successful
-- [ ] PVC lifecycle test passed
-- [ ] Integration tests passed
-- [ ] No errors in logs
-- [ ] Security validation passed
-- [ ] Existing PVCs healthy
+- [x] CI/CD passed
+- [x] Deployment successful
+- [x] PVC lifecycle test passed
+- [x] Integration tests passed
+- [x] No errors in logs
+- [x] Security validation passed
+- [x] Existing PVCs healthy
 
 **Notes:**
+
+**Deployment Details:**
+- Merged to dev: 2025-11-09 23:54 UTC
+- CI/CD build: 13f03fbe0eb554171e96c14505c323d73a376410
+- Image: ghcr.io/3whiskeywhiskey/rds-csi:dev
+- Deployed: 2025-11-09 23:59 UTC
+
+**Key Changes:**
+- Added SSH host key verification to prevent MITM attacks
+- RDS host key: `ssh-rsa AAAAB3Nza...` (SHA256:8ax7brQftlTiwCDHHVPj/vU2rWguXKvsTn7mLyW1NqA)
+- Updated Secret `rds-csi-secret` with actual RDS host public key
+- Controller successfully validates host key on connection
+
+**Test Results:**
+1. **Deployment Health:** ✅ Controller 1/1 ready, Node 5/5 ready
+2. **PVC Lifecycle:** ✅ Created test-security-fix-1, bound, pod ran successfully, data written/read
+3. **Integration Tests:** ✅ All 9 test cases passed (CreateVolume, DeleteVolume, GetCapacity, etc.)
+4. **Log Inspection:** ✅ 0 error messages in controller/node logs
+5. **Security Validation:** ✅ SSH host key verified: SHA256:8ax7brQftlTiwCDHHVPj/vU2rWguXKvsTn7mLyW1NqA
+
+**Existing PVCs Status:**
+All 11 existing PVCs remained healthy and bound:
+- cloud-portal-dev: 3 PVCs (PostgreSQL + 2 VMs) - All Running
+- nested-k3s: 8 PVCs (3 masters + 5 workers) - All Running
+
+**Issues Resolved:**
+1. Initial deployment had wrong image (`:latest` instead of `:dev`)
+2. Secret contained placeholder host key instead of actual RDS key
+3. Fixed by: Updating image to `:dev` and patching Secret with real host key
+4. Test script had wrong StorageClass name (`rds-csi` → `rds-nvme`)
+
+**Time to Complete:** ~2 hours (including troubleshooting and testing)
 
 ---
 

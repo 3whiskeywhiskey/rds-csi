@@ -21,7 +21,7 @@ set -euo pipefail
 # Configuration
 NAMESPACE="kube-system"
 TEST_NAMESPACE="default"
-STORAGE_CLASS="rds-csi"
+STORAGE_CLASS="rds-nvme"
 TEST_PVC_PREFIX="test-security-fix"
 TEST_POD_PREFIX="test-pod-security-fix"
 CONTROLLER_DEPLOY="rds-csi-controller"
