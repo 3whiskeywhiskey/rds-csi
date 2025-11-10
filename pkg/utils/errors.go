@@ -160,7 +160,7 @@ var (
 
 	// Match absolute file paths (Unix and Windows)
 	// Unix: starts with / and contains at least one more path component
-	unixPathPattern    = regexp.MustCompile(`/[a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_.\-]+)*`)
+	unixPathPattern = regexp.MustCompile(`/[a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_.\-]+)*`)
 	// Windows: starts with drive letter (C:\ etc) followed by path components
 	// Matches: C:\Users\Admin\file.txt
 	windowsPathPattern = regexp.MustCompile(`[A-Z]:\\[\w\\\-\.]+`)
@@ -206,6 +206,15 @@ func SanitizeErrorMessage(msg string) string {
 
 // sanitizePaths removes file paths while preserving useful information
 func sanitizePaths(msg string) string {
+	// First, preserve relative paths by temporarily replacing them
+	relativePaths := make(map[string]string)
+	relativePathPattern := regexp.MustCompile(`\./[a-zA-Z0-9_.\-]+`)
+	msg = relativePathPattern.ReplaceAllStringFunc(msg, func(path string) string {
+		placeholder := fmt.Sprintf("__RELATIVE_PATH_%d__", len(relativePaths))
+		relativePaths[placeholder] = path
+		return placeholder
+	})
+
 	// Unix paths
 	msg = unixPathPattern.ReplaceAllStringFunc(msg, func(path string) string {
 		// Keep basename for context, but hide directory structure
@@ -229,6 +238,11 @@ func sanitizePaths(msg string) string {
 		}
 		return "[PATH]"
 	})
+
+	// Restore relative paths
+	for placeholder, originalPath := range relativePaths {
+		msg = strings.ReplaceAll(msg, placeholder, originalPath)
+	}
 
 	// Windows paths
 	msg = windowsPathPattern.ReplaceAllStringFunc(msg, func(path string) string {

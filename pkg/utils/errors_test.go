@@ -9,9 +9,9 @@ import (
 
 func TestSanitizeErrorMessage(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		shouldMatch []string   // Substrings that should be in output
+		name          string
+		input         string
+		shouldMatch   []string // Substrings that should be in output
 		shouldntMatch []string // Substrings that should NOT be in output
 	}{
 		{
@@ -200,9 +200,9 @@ func TestSanitizedErrorWithContext(t *testing.T) {
 
 func TestSanitizeError(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         error
-		shouldContain string
+		name            string
+		input           error
+		shouldContain   string
 		shouldntContain string
 	}{
 		{
@@ -335,9 +335,9 @@ func TestErrorTypeChecks(t *testing.T) {
 
 func TestGetSanitizedMessage(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         error
-		shouldContain string
+		name            string
+		input           error
+		shouldContain   string
 		shouldntContain string
 	}{
 		{
@@ -346,15 +346,15 @@ func TestGetSanitizedMessage(t *testing.T) {
 			shouldContain: "",
 		},
 		{
-			name:          "Sanitized error",
-			input:         NewUserError(errors.New("test at 10.0.0.1"), "op"),
-			shouldContain: "[IP-ADDRESS]",
+			name:            "Sanitized error",
+			input:           NewUserError(errors.New("test at 10.0.0.1"), "op"),
+			shouldContain:   "[IP-ADDRESS]",
 			shouldntContain: "10.0.0.1",
 		},
 		{
-			name:          "Regular error with IP",
-			input:         errors.New("connection to 192.168.1.1 failed"),
-			shouldContain: "[IP-ADDRESS]",
+			name:            "Regular error with IP",
+			input:           errors.New("connection to 192.168.1.1 failed"),
+			shouldContain:   "[IP-ADDRESS]",
 			shouldntContain: "192.168.1.1",
 		},
 	}
@@ -383,9 +383,9 @@ func TestGetSanitizedMessage(t *testing.T) {
 
 func TestSanitizePathsComplexCases(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		want   string
+		name  string
+		input string
+		want  string
 	}{
 		{
 			name:  "Multiple paths in message",
@@ -399,8 +399,8 @@ func TestSanitizePathsComplexCases(t *testing.T) {
 		},
 		{
 			name:  "Relative path preserved",
-			input:  "Cannot find ./config.yaml in current directory",
-			want:   "Cannot find ./config.yaml in current directory",
+			input: "Cannot find ./config.yaml in current directory",
+			want:  "Cannot find ./config.yaml in current directory",
 		},
 	}
 
