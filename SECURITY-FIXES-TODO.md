@@ -281,18 +281,75 @@ This document tracks the security issues identified in the comprehensive securit
 ---
 
 ### 11. Enhanced Security Logging
-- [ ] Implement structured logging for security events
-- [ ] Log all authentication attempts
-- [ ] Log all volume operations with identity
-- [ ] Add security event classification
-- [ ] Implement metrics for security events
-- [ ] Add log aggregation documentation
+- [x] Implement structured logging for security events
+- [x] Log all authentication attempts
+- [x] Log all volume operations with identity
+- [x] Add security event classification
+- [x] Implement metrics for security events
+- [x] Add log aggregation documentation
 
-**Files to modify:**
-- Multiple files throughout codebase
-- Add centralized security logger
+**Files modified:**
+- `pkg/security/events.go` (new file - event type definitions and classifications)
+- `pkg/security/metrics.go` (new file - comprehensive security metrics tracking)
+- `pkg/security/logger.go` (new file - centralized security logger with structured logging)
+- `pkg/security/logger_test.go` (new file - comprehensive tests)
+- `pkg/security/metrics_test.go` (new file - comprehensive tests)
+- `pkg/rds/ssh_client.go` (added authentication logging)
+- `pkg/driver/controller.go` (added volume operation logging)
+- `pkg/driver/node.go` (added node operation logging)
+- `docs/log-aggregation.md` (new file - comprehensive log aggregation guide)
 
-**Estimated effort:** 6-8 hours
+**Implementation details:**
+- Created comprehensive security event classification system:
+  - 7 event categories: authentication, authorization, volume operations, network access, data access, config changes, security violations
+  - 4 severity levels: info, warning, error, critical
+  - 4 outcome types: success, failure, denied, unknown
+  - 40+ specific event types covering all security-relevant operations
+- Structured logging with consistent fields:
+  - Core fields: timestamp, event type, category, severity, outcome, message
+  - Identity fields: username, source IP, target IP, node ID, namespace, pod name, PVC name
+  - Resource fields: volume ID, volume name, NQN, device path, mount path
+  - Operation fields: operation name, duration, error details
+  - Custom details map for extensibility
+- Comprehensive security metrics:
+  - SSH metrics: connection attempts/successes/failures, host key mismatches, auth failures
+  - Volume operation metrics: create/delete/stage/unstage/publish/unpublish (requests/successes/failures)
+  - Network access metrics: NVMe connect/disconnect operations
+  - Data access metrics: mount/unmount operations
+  - Security violation metrics: validation failures, injection attempts, rate limit exceeded, circuit breaker opens
+  - Severity counters: info, warning, error, critical event counts
+  - Timing metrics: average operation duration, last event timestamps
+  - Thread-safe implementation with mutex locking
+- Integration with existing klog logging:
+  - Automatic severity-based klog verbosity selection
+  - Critical events logged as both structured text and JSON
+  - Compatible with Kubernetes logging standards
+- Complete authentication attempt logging:
+  - SSH connection attempts, successes, and failures
+  - Host key verification events (including MITM detection)
+  - All events include username and target address
+- Volume operation logging with full identity tracking:
+  - All CSI controller operations (CreateVolume, DeleteVolume)
+  - All CSI node operations (NodeStageVolume, NodeUnstageVolume, NodePublishVolume, NodeUnpublishVolume)
+  - Each operation logged at request, success, and failure points
+  - Duration tracking for all operations
+  - Node ID tracking for node operations
+  - Volume ID and name tracking
+  - Error details for failures
+- Comprehensive documentation:
+  - Integration guides for Loki, ELK, Splunk, Datadog
+  - Sample queries and dashboards for each platform
+  - Security monitoring best practices
+  - Alerting rules and thresholds
+  - Compliance considerations (GDPR, HIPAA, PCI-DSS, SOC 2)
+- Test coverage:
+  - 20+ test cases for logger functionality
+  - 15+ test cases for metrics
+  - Tests for event creation, chaining, formatting
+  - Concurrency tests for metrics
+  - Coverage for all helper methods and event types
+
+**Estimated effort:** 6-8 hours (completed)
 
 ---
 
