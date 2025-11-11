@@ -4,7 +4,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: rds-csi-node
-  namespace: kube-system
+  namespace: rds-csi
   labels:
     app: rds-csi-node
 spec:
@@ -41,7 +41,7 @@ spec:
       containers:
         # RDS CSI Driver Node
         - name: rds-csi-driver
-          image: ghcr.io/3whiskeywhiskey/rds-csi-driver:latest
+          image: ghcr.io/3whiskeywhiskey/rds-csi:dev
           imagePullPolicy: Always
           args:
             - "-endpoint=$(CSI_ENDPOINT)"
@@ -56,22 +56,16 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           securityContext:
-            # SECURITY: Use specific capabilities instead of privileged mode
-            privileged: false
-            capabilities:
-              add:
-                - SYS_ADMIN      # Required for mount/umount syscalls
-                - CAP_NET_ADMIN  # Required for NVMe/TCP network operations
-              drop:
-                - ALL            # Drop all other capabilities
-            allowPrivilegeEscalation: false
+            # SECURITY NOTE: CSI node plugins require privileged mode
+            # Reason: Bidirectional mount propagation is a hard Kubernetes requirement
+            # for CSI drivers (mounts inside container must be visible to kubelet/host)
+            # We minimize impact by:
+            # - Keeping readOnlyRootFilesystem: true
+            # - Running in dedicated namespace with Pod Security Standard
+            # - Using specific writable volume mounts only where needed
+            privileged: true
             readOnlyRootFilesystem: true
-            # Note: runAsNonRoot requires careful UID/GID configuration
-            # CSI node plugins typically need root for mount operations
-            runAsUser: 0  # Required for mount operations
-            seLinuxOptions:
-              # SELinux type for container processes
-              type: spc_t
+            runAsUser: 0  # Required for mount/NVMe operations
           volumeMounts:
             # CSI socket directory
             - name: plugin-dir

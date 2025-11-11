@@ -4,14 +4,14 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: rds-csi-controller
-  namespace: kube-system
+  namespace: rds-csi
 
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: rds-csi-node
-  namespace: kube-system
+  namespace: rds-csi
 
 ---
 # ClusterRole for Controller - full permissions for volume management
@@ -110,7 +110,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: rds-csi-controller
-    namespace: kube-system
+    namespace: rds-csi
 
 ---
 # ClusterRoleBinding for Node
@@ -125,4 +125,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: rds-csi-node
-    namespace: kube-system
+    namespace: rds-csi
