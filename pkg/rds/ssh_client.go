@@ -9,6 +9,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
 )
 
 // sshClient implements RDSClient using SSH protocol to connect to RouterOS
@@ -17,6 +19,7 @@ type sshClient struct {
 	port               int
 	user               string
 	privateKey         []byte
+	hostKey            []byte // Expected SSH host public key
 	timeout            time.Duration
 	sshClient          *ssh.Client
 	hostKeyCallback    ssh.HostKeyCallback
@@ -50,6 +53,13 @@ func newSSHClient(config ClientConfig) (*sshClient, error) {
 		} else {
 			return nil, fmt.Errorf("HostKeyCallback must be of type ssh.HostKeyCallback")
 		}
+	} else if len(config.HostKey) > 0 {
+		// Create host key callback from provided public key
+		expectedKey, err := parseHostKey(config.HostKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse host key: %w", err)
+		}
+		hostKeyCallback = createHostKeyCallback(expectedKey, config.Address)
 	}
 
 	return &sshClient{
@@ -57,6 +67,7 @@ func newSSHClient(config ClientConfig) (*sshClient, error) {
 		port:               config.Port,
 		user:               config.User,
 		privateKey:         config.PrivateKey,
+		hostKey:            config.HostKey,
 		timeout:            config.Timeout,
 		hostKeyCallback:    hostKeyCallback,
 		insecureSkipVerify: config.InsecureSkipVerify,
@@ -72,19 +83,21 @@ func (c *sshClient) GetAddress() string {
 func (c *sshClient) Connect() error {
 	klog.V(4).Infof("Connecting to RDS at %s:%d as user %s", c.address, c.port, c.user)
 
+	// Log authentication attempt
+	secLogger := security.GetLogger()
+	secLogger.LogSSHConnectionAttempt(c.user, c.address)
+
 	// Configure SSH client with host key callback
 	var hostKeyCallback ssh.HostKeyCallback
 	if c.hostKeyCallback != nil {
 		hostKeyCallback = c.hostKeyCallback
-		klog.V(4).Info("Using custom host key verification")
+		klog.V(4).Info("Using host key verification")
 	} else if c.insecureSkipVerify {
 		hostKeyCallback = ssh.InsecureIgnoreHostKey()
-		klog.Warning("INSECURE: Skipping SSH host key verification - not recommended for production")
+		klog.Warning("SECURITY WARNING: Skipping SSH host key verification - INSECURE and not recommended for production!")
 	} else {
-		// Default: use InsecureIgnoreHostKey for backward compatibility
-		// In production, users should provide their own HostKeyCallback
-		hostKeyCallback = ssh.InsecureIgnoreHostKey()
-		klog.V(4).Info("Using InsecureIgnoreHostKey (default) - configure HostKeyCallback for production security")
+		// No host key verification configured - this is a security error
+		return fmt.Errorf("SSH host key verification not configured: must provide HostKey or enable InsecureSkipVerify (not recommended)")
 	}
 
 	sshConfig := &ssh.ClientConfig{
@@ -94,7 +107,7 @@ func (c *sshClient) Connect() error {
 	}
 
 	// Add authentication if private key is provided
-	if c.privateKey != nil && len(c.privateKey) > 0 {
+	if len(c.privateKey) > 0 {
 		// Parse private key
 		signer, err := ssh.ParsePrivateKey(c.privateKey)
 		if err != nil {
@@ -112,11 +125,16 @@ func (c *sshClient) Connect() error {
 	addr := fmt.Sprintf("%s:%d", c.address, c.port)
 	client, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
+		// Log authentication failure
+		secLogger.LogSSHConnectionFailure(c.user, c.address, err)
 		return fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
 
 	c.sshClient = client
 	klog.V(4).Infof("Successfully connected to RDS at %s:%d", c.address, c.port)
+
+	// Log successful authentication
+	secLogger.LogSSHConnectionSuccess(c.user, c.address)
 	return nil
 }
 
@@ -141,7 +159,7 @@ func (c *sshClient) IsConnected() bool {
 	if err != nil {
 		return false
 	}
-	session.Close()
+	_ = session.Close()
 	return true
 }
 
@@ -158,7 +176,7 @@ func (c *sshClient) runCommand(command string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Capture stdout and stderr
 	var stdout, stderr bytes.Buffer
@@ -267,4 +285,57 @@ func indexString(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// parseHostKey parses an SSH public key from various formats
+// Supports: OpenSSH authorized_keys format, SSH known_hosts format, raw public key
+func parseHostKey(keyData []byte) (ssh.PublicKey, error) {
+	// Try parsing as OpenSSH public key (ssh-rsa AAAA..., ssh-ed25519 AAAA..., etc.)
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey(keyData)
+	if err == nil {
+		return pubKey, nil
+	}
+
+	// Try parsing as raw public key
+	pubKey, err = ssh.ParsePublicKey(keyData)
+	if err == nil {
+		return pubKey, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse host key in any supported format")
+}
+
+// createHostKeyCallback creates an SSH host key callback that verifies against expected key
+func createHostKeyCallback(expectedKey ssh.PublicKey, hostname string) ssh.HostKeyCallback {
+	return func(h string, remote net.Addr, key ssh.PublicKey) error {
+		// Compare the key type first
+		if key.Type() != expectedKey.Type() {
+			return fmt.Errorf("SSH host key type mismatch for %s: expected %s, got %s", hostname, expectedKey.Type(), key.Type())
+		}
+
+		// Compare the key fingerprints
+		expectedFingerprint := ssh.FingerprintSHA256(expectedKey)
+		actualFingerprint := ssh.FingerprintSHA256(key)
+
+		if expectedFingerprint != actualFingerprint {
+			klog.Errorf("SSH HOST KEY VERIFICATION FAILED for %s!", hostname)
+			klog.Errorf("Expected fingerprint: %s", expectedFingerprint)
+			klog.Errorf("Actual fingerprint:   %s", actualFingerprint)
+			klog.Errorf("This could indicate a man-in-the-middle attack or host key change!")
+
+			// Log critical security event
+			secLogger := security.GetLogger()
+			secLogger.LogSSHHostKeyMismatch(hostname, expectedFingerprint, actualFingerprint)
+
+			return fmt.Errorf("SSH host key verification failed for %s: fingerprint mismatch (expected %s, got %s)",
+				hostname, expectedFingerprint, actualFingerprint)
+		}
+
+		klog.V(4).Infof("SSH host key verified for %s: %s", hostname, actualFingerprint)
+
+		// Log successful host key verification
+		secLogger := security.GetLogger()
+		secLogger.LogSSHHostKeyVerified(hostname, actualFingerprint)
+		return nil
+	}
 }

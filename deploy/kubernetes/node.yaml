@@ -25,6 +25,11 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       priorityClassName: system-node-critical
 
+      # SECURITY: Add seccomp profile for syscall filtering
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+
       # Only run on nodes with NVMe/TCP support
       nodeSelector:
         kubernetes.io/os: linux
@@ -51,10 +56,22 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           securityContext:
-            privileged: true  # Required for mount operations and NVMe access
+            # SECURITY: Use specific capabilities instead of privileged mode
+            privileged: false
             capabilities:
-              add: ["SYS_ADMIN"]  # Required for mount syscalls
-            allowPrivilegeEscalation: true
+              add:
+                - SYS_ADMIN      # Required for mount/umount syscalls
+                - CAP_NET_ADMIN  # Required for NVMe/TCP network operations
+              drop:
+                - ALL            # Drop all other capabilities
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            # Note: runAsNonRoot requires careful UID/GID configuration
+            # CSI node plugins typically need root for mount operations
+            runAsUser: 0  # Required for mount operations
+            seLinuxOptions:
+              # SELinux type for container processes
+              type: spc_t
           volumeMounts:
             # CSI socket directory
             - name: plugin-dir
@@ -73,6 +90,12 @@ spec:
             - name: sys-dir
               mountPath: /sys
               mountPropagation: HostToContainer
+
+            # SECURITY: Writable volumes for readOnlyRootFilesystem
+            - name: tmp
+              mountPath: /tmp
+            - name: var-run
+              mountPath: /var/run
 
           resources:
             requests:
@@ -161,3 +184,9 @@ spec:
           hostPath:
             path: /sys
             type: Directory
+
+        # SECURITY: Writable volumes for readOnlyRootFilesystem
+        - name: tmp
+          emptyDir: {}
+        - name: var-run
+          emptyDir: {}

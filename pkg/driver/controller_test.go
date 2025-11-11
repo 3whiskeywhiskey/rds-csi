@@ -329,11 +329,11 @@ func TestUnimplementedMethods(t *testing.T) {
 
 func TestParseEndpoint(t *testing.T) {
 	tests := []struct {
-		name         string
-		endpoint     string
-		expectProto  string
-		expectAddr   string
-		expectErr    bool
+		name        string
+		endpoint    string
+		expectProto string
+		expectAddr  string
+		expectErr   bool
 	}{
 		{
 			name:        "unix socket with scheme",

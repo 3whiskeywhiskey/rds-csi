@@ -98,7 +98,7 @@ func (s *NonBlockingGRPCServer) Stop() {
 		s.server.GracefulStop()
 	}
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 }
 

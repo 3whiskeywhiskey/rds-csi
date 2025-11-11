@@ -15,9 +15,11 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 - **NVMe/TCP Protocol**: Low-latency, high-throughput block storage access
 - **File-backed Volumes**: Efficient storage allocation using file-backed disk images on Btrfs RAID
 - **SSH-based Management**: Secure remote administration using RouterOS CLI
-- **Volume Expansion**: Resize volumes dynamically (post-v1.0)
-- **Snapshots**: Btrfs-based volume snapshots (post-v1.0)
-- **Volume Cloning**: Fast volume duplication for rapid VM provisioning (post-v1.0)
+- **Orphan Volume Reconciliation**: Automatic detection and cleanup of orphaned volumes (optional) ✨ **New**
+- **Enhanced Error Handling**: Comprehensive retry logic, idempotent operations, and audit logging
+- **Volume Expansion**: Resize volumes dynamically (planned)
+- **Snapshots**: Btrfs-based volume snapshots (planned)
+- **Volume Cloning**: Fast volume duplication for rapid VM provisioning (planned)
 
 ### Architecture
 

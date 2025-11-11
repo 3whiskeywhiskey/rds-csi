@@ -1,14 +1,18 @@
 package nvme
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 // Connector handles NVMe/TCP connections
@@ -16,17 +20,32 @@ type Connector interface {
 	// Connect establishes connection to NVMe/TCP target
 	Connect(target Target) (string, error)
 
+	// ConnectWithContext establishes connection with context for timeout/cancellation
+	ConnectWithContext(ctx context.Context, target Target) (string, error)
+
 	// Disconnect terminates connection to NVMe/TCP target
 	Disconnect(nqn string) error
 
+	// DisconnectWithContext terminates connection with context
+	DisconnectWithContext(ctx context.Context, nqn string) error
+
 	// IsConnected checks if NVMe target is connected
 	IsConnected(nqn string) (bool, error)
+
+	// IsConnectedWithContext checks connection status with context
+	IsConnectedWithContext(ctx context.Context, nqn string) (bool, error)
 
 	// GetDevicePath returns block device path for connected target
 	GetDevicePath(nqn string) (string, error)
 
 	// WaitForDevice waits for device to appear after connection
 	WaitForDevice(nqn string, timeout time.Duration) (string, error)
+
+	// GetMetrics returns operation metrics
+	GetMetrics() *Metrics
+
+	// GetConfig returns current configuration
+	GetConfig() Config
 }
 
 // Target represents an NVMe/TCP connection target
@@ -47,22 +66,126 @@ type Target struct {
 	HostNQN string
 }
 
-// connector implements Connector interface using nvme-cli
-type connector struct {
-	execCommand func(name string, args ...string) *exec.Cmd
+// Config holds configuration for NVMe operations
+type Config struct {
+	// ConnectTimeout is the timeout for nvme connect operations
+	ConnectTimeout time.Duration
+
+	// DisconnectTimeout is the timeout for nvme disconnect operations
+	DisconnectTimeout time.Duration
+
+	// ListTimeout is the timeout for nvme list operations
+	ListTimeout time.Duration
+
+	// DeviceWaitTimeout is the timeout for waiting for device to appear
+	DeviceWaitTimeout time.Duration
+
+	// CommandTimeout is the default timeout for nvme-cli commands
+	CommandTimeout time.Duration
+
+	// EnableHealthcheck enables monitoring for stuck operations
+	EnableHealthcheck bool
+
+	// HealthcheckInterval is how often to check for stuck operations
+	HealthcheckInterval time.Duration
 }
 
-// NewConnector creates a new NVMe connector
-func NewConnector() Connector {
-	return &connector{
-		execCommand: exec.Command,
+// DefaultConfig returns default configuration
+func DefaultConfig() Config {
+	return Config{
+		ConnectTimeout:      30 * time.Second,
+		DisconnectTimeout:   15 * time.Second,
+		ListTimeout:         10 * time.Second,
+		DeviceWaitTimeout:   30 * time.Second,
+		CommandTimeout:      20 * time.Second,
+		EnableHealthcheck:   true,
+		HealthcheckInterval: 5 * time.Second,
 	}
+}
+
+// Metrics tracks NVMe operation statistics
+type Metrics struct {
+	mu                      sync.RWMutex
+	connectCount            int64
+	disconnectCount         int64
+	connectErrors           int64
+	disconnectErrors        int64
+	connectDurationTotal    time.Duration
+	disconnectDurationTotal time.Duration
+	timeoutCount            int64
+	stuckOperations         int64
+	activeOperations        int
+}
+
+// String returns human-readable metrics
+func (m *Metrics) String() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	avgConnect := time.Duration(0)
+	if m.connectCount > 0 {
+		avgConnect = m.connectDurationTotal / time.Duration(m.connectCount)
+	}
+
+	avgDisconnect := time.Duration(0)
+	if m.disconnectCount > 0 {
+		avgDisconnect = m.disconnectDurationTotal / time.Duration(m.disconnectCount)
+	}
+
+	return fmt.Sprintf("Connects(total=%d, errors=%d, avg=%v) Disconnects(total=%d, errors=%d, avg=%v) Timeouts=%d Stuck=%d Active=%d",
+		m.connectCount, m.connectErrors, avgConnect,
+		m.disconnectCount, m.disconnectErrors, avgDisconnect,
+		m.timeoutCount, m.stuckOperations, m.activeOperations)
+}
+
+// operationTracker tracks active operations for healthcheck
+type operationTracker struct {
+	nqn       string
+	operation string
+	startTime time.Time
+}
+
+// connector implements Connector interface using nvme-cli
+type connector struct {
+	execCommand       func(name string, args ...string) *exec.Cmd
+	config            Config
+	metrics           *Metrics
+	activeOperations  map[string]*operationTracker
+	activeOpsMu       sync.Mutex
+	healthcheckDone   chan struct{}
+	healthcheckCancel context.CancelFunc
+}
+
+// NewConnector creates a new NVMe connector with default configuration
+func NewConnector() Connector {
+	return NewConnectorWithConfig(DefaultConfig())
 }
 
 // Connect establishes NVMe/TCP connection and returns device path
 func (c *connector) Connect(target Target) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
+	defer cancel()
+	return c.ConnectWithContext(ctx, target)
+}
+
+// DEPRECATED: Old implementation kept for reference
+//
+//nolint:unused // kept for reference during migration
+func (c *connector) connectLegacy(target Target) (string, error) {
 	klog.V(2).Infof("Connecting to NVMe/TCP target: %s at %s:%d",
 		target.NQN, target.TargetAddress, target.TargetPort)
+
+	// SECURITY: Validate NQN format before using in commands
+	if err := utils.ValidateNQN(target.NQN); err != nil {
+		return "", fmt.Errorf("invalid target NQN: %w", err)
+	}
+
+	// Validate host NQN if specified
+	if target.HostNQN != "" {
+		if err := utils.ValidateNQN(target.HostNQN); err != nil {
+			return "", fmt.Errorf("invalid host NQN: %w", err)
+		}
+	}
 
 	// Check if already connected
 	connected, err := c.IsConnected(target.NQN)
@@ -127,7 +250,21 @@ func (c *connector) Connect(target Target) (string, error) {
 
 // Disconnect terminates NVMe/TCP connection
 func (c *connector) Disconnect(nqn string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.DisconnectTimeout)
+	defer cancel()
+	return c.DisconnectWithContext(ctx, nqn)
+}
+
+// DEPRECATED: Old implementation kept for reference
+//
+//nolint:unused // kept for reference during migration
+func (c *connector) disconnectLegacy(nqn string) error {
 	klog.V(2).Infof("Disconnecting from NVMe target: %s", nqn)
+
+	// SECURITY: Validate NQN format before using in commands
+	if err := utils.ValidateNQN(nqn); err != nil {
+		return fmt.Errorf("invalid NQN: %w", err)
+	}
 
 	// Check if connected
 	connected, err := c.IsConnected(nqn)
@@ -154,6 +291,20 @@ func (c *connector) Disconnect(nqn string) error {
 
 // IsConnected checks if NVMe target is currently connected
 func (c *connector) IsConnected(nqn string) (bool, error) {
+	// SECURITY: Validate NQN format
+	if err := utils.ValidateNQN(nqn); err != nil {
+		return false, fmt.Errorf("invalid NQN: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.config.ListTimeout)
+	defer cancel()
+	return c.IsConnectedWithContext(ctx, nqn)
+}
+
+// DEPRECATED: Old implementation kept for reference
+//
+//nolint:unused // kept for reference during migration
+func (c *connector) isConnectedLegacy(nqn string) (bool, error) {
 	// List all NVMe subsystems
 	cmd := c.execCommand("nvme", "list-subsys", "-o", "json")
 	output, err := cmd.CombinedOutput()
@@ -243,6 +394,343 @@ func (c *connector) WaitForDevice(nqn string, timeout time.Duration) (string, er
 
 		case <-time.After(timeout):
 			return "", fmt.Errorf("timeout waiting for device with NQN %s", nqn)
+		}
+	}
+}
+
+// NewConnectorWithConfig creates a connector with custom configuration
+func NewConnectorWithConfig(config Config) Connector {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	c := &connector{
+		execCommand:       exec.Command,
+		config:            config,
+		metrics:           &Metrics{},
+		activeOperations:  make(map[string]*operationTracker),
+		healthcheckDone:   make(chan struct{}),
+		healthcheckCancel: cancel,
+	}
+
+	// Start healthcheck if enabled
+	if config.EnableHealthcheck {
+		go c.runHealthcheck(ctx)
+	}
+
+	return c
+}
+
+// ConnectWithContext establishes NVMe/TCP connection with context
+func (c *connector) ConnectWithContext(ctx context.Context, target Target) (string, error) {
+	// SECURITY: Validate NQN format before using in commands
+	if err := utils.ValidateNQN(target.NQN); err != nil {
+		return "", fmt.Errorf("invalid target NQN: %w", err)
+	}
+
+	// Validate host NQN if specified
+	if target.HostNQN != "" {
+		if err := utils.ValidateNQN(target.HostNQN); err != nil {
+			return "", fmt.Errorf("invalid host NQN: %w", err)
+		}
+	}
+
+	// Apply timeout from config if no deadline set
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.config.ConnectTimeout)
+		defer cancel()
+	}
+
+	// Track operation
+	opID := c.trackOperation(target.NQN, "connect")
+	defer c.untrackOperation(opID)
+
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		c.metrics.mu.Lock()
+		c.metrics.connectCount++
+		c.metrics.connectDurationTotal += duration
+		c.metrics.mu.Unlock()
+	}()
+
+	// Check if already connected
+	connected, err := c.IsConnectedWithContext(ctx, target.NQN)
+	if err != nil {
+		return "", fmt.Errorf("failed to check connection status: %w", err)
+	}
+
+	if connected {
+		klog.V(2).Infof("Already connected to NQN: %s", target.NQN)
+		return c.GetDevicePath(target.NQN)
+	}
+
+	// Build nvme connect command
+	args := []string{
+		"connect",
+		"-t", target.Transport,
+		"-a", target.TargetAddress,
+		"-s", fmt.Sprintf("%d", target.TargetPort),
+		"-n", target.NQN,
+	}
+
+	if target.HostNQN != "" {
+		args = append(args, "-q", target.HostNQN)
+	}
+
+	// Execute with context
+	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
+	var cmd *exec.Cmd
+	if c.execCommand != nil {
+		// For testing: use the mock execCommand (no context support)
+		cmd = c.execCommand("nvme", args...)
+	} else {
+		cmd = exec.CommandContext(ctx, "nvme", args...)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		c.metrics.mu.Lock()
+		c.metrics.connectErrors++
+		c.metrics.mu.Unlock()
+
+		if ctx.Err() != nil {
+			c.metrics.mu.Lock()
+			c.metrics.timeoutCount++
+			c.metrics.mu.Unlock()
+			return "", fmt.Errorf("nvme connect timed out: %w", ctx.Err())
+		}
+		return "", fmt.Errorf("nvme connect failed: %w, output: %s", err, string(output))
+	}
+
+	// Wait for device with context
+	devicePath, err := c.waitForDeviceWithContext(ctx, target.NQN)
+	if err != nil {
+		_ = c.DisconnectWithContext(context.Background(), target.NQN)
+		c.metrics.mu.Lock()
+		c.metrics.connectErrors++
+		c.metrics.mu.Unlock()
+		return "", fmt.Errorf("device did not appear: %w", err)
+	}
+
+	klog.V(2).Infof("Successfully connected to NVMe target, device: %s", devicePath)
+	return devicePath, nil
+}
+
+// DisconnectWithContext terminates NVMe/TCP connection with context
+func (c *connector) DisconnectWithContext(ctx context.Context, nqn string) error {
+	// SECURITY: Validate NQN format before using in commands
+	if err := utils.ValidateNQN(nqn); err != nil {
+		return fmt.Errorf("invalid NQN: %w", err)
+	}
+
+	// Apply timeout from config if no deadline set
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.config.DisconnectTimeout)
+		defer cancel()
+	}
+
+	// Track operation
+	opID := c.trackOperation(nqn, "disconnect")
+	defer c.untrackOperation(opID)
+
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		c.metrics.mu.Lock()
+		c.metrics.disconnectCount++
+		c.metrics.disconnectDurationTotal += duration
+		c.metrics.mu.Unlock()
+	}()
+
+	// Check if connected
+	connected, err := c.IsConnectedWithContext(ctx, nqn)
+	if err != nil {
+		return fmt.Errorf("failed to check connection status: %w", err)
+	}
+
+	if !connected {
+		klog.V(2).Infof("Not connected to NQN: %s, nothing to disconnect", nqn)
+		return nil
+	}
+
+	// Execute with context
+	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
+	var cmd *exec.Cmd
+	if c.execCommand != nil {
+		// For testing: use the mock execCommand (no context support)
+		cmd = c.execCommand("nvme", "disconnect", "-n", nqn)
+	} else {
+		cmd = exec.CommandContext(ctx, "nvme", "disconnect", "-n", nqn)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		c.metrics.mu.Lock()
+		c.metrics.disconnectErrors++
+		c.metrics.mu.Unlock()
+
+		if ctx.Err() != nil {
+			c.metrics.mu.Lock()
+			c.metrics.timeoutCount++
+			c.metrics.mu.Unlock()
+			return fmt.Errorf("nvme disconnect timed out: %w", ctx.Err())
+		}
+		return fmt.Errorf("nvme disconnect failed: %w, output: %s", err, string(output))
+	}
+
+	klog.V(2).Infof("Successfully disconnected from NVMe target: %s", nqn)
+	return nil
+}
+
+// IsConnectedWithContext checks connection status with context
+func (c *connector) IsConnectedWithContext(ctx context.Context, nqn string) (bool, error) {
+	// SECURITY: Validate NQN format
+	if err := utils.ValidateNQN(nqn); err != nil {
+		return false, fmt.Errorf("invalid NQN: %w", err)
+	}
+
+	// Apply timeout from config if no deadline set
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.config.ListTimeout)
+		defer cancel()
+	}
+
+	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
+	var cmd *exec.Cmd
+	if c.execCommand != nil {
+		// For testing: use the mock execCommand (no context support)
+		cmd = c.execCommand("nvme", "list-subsys", "-o", "json")
+	} else {
+		cmd = exec.CommandContext(ctx, "nvme", "list-subsys", "-o", "json")
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "No NVMe subsystems") {
+			return false, nil
+		}
+		if ctx.Err() != nil {
+			return false, nil // Timeout is not fatal for this check
+		}
+		klog.V(4).Infof("nvme list-subsys failed (may be normal): %v", err)
+		return false, nil
+	}
+
+	return strings.Contains(string(output), nqn), nil
+}
+
+// GetMetrics returns current operation metrics
+func (c *connector) GetMetrics() *Metrics {
+	return c.metrics
+}
+
+// GetConfig returns current configuration
+func (c *connector) GetConfig() Config {
+	return c.config
+}
+
+// trackOperation records an active operation
+func (c *connector) trackOperation(nqn, operation string) string {
+	c.activeOpsMu.Lock()
+	defer c.activeOpsMu.Unlock()
+
+	opID := fmt.Sprintf("%s-%s-%d", operation, nqn, time.Now().UnixNano())
+	c.activeOperations[opID] = &operationTracker{
+		nqn:       nqn,
+		operation: operation,
+		startTime: time.Now(),
+	}
+
+	c.metrics.mu.Lock()
+	c.metrics.activeOperations++
+	c.metrics.mu.Unlock()
+
+	return opID
+}
+
+// untrackOperation removes an operation from tracking
+func (c *connector) untrackOperation(opID string) {
+	c.activeOpsMu.Lock()
+	defer c.activeOpsMu.Unlock()
+
+	delete(c.activeOperations, opID)
+
+	c.metrics.mu.Lock()
+	c.metrics.activeOperations--
+	c.metrics.mu.Unlock()
+}
+
+// runHealthcheck monitors for stuck operations
+func (c *connector) runHealthcheck(ctx context.Context) {
+	ticker := time.NewTicker(c.config.HealthcheckInterval)
+	defer ticker.Stop()
+	defer close(c.healthcheckDone)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.checkStuckOperations()
+		}
+	}
+}
+
+// checkStuckOperations identifies and logs stuck operations
+func (c *connector) checkStuckOperations() {
+	c.activeOpsMu.Lock()
+	defer c.activeOpsMu.Unlock()
+
+	now := time.Now()
+	for _, op := range c.activeOperations {
+		duration := now.Sub(op.startTime)
+
+		// Warn if operation is taking longer than expected
+		var threshold time.Duration
+		switch op.operation {
+		case "connect":
+			threshold = c.config.ConnectTimeout * 2
+		case "disconnect":
+			threshold = c.config.DisconnectTimeout * 2
+		default:
+			threshold = c.config.CommandTimeout * 2
+		}
+
+		if duration > threshold {
+			klog.Warningf("Stuck NVMe operation detected: %s on NQN %s (duration: %v)",
+				op.operation, op.nqn, duration)
+
+			c.metrics.mu.Lock()
+			c.metrics.stuckOperations++
+			c.metrics.mu.Unlock()
+		}
+	}
+}
+
+// waitForDeviceWithContext waits for device to appear with context support
+func (c *connector) waitForDeviceWithContext(ctx context.Context, nqn string) (string, error) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("timeout waiting for device with NQN %s: %w", nqn, ctx.Err())
+		case <-ticker.C:
+			devicePath, err := c.GetDevicePath(nqn)
+			if err == nil {
+				// Wait for device node to be accessible
+				for i := 0; i < 10; i++ {
+					if _, err := os.Stat(devicePath); err == nil {
+						return devicePath, nil
+					}
+					select {
+					case <-ctx.Done():
+						return "", ctx.Err()
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				return devicePath, nil
+			}
 		}
 	}
 }

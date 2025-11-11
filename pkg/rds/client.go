@@ -29,17 +29,18 @@ type RDSClient interface {
 
 // ClientConfig holds configuration for creating an RDS client
 type ClientConfig struct {
-	Protocol         string        // Protocol to use: "ssh" (default), "api" (future)
-	Address          string        // RDS IP address
-	Port             int           // Port number (default: 22 for SSH, 8728/8729 for API)
-	User             string        // Username (typically "admin")
-	PrivateKey       []byte        // SSH private key content (for SSH protocol)
-	Password         string        // Password (for API protocol, future)
-	Timeout          time.Duration // Connection timeout (default 10s)
-	UseTLS           bool          // Use TLS for API protocol (future)
+	Protocol   string        // Protocol to use: "ssh" (default), "api" (future)
+	Address    string        // RDS IP address
+	Port       int           // Port number (default: 22 for SSH, 8728/8729 for API)
+	User       string        // Username (typically "admin")
+	PrivateKey []byte        // SSH private key content (for SSH protocol)
+	Password   string        // Password (for API protocol, future)
+	Timeout    time.Duration // Connection timeout (default 10s)
+	UseTLS     bool          // Use TLS for API protocol (future)
 
 	// SSH Security Options
-	HostKeyCallback  interface{}   // ssh.HostKeyCallback - custom host key verification (for SSH)
+	HostKey            []byte      // SSH host public key for verification (required for production)
+	HostKeyCallback    interface{} // ssh.HostKeyCallback - custom host key verification (for SSH)
 	InsecureSkipVerify bool        // Skip host key verification (INSECURE - for testing only)
 }
 

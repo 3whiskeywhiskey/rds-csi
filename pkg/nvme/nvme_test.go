@@ -34,8 +34,8 @@ func TestHelperProcess(t *testing.T) {
 	}
 
 	// Output mock data
-	os.Stdout.WriteString(os.Getenv("STDOUT"))
-	os.Stderr.WriteString(os.Getenv("STDERR"))
+	_, _ = os.Stdout.WriteString(os.Getenv("STDOUT"))
+	_, _ = os.Stderr.WriteString(os.Getenv("STDERR"))
 
 	// Exit with specified code
 	exitCode, _ := strconv.Atoi(os.Getenv("EXIT_CODE"))
@@ -116,7 +116,10 @@ func TestDisconnect(t *testing.T) {
 			}
 
 			c := &connector{
-				execCommand: mockExecCommand(listOutput, "", 0),
+				execCommand:      mockExecCommand(listOutput, "", 0),
+				config:           DefaultConfig(),
+				metrics:          &Metrics{},
+				activeOperations: make(map[string]*operationTracker),
 			}
 
 			err := c.Disconnect(tt.nqn)
@@ -160,7 +163,10 @@ func TestIsConnected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &connector{
-				execCommand: mockExecCommand(tt.listOutput, "", 0),
+				execCommand:      mockExecCommand(tt.listOutput, "", 0),
+				config:           DefaultConfig(),
+				metrics:          &Metrics{},
+				activeOperations: make(map[string]*operationTracker),
 			}
 
 			connected, err := c.IsConnected(tt.nqn)
@@ -177,7 +183,10 @@ func TestIsConnected(t *testing.T) {
 
 func TestGetDevicePathNotFound(t *testing.T) {
 	c := &connector{
-		execCommand: exec.Command,
+		execCommand:      exec.Command,
+		config:           DefaultConfig(),
+		metrics:          &Metrics{},
+		activeOperations: make(map[string]*operationTracker),
 	}
 
 	// Test with non-existent NQN
@@ -192,7 +201,10 @@ func TestGetDevicePathNotFound(t *testing.T) {
 
 func TestWaitForDeviceTimeout(t *testing.T) {
 	c := &connector{
-		execCommand: exec.Command,
+		execCommand:      exec.Command,
+		config:           DefaultConfig(),
+		metrics:          &Metrics{},
+		activeOperations: make(map[string]*operationTracker),
 	}
 
 	// Test timeout with non-existent device
@@ -267,10 +279,7 @@ func TestTargetValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Basic validation checks
-			valid := true
-			if tt.target.NQN == "" {
-				valid = false
-			}
+			valid := tt.target.NQN != ""
 			if tt.target.TargetAddress == "" {
 				valid = false
 			}
@@ -292,7 +301,7 @@ func TestNewConnector(t *testing.T) {
 	}
 
 	// Verify it implements the interface
-	var _ Connector = c
+	var _ = Connector(c)
 }
 
 // TestGetDevicePathWithMockFilesystem tests device path discovery

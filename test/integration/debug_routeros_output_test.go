@@ -48,7 +48,7 @@ func TestDebugRouterOSOutput(t *testing.T) {
 	if err := client.Connect(); err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// List existing volumes to see output format
 	t.Log("=== Listing volumes to see output format ===")

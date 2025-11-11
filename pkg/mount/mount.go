@@ -9,6 +9,53 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// Dangerous mount options that should never be allowed
+var dangerousMountOptions = map[string]bool{
+	"suid": true, // Allow set-user-ID/set-group-ID bits
+	"dev":  true, // Interpret character or block special devices
+	"exec": true, // Permit execution of binaries
+}
+
+// Default secure mount options enforced for bind mounts
+var defaultSecureMountOptions = []string{
+	"nosuid", // Ignore set-user-ID/set-group-ID bits
+	"nodev",  // Do not interpret character or block special devices
+	"noexec", // Do not allow direct execution of binaries
+}
+
+// Whitelist of allowed mount options (beyond the defaults)
+var allowedMountOptions = map[string]bool{
+	// Security options
+	"nosuid":     true,
+	"nodev":      true,
+	"noexec":     true,
+	"ro":         true,
+	"rw":         true,
+	"relatime":   true,
+	"noatime":    true,
+	"nodiratime": true,
+
+	// Filesystem-specific options that are generally safe
+	"defaults": true,
+	"sync":     true,
+	"async":    true,
+	"auto":     true,
+	"noauto":   true,
+	"user":     true,
+	"nouser":   true,
+	"_netdev":  true,
+
+	// Bind mount options
+	"bind":    true,
+	"rbind":   true,
+	"remount": true,
+
+	// Additional safe options
+	"strictatime": true,
+	"lazytime":    true,
+	"nolazytime":  true,
+}
+
 // Mounter handles filesystem operations
 type Mounter interface {
 	// Mount mounts source to target with the given fsType and options
@@ -63,9 +110,96 @@ func NewMounter() Mounter {
 	}
 }
 
+// ValidateMountOptions validates mount options against security policies
+// Returns an error if any dangerous options are found or if options are not whitelisted
+func ValidateMountOptions(options []string) error {
+	if len(options) == 0 {
+		// No options is safe
+		return nil
+	}
+
+	for _, opt := range options {
+		// Remove value if option has one (e.g., "uid=1000" -> "uid")
+		optName := strings.Split(opt, "=")[0]
+
+		// SECURITY: Check for dangerous options
+		if dangerousMountOptions[optName] {
+			return fmt.Errorf("dangerous mount option not allowed: %s", optName)
+		}
+
+		// Check if option is in whitelist
+		if !allowedMountOptions[optName] {
+			return fmt.Errorf("mount option not in whitelist: %s", optName)
+		}
+	}
+
+	return nil
+}
+
+// SanitizeMountOptions adds default secure options and validates user-provided options
+// For bind mounts, always enforces nosuid, nodev, noexec unless explicitly overridden
+func SanitizeMountOptions(options []string, isBindMount bool) ([]string, error) {
+	// Validate provided options first
+	if err := ValidateMountOptions(options); err != nil {
+		return nil, err
+	}
+
+	// For bind mounts, enforce secure defaults
+	if isBindMount {
+		// Create a set to track existing options
+		existingOpts := make(map[string]bool)
+		for _, opt := range options {
+			optName := strings.Split(opt, "=")[0]
+			existingOpts[optName] = true
+		}
+
+		// Add secure defaults if not already present
+		secureOpts := make([]string, 0, len(options)+len(defaultSecureMountOptions))
+		for _, secureOpt := range defaultSecureMountOptions {
+			// Don't add if user explicitly specified the opposite
+			opposite := ""
+			switch secureOpt {
+			case "nosuid":
+				opposite = "suid"
+			case "nodev":
+				opposite = "dev"
+			case "noexec":
+				opposite = "exec"
+			}
+
+			if !existingOpts[secureOpt] && !existingOpts[opposite] {
+				secureOpts = append(secureOpts, secureOpt)
+			}
+		}
+
+		// Combine secure options with user options
+		options = append(secureOpts, options...)
+	}
+
+	return options, nil
+}
+
 // Mount mounts source to target with the given filesystem type and options
 func (m *mounter) Mount(source, target, fsType string, options []string) error {
 	klog.V(2).Infof("Mounting %s to %s (fsType: %s, options: %v)", source, target, fsType, options)
+
+	// SECURITY: Validate and sanitize mount options
+	// Detect if this is a bind mount
+	isBindMount := false
+	for _, opt := range options {
+		if opt == "bind" || opt == "rbind" {
+			isBindMount = true
+			break
+		}
+	}
+
+	sanitizedOptions, err := SanitizeMountOptions(options, isBindMount)
+	if err != nil {
+		return fmt.Errorf("mount options validation failed: %w", err)
+	}
+	options = sanitizedOptions
+
+	klog.V(4).Infof("Sanitized mount options: %v", options)
 
 	// Create target directory if it doesn't exist
 	if err := os.MkdirAll(target, 0750); err != nil {
@@ -234,14 +368,14 @@ func (m *mounter) GetDeviceStats(path string) (*DeviceStats, error) {
 	stats := &DeviceStats{}
 
 	// Parse size fields
-	fmt.Sscanf(fields[0], "%d", &stats.TotalBytes)
-	fmt.Sscanf(fields[1], "%d", &stats.UsedBytes)
-	fmt.Sscanf(fields[2], "%d", &stats.AvailableBytes)
+	_, _ = fmt.Sscanf(fields[0], "%d", &stats.TotalBytes)
+	_, _ = fmt.Sscanf(fields[1], "%d", &stats.UsedBytes)
+	_, _ = fmt.Sscanf(fields[2], "%d", &stats.AvailableBytes)
 
 	// Parse inode fields
-	fmt.Sscanf(fields[3], "%d", &stats.TotalInodes)
-	fmt.Sscanf(fields[4], "%d", &stats.UsedInodes)
-	fmt.Sscanf(fields[5], "%d", &stats.AvailableInodes)
+	_, _ = fmt.Sscanf(fields[3], "%d", &stats.TotalInodes)
+	_, _ = fmt.Sscanf(fields[4], "%d", &stats.UsedInodes)
+	_, _ = fmt.Sscanf(fields[5], "%d", &stats.AvailableInodes)
 
 	return stats, nil
 }

@@ -54,7 +54,7 @@ func TestShowRawRouterOSOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test command 1: List disks
 	t.Log("\n=== Raw output of: /disk print detail ===")
@@ -79,7 +79,7 @@ func runAndShowOutput(t *testing.T, client *ssh.Client, command string) {
 		t.Errorf("Failed to create session: %v", err)
 		return
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	output, err := session.CombinedOutput(command)
 	if err != nil {

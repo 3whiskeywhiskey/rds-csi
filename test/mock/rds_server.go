@@ -138,7 +138,7 @@ func (s *MockRDSServer) acceptConnections() {
 }
 
 func (s *MockRDSServer) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Perform SSH handshake
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.config)
@@ -146,7 +146,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 		klog.Errorf("Failed to handshake: %v", err)
 		return
 	}
-	defer sshConn.Close()
+	defer func() { _ = sshConn.Close() }()
 
 	klog.V(4).Infof("New SSH connection from %s", sshConn.RemoteAddr())
 
@@ -156,7 +156,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 	// Handle channels
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
@@ -171,7 +171,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 }
 
 func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
+	defer func() { _ = channel.Close() }()
 
 	for req := range requests {
 		klog.V(4).Infof("Mock RDS received request type: %s, payload len: %d", req.Type, len(req.Payload))
@@ -181,7 +181,7 @@ func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.
 			if len(req.Payload) > 4 {
 				// Parse command from payload (SSH exec request format)
 				cmdLen := uint32(req.Payload[0])<<24 | uint32(req.Payload[1])<<16 |
-				         uint32(req.Payload[2])<<8 | uint32(req.Payload[3])
+					uint32(req.Payload[2])<<8 | uint32(req.Payload[3])
 
 				klog.V(4).Infof("Mock RDS command length: %d, total payload: %d", cmdLen, len(req.Payload))
 
@@ -195,25 +195,25 @@ func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.
 					// Send response
 					if response != "" {
 						klog.V(4).Infof("Mock RDS sending response (%d bytes)", len(response))
-						channel.Write([]byte(response))
+						_, _ = channel.Write([]byte(response))
 					}
 
 					// Send exit status
-					req.Reply(true, nil)
-					channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: uint32(exitStatus)}))
+					_ = req.Reply(true, nil)
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: uint32(exitStatus)}))
 					klog.V(4).Infof("Mock RDS sent exit status: %d", exitStatus)
 					return
 				}
 			}
 			klog.Warningf("Mock RDS: Invalid exec payload format")
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 
 		case "shell":
 			// Not supported for now
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 
 		default:
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 		}
 	}
 }
@@ -276,7 +276,7 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 
 	var nvmePort int
 	if nvmePortStr != "" {
-		fmt.Sscanf(nvmePortStr, "%d", &nvmePort)
+		_, _ = fmt.Sscanf(nvmePortStr, "%d", &nvmePort)
 	} else {
 		nvmePort = 4420 // default
 	}
@@ -328,7 +328,15 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 }
 
 func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
-	// Parse: /disk print detail where slot=pvc-123
+	// Parse: /disk print detail where slot=pvc-123 OR mount-point="storage-pool"
+
+	// Check for mount-point query (capacity query)
+	if strings.Contains(command, "mount-point=") {
+		// Return mock filesystem capacity info
+		return s.formatMountPointCapacity(), 0
+	}
+
+	// Check for slot query
 	slot := ""
 	if strings.Contains(command, "slot=") {
 		re := regexp.MustCompile(`slot=([^\s]+)`)
@@ -383,6 +391,14 @@ Total: 7.23TiB
 Free: 5.42TiB
 `
 	return output, 0
+}
+
+func (s *MockRDSServer) formatMountPointCapacity() string {
+	// Return mock capacity info for mount point query
+	// This simulates: /disk print detail where mount-point="storage-pool"
+	// RouterOS format uses size= and free= with space-separated numbers
+	return `slot=storage-pool type=partition mount-point=storage-pool file-system=btrfs size=7 949 127 950 336 free=5 963 595 964 416 use=25%
+`
 }
 
 func extractParam(command, param string) string {

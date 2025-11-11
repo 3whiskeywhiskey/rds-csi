@@ -18,6 +18,11 @@ stringData:
     AAAEBStGYSGwibjyFLTF5lgaVjKJNnuFuPN5PiVOmYIH3LoxrKOsMf+AL7ON+7gB0VS3gT
     i+W2kJyDFWDJJT1ctXflAAAACW1ldGFsLWNzaQECAwQ=
     -----END OPENSSH PRIVATE KEY-----
+  # RDS SSH host public key (for host key verification)
+  # Replace this with your RDS server's actual public host key
+  # Get it with: ssh-keyscan -t ed25519 <rds-ip> 2>/dev/null | cut -d' ' -f2-
+  rds-host-key: |
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJnKnXilN1234567890abcdefghijklmnopqrstvuwxyz
 ---
 # ConfigMap for RDS connection settings
 apiVersion: v1
@@ -76,7 +81,16 @@ spec:
             - "-rds-port=$(RDS_PORT)"
             - "-rds-user=$(RDS_USER)"
             - "-rds-key-file=/etc/rds-csi/rds-private-key"
+            - "-rds-host-key=/etc/rds-csi/rds-host-key"
+            # Orphan reconciler settings (optional - enable to detect and cleanup orphaned volumes)
+            # - "-enable-orphan-reconciler"
+            # - "-orphan-check-interval=1h"
+            # - "-orphan-grace-period=5m"
+            # - "-orphan-dry-run=false"  # Set to false to actually delete orphans
             - "-v=5"
+            # SECURITY: For testing only, you can skip host key verification with:
+            # - "-rds-insecure-skip-verify=true"
+            # WARNING: This is INSECURE and should NEVER be used in production!
           env:
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 // CreateVolume creates a file-backed NVMe/TCP volume on RDS
@@ -128,6 +130,15 @@ func (c *sshClient) VerifyVolumeExists(slot string) error {
 // GetCapacity queries the available storage capacity on RDS
 func (c *sshClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 	klog.V(4).Infof("Getting capacity for %s", basePath)
+
+	// SECURITY: Validate base path
+	if basePath != "" {
+		sanitized, err := utils.SanitizeBasePath(basePath)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base path: %w", err)
+		}
+		basePath = sanitized
+	}
 
 	// Extract mount point from base path
 	// Examples:
@@ -328,6 +339,12 @@ func validateCreateVolumeOptions(opts CreateVolumeOptions) error {
 	if opts.FilePath == "" {
 		return fmt.Errorf("file path is required")
 	}
+
+	// SECURITY: Validate file path to prevent command injection and path traversal
+	if err := utils.ValidateFilePath(opts.FilePath); err != nil {
+		return fmt.Errorf("security validation failed for file path: %w", err)
+	}
+
 	if opts.FileSizeBytes <= 0 {
 		return fmt.Errorf("file size must be positive")
 	}
@@ -433,9 +450,10 @@ func normalizeRouterOSOutput(output string) string {
 
 // extractMountPoint extracts the mount point from a full path
 // Examples:
-//   /storage-pool/metal-csi/volumes → storage-pool
-//   /nvme1/kubernetes → nvme1
-//   storage-pool/volumes → storage-pool
+//
+//	/storage-pool/metal-csi/volumes → storage-pool
+//	/nvme1/kubernetes → nvme1
+//	storage-pool/volumes → storage-pool
 func extractMountPoint(path string) string {
 	// Remove leading slash if present
 	path = strings.TrimPrefix(path, "/")

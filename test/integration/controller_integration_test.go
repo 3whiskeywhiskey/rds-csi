@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
-	"git.srvlab.io/whiskey/rds-csi-driver/test/mock"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/test/mock"
 )
 
 // TestControllerIntegrationWithMockRDS tests the full controller flow with a mock RDS server
@@ -25,7 +26,11 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	if err := mockRDS.Start(); err != nil {
 		t.Fatalf("Failed to start mock RDS server: %v", err)
 	}
-	defer mockRDS.Stop()
+	defer func() {
+		if err := mockRDS.Stop(); err != nil {
+			t.Logf("Warning: failed to stop mock RDS server: %v", err)
+		}
+	}()
 
 	// Wait for server to be ready
 	time.Sleep(100 * time.Millisecond)
@@ -36,7 +41,8 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 		Port:    mockRDS.Port(),
 		User:    "admin",
 		// No auth for mock server
-		PrivateKey: nil,
+		PrivateKey:         nil,
+		InsecureSkipVerify: true, // Skip host key verification for mock server
 	})
 	if err != nil {
 		t.Fatalf("Failed to create RDS client: %v", err)
@@ -46,7 +52,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	if err := rdsClient.Connect(); err != nil {
 		t.Fatalf("Failed to connect to mock RDS: %v", err)
 	}
-	defer rdsClient.Close()
+	defer func() { _ = rdsClient.Close() }()
 
 	// Create driver with mock RDS client
 	drv := &driver.Driver{}
