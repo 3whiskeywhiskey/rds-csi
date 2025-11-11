@@ -211,6 +211,70 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
+func TestParseFileInfo(t *testing.T) {
+	tests := []struct {
+		name         string
+		output       string
+		expectedPath string
+		expectedName string
+		expectError  bool
+	}{
+		{
+			name: "file path with leading slash",
+			output: `name=/storage-pool/metal-csi/test.img type=file
+                    size=53 687 091 200`,
+			expectedPath: "/storage-pool/metal-csi/test.img",
+			expectedName: "test.img",
+			expectError:  false,
+		},
+		{
+			name: "file path without leading slash (real RouterOS /file print format)",
+			output: `name=storage-pool/metal-csi/test.img type=file
+                    size=53 687 091 200`,
+			expectedPath: "/storage-pool/metal-csi/test.img", // Should be normalized to absolute path
+			expectedName: "test.img",
+			expectError:  false,
+		},
+		{
+			name: "file path with quoted name without leading slash",
+			output: `name="storage-pool/metal-csi/test-volume.img" type=file
+                    size=107 374 182 400`,
+			expectedPath: "/storage-pool/metal-csi/test-volume.img", // Should be normalized
+			expectedName: "test-volume.img",
+			expectError:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := parseFileInfo(tt.output)
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if file.Path != tt.expectedPath {
+				t.Errorf("Expected path %s, got %s", tt.expectedPath, file.Path)
+			}
+
+			if file.Name != tt.expectedName {
+				t.Errorf("Expected name %s, got %s", tt.expectedName, file.Name)
+			}
+
+			// Verify path always has leading slash (critical for path comparison)
+			if file.Path != "" && file.Path[0] != '/' {
+				t.Errorf("Path should be normalized to absolute format with leading /, got: %s", file.Path)
+			}
+		})
+	}
+}
+
 func TestValidateCreateVolumeOptions(t *testing.T) {
 	tests := []struct {
 		name      string

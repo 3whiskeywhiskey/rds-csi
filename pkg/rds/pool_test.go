@@ -48,6 +48,10 @@ func (m *mockRDSClient) DeleteVolume(slot string) error {
 	return nil
 }
 
+func (m *mockRDSClient) ResizeVolume(slot string, newSizeBytes int64) error {
+	return nil
+}
+
 func (m *mockRDSClient) GetVolume(slot string) (*VolumeInfo, error) {
 	return nil, nil
 }
@@ -58,6 +62,14 @@ func (m *mockRDSClient) VerifyVolumeExists(slot string) error {
 
 func (m *mockRDSClient) ListVolumes() ([]VolumeInfo, error) {
 	return nil, nil
+}
+
+func (m *mockRDSClient) ListFiles(path string) ([]FileInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) DeleteFile(path string) error {
+	return nil
 }
 
 func (m *mockRDSClient) GetCapacity(basePath string) (*CapacityInfo, error) {

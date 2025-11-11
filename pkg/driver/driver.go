@@ -63,6 +63,7 @@ type DriverConfig struct {
 	RDSPrivateKey         []byte
 	RDSHostKey            []byte // SSH host public key for verification
 	RDSInsecureSkipVerify bool   // Skip host key verification (INSECURE)
+	RDSVolumeBasePath     string // Base path for volumes on RDS (e.g., /storage-pool/metal-csi)
 
 	// Kubernetes client (required for orphan reconciler)
 	K8sClient kubernetes.Interface
@@ -140,6 +141,7 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 			GracePeriod:   config.OrphanGracePeriod,
 			DryRun:        config.OrphanDryRun,
 			Enabled:       true,
+			BasePath:      config.RDSVolumeBasePath,
 		}
 
 		orphanReconciler, err := reconciler.NewOrphanReconciler(reconcilerConfig)
@@ -184,6 +186,13 @@ func (d *Driver) addControllerServiceCapabilities() {
 				},
 			},
 		},
+		{
+			Type: &csi.ControllerServiceCapability_Rpc{
+				Rpc: &csi.ControllerServiceCapability_RPC{
+					Type: csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+				},
+			},
+		},
 	}
 }
 
@@ -194,6 +203,13 @@ func (d *Driver) addNodeServiceCapabilities() {
 			Type: &csi.NodeServiceCapability_Rpc{
 				Rpc: &csi.NodeServiceCapability_RPC{
 					Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+				},
+			},
+		},
+		{
+			Type: &csi.NodeServiceCapability_Rpc{
+				Rpc: &csi.NodeServiceCapability_RPC{
+					Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 				},
 			},
 		},

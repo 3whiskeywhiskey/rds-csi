@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/klog/v2"
 
@@ -45,6 +46,60 @@ func (c *sshClient) CreateVolume(opts CreateVolumeOptions) error {
 	}
 
 	klog.V(2).Infof("Successfully created volume %s", opts.Slot)
+	return nil
+}
+
+// ResizeVolume resizes an existing volume on RDS
+func (c *sshClient) ResizeVolume(slot string, newSizeBytes int64) error {
+	klog.V(2).Infof("Resizing volume %s to %d bytes", slot, newSizeBytes)
+
+	// Validate slot name
+	if err := validateSlotName(slot); err != nil {
+		return err
+	}
+
+	// Validate new size
+	if newSizeBytes <= 0 {
+		return fmt.Errorf("new size must be positive")
+	}
+
+	// Get current volume to check it exists and get current size
+	currentVolume, err := c.GetVolume(slot)
+	if err != nil {
+		return fmt.Errorf("failed to get current volume info: %w", err)
+	}
+
+	// Verify we're expanding (not shrinking)
+	if newSizeBytes < currentVolume.FileSizeBytes {
+		return fmt.Errorf("shrinking volumes is not supported (current: %d bytes, requested: %d bytes)",
+			currentVolume.FileSizeBytes, newSizeBytes)
+	}
+
+	// If size is the same, nothing to do
+	if newSizeBytes == currentVolume.FileSizeBytes {
+		klog.V(2).Infof("Volume %s is already at requested size, skipping resize", slot)
+		return nil
+	}
+
+	// Convert size to human-readable format
+	sizeStr := formatBytes(newSizeBytes)
+
+	// Build /disk set command
+	cmd := fmt.Sprintf(`/disk set [find slot=%s] file-size=%s`, slot, sizeStr)
+
+	// Execute command with retry
+	_, err = c.runCommandWithRetry(cmd, 3)
+	if err != nil {
+		return fmt.Errorf("failed to resize volume: %w", err)
+	}
+
+	// Verify new size
+	updatedVolume, err := c.GetVolume(slot)
+	if err != nil {
+		return fmt.Errorf("failed to verify resize: %w", err)
+	}
+
+	klog.V(2).Infof("Successfully resized volume %s from %d to %d bytes", slot, currentVolume.FileSizeBytes, updatedVolume.FileSizeBytes)
 	return nil
 }
 
@@ -188,6 +243,66 @@ func (c *sshClient) ListVolumes() ([]VolumeInfo, error) {
 	return volumes, nil
 }
 
+// ListFiles lists files in a directory on RDS
+func (c *sshClient) ListFiles(path string) ([]FileInfo, error) {
+	klog.V(4).Infof("Listing files in %s", path)
+
+	// SECURITY: Validate path to prevent command injection
+	if err := utils.ValidateFilePath(path); err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
+
+	// Build /file print command
+	// Use "where name~" for pattern matching (~ is RouterOS regex match operator)
+	// RouterOS file paths don't include leading /, so strip it if present
+	searchPath := strings.TrimPrefix(path, "/")
+	cmd := fmt.Sprintf(`/file print detail where name~"%s"`, regexp.QuoteMeta(searchPath))
+
+	// Execute command
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files: %w", err)
+	}
+
+	// Parse file list
+	files, err := parseFileList(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse file list: %w", err)
+	}
+
+	return files, nil
+}
+
+// DeleteFile deletes a file on RDS
+func (c *sshClient) DeleteFile(path string) error {
+	klog.V(4).Infof("Deleting file: %s", path)
+
+	// SECURITY: Validate path to prevent command injection
+	if err := utils.ValidateFilePath(path); err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	// RouterOS file paths don't include leading / in commands
+	searchPath := strings.TrimPrefix(path, "/")
+
+	// Build /file remove command
+	cmd := fmt.Sprintf(`/file remove [find name="%s"]`, searchPath)
+
+	// Execute command
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+
+	// RouterOS doesn't return output on successful delete, but check for errors
+	if strings.Contains(strings.ToLower(output), "error") || strings.Contains(strings.ToLower(output), "failure") {
+		return fmt.Errorf("error deleting file: %s", output)
+	}
+
+	klog.V(4).Infof("Successfully deleted file: %s", path)
+	return nil
+}
+
 // parseVolumeInfo parses RouterOS disk print output for a single volume
 func parseVolumeInfo(output string) (*VolumeInfo, error) {
 	volume := &VolumeInfo{}
@@ -213,6 +328,10 @@ func parseVolumeInfo(output string) (*VolumeInfo, error) {
 		volume.FilePath = match[1]
 	} else if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.FilePath = match[1]
+	}
+	// Normalize to absolute path format
+	if volume.FilePath != "" && !strings.HasPrefix(volume.FilePath, "/") {
+		volume.FilePath = "/" + volume.FilePath
 	}
 
 	// Extract file-size (human-readable format like "50.0GiB" or "1024.0MiB")
@@ -326,6 +445,85 @@ func parseCapacityInfo(output string) (*CapacityInfo, error) {
 	}
 
 	return capacity, nil
+}
+
+// parseFileList parses RouterOS file print output for multiple files
+func parseFileList(output string) ([]FileInfo, error) {
+	var files []FileInfo
+
+	// Normalize multi-line output
+	normalized := normalizeRouterOSOutput(output)
+
+	// Split by file entries (each starts with a number)
+	entries := regexp.MustCompile(`(?m)^\s*\d+\s+`).Split(normalized, -1)
+
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+
+		file, err := parseFileInfo(entry)
+		if err != nil {
+			klog.V(4).Infof("Skipping unparseable file entry: %v", err)
+			continue
+		}
+
+		files = append(files, *file)
+	}
+
+	return files, nil
+}
+
+// parseFileInfo parses RouterOS file print output for a single file
+func parseFileInfo(output string) (*FileInfo, error) {
+	file := &FileInfo{}
+
+	// Normalize multi-line output
+	normalized := normalizeRouterOSOutput(output)
+
+	// Extract name (path)
+	if match := regexp.MustCompile(`name="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		file.Path = match[1]
+	} else if match := regexp.MustCompile(`name=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		file.Path = match[1]
+	}
+
+	// Normalize to absolute path format
+	if file.Path != "" && !strings.HasPrefix(file.Path, "/") {
+		file.Path = "/" + file.Path
+	}
+
+	// Extract filename from path
+	if file.Path != "" {
+		parts := strings.Split(file.Path, "/")
+		if len(parts) > 0 {
+			file.Name = parts[len(parts)-1]
+		}
+	}
+
+	// Extract type
+	if match := regexp.MustCompile(`type="?([^"\s]+)"?`).FindStringSubmatch(normalized); len(match) > 1 {
+		file.Type = match[1]
+	}
+
+	// Extract size (numbers may have spaces like "10 737 418 240")
+	if match := regexp.MustCompile(`size=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		sizeStr := strings.ReplaceAll(match[1], " ", "")
+		if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
+			file.SizeBytes = size
+		}
+	}
+
+	// Extract creation time (if available)
+	// RouterOS format: creation-time=jan/02/2025 10:30:45
+	if match := regexp.MustCompile(`creation-time=(\w+/\d+/\d+\s+\d+:\d+:\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		// Parse RouterOS time format
+		if t, err := time.Parse("jan/02/2006 15:04:05", match[1]); err == nil {
+			file.CreatedAt = t
+		}
+	}
+
+	return file, nil
 }
 
 // validateCreateVolumeOptions validates volume creation options

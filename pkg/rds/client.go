@@ -16,9 +16,14 @@ type RDSClient interface {
 	// Volume operations
 	CreateVolume(opts CreateVolumeOptions) error
 	DeleteVolume(slot string) error
+	ResizeVolume(slot string, newSizeBytes int64) error
 	GetVolume(slot string) (*VolumeInfo, error)
 	VerifyVolumeExists(slot string) error
 	ListVolumes() ([]VolumeInfo, error)
+
+	// File operations
+	ListFiles(path string) ([]FileInfo, error)
+	DeleteFile(path string) error
 
 	// Capacity queries
 	GetCapacity(basePath string) (*CapacityInfo, error)
