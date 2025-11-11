@@ -43,6 +43,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
     ca-certificates \
     e2fsprogs \
+    e2fsprogs-extra \
     xfsprogs \
     blkid \
     nvme-cli \
