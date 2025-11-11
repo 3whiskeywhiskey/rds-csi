@@ -223,18 +223,12 @@ func (c *sshClient) ListFiles(path string) ([]FileInfo, error) {
 func (c *sshClient) DeleteFile(path string) error {
 	klog.V(4).Infof("Deleting file: %s", path)
 
-	// RouterOS file paths don't include leading /, so add it if missing for validation
-	validationPath := path
-	if !strings.HasPrefix(path, "/") {
-		validationPath = "/" + path
-	}
-
 	// SECURITY: Validate path to prevent command injection
-	if err := utils.ValidateFilePath(validationPath); err != nil {
+	if err := utils.ValidateFilePath(path); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	// RouterOS file paths don't include leading /, so strip it for the command
+	// RouterOS file paths don't include leading / in commands
 	searchPath := strings.TrimPrefix(path, "/")
 
 	// Build /file remove command
@@ -280,6 +274,10 @@ func parseVolumeInfo(output string) (*VolumeInfo, error) {
 		volume.FilePath = match[1]
 	} else if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.FilePath = match[1]
+	}
+	// Normalize to absolute path format
+	if volume.FilePath != "" && !strings.HasPrefix(volume.FilePath, "/") {
+		volume.FilePath = "/" + volume.FilePath
 	}
 
 	// Extract file-size (human-readable format like "50.0GiB" or "1024.0MiB")
@@ -432,13 +430,17 @@ func parseFileInfo(output string) (*FileInfo, error) {
 	// Extract name (path)
 	if match := regexp.MustCompile(`name="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		file.Path = match[1]
-		// Extract filename from path
-		parts := strings.Split(file.Path, "/")
-		if len(parts) > 0 {
-			file.Name = parts[len(parts)-1]
-		}
 	} else if match := regexp.MustCompile(`name=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
 		file.Path = match[1]
+	}
+
+	// Normalize to absolute path format
+	if file.Path != "" && !strings.HasPrefix(file.Path, "/") {
+		file.Path = "/" + file.Path
+	}
+
+	// Extract filename from path
+	if file.Path != "" {
 		parts := strings.Split(file.Path, "/")
 		if len(parts) > 0 {
 			file.Name = parts[len(parts)-1]
