@@ -34,6 +34,15 @@ type CreateVolumeOptions struct {
 	NVMETCPNQN    string // NVMe Qualified Name
 }
 
+// FileInfo represents a file on the RDS filesystem
+type FileInfo struct {
+	Name      string    // File name
+	Path      string    // Full path to file
+	SizeBytes int64     // Size in bytes
+	Type      string    // "file" or "directory"
+	CreatedAt time.Time // Creation time (if available)
+}
+
 // VolumeNotFoundError is returned when a volume is not found
 type VolumeNotFoundError struct {
 	Slot string
