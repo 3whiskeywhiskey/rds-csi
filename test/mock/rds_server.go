@@ -495,7 +495,7 @@ func (s *MockRDSServer) handleFilePrintDetail(command string) (string, int) {
 	if strings.Contains(pattern, "/") {
 		dirPath := "/" + pattern
 		output.WriteString(fmt.Sprintf(" %d   name=%s type=directory\n", i, dirPath))
-		output.WriteString(fmt.Sprintf("     last-modified=2025-11-11 16:47:07\n\n"))
+		output.WriteString("     last-modified=2025-11-11 16:47:07\n\n")
 		i++
 	}
 

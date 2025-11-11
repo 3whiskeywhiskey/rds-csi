@@ -450,12 +450,13 @@ func TestParseFileList_MultipleFiles(t *testing.T) {
 			imgFiles++
 
 			// Verify sizes are parsed correctly
-			if file.Name == "pvc-ccdecfad-a8bf-572e-9120-464c4d99f12f.img" {
+			switch file.Name {
+			case "pvc-ccdecfad-a8bf-572e-9120-464c4d99f12f.img":
 				expectedSize := int64(10 * 1024 * 1024 * 1024)
 				if file.SizeBytes != expectedSize {
 					t.Errorf("File 1: expected size %d, got %d", expectedSize, file.SizeBytes)
 				}
-			} else if file.Name == "pvc-0f923194-922a-5dd8-b376-c2c6ccb56dd8.img" {
+			case "pvc-0f923194-922a-5dd8-b376-c2c6ccb56dd8.img":
 				expectedSize := int64(1024 * 1024 * 1024)
 				if file.SizeBytes != expectedSize {
 					t.Errorf("File 2: expected size %d, got %d", expectedSize, file.SizeBytes)

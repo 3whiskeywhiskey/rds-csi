@@ -8,11 +8,12 @@ import (
 	"syscall"
 	"time"
 
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
 )
 
 var (
