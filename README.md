@@ -2,6 +2,8 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Go Report Card](https://goreportcard.com/badge/github.com/whiskey/rds-csi-driver)](https://goreportcard.com/report/github.com/whiskey/rds-csi-driver)
+[![Dev Build](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/dev.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/dev.yml)
+[![Main Build](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/main.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/main.yml)
 
 Kubernetes CSI (Container Storage Interface) driver for **MikroTik ROSE Data Server (RDS)** NVMe/TCP storage.
 
@@ -252,6 +254,7 @@ For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubern
 - **[Kubernetes Setup Guide](docs/kubernetes-setup.md)** - Complete deployment guide
 - [Architecture](docs/architecture.md) - System design and component interactions
 - [RDS Commands Reference](docs/rds-commands.md) - RouterOS CLI commands used
+- [CI/CD Pipeline](docs/ci-cd.md) - Automated builds, releases, and versioning
 - [Development Guide](CLAUDE.md) - Development notes and context
 - [Testing Guide](TESTING.md) - Test procedures
 
