@@ -73,6 +73,9 @@ type Mounter interface {
 	// IsFormatted checks if device has a filesystem
 	IsFormatted(device string) (bool, error)
 
+	// ResizeFilesystem resizes the filesystem on the device to use available space
+	ResizeFilesystem(device, volumePath string) error
+
 	// GetDeviceStats returns filesystem statistics
 	GetDeviceStats(path string) (*DeviceStats, error)
 }
@@ -341,6 +344,53 @@ func (m *mounter) IsFormatted(device string) (bool, error) {
 	// If blkid returned a filesystem type, device is formatted
 	fsType := strings.TrimSpace(string(output))
 	return len(fsType) > 0, nil
+}
+
+// ResizeFilesystem resizes the filesystem on the device to use available space
+func (m *mounter) ResizeFilesystem(device, volumePath string) error {
+	klog.V(2).Infof("Resizing filesystem on device %s (volume path: %s)", device, volumePath)
+
+	// Detect filesystem type using blkid
+	cmd := m.execCommand("blkid", "-o", "value", "-s", "TYPE", device)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to detect filesystem type: %w, output: %s", err, string(output))
+	}
+
+	fsType := strings.TrimSpace(string(output))
+	if fsType == "" {
+		return fmt.Errorf("could not detect filesystem type for device %s", device)
+	}
+
+	klog.V(2).Infof("Detected filesystem type: %s", fsType)
+
+	// Execute appropriate resize command based on filesystem type
+	var resizeCmd *exec.Cmd
+	switch fsType {
+	case "ext4", "ext3", "ext2":
+		// resize2fs works for ext2/ext3/ext4
+		// It can be run on mounted filesystems
+		resizeCmd = m.execCommand("resize2fs", device)
+	case "xfs":
+		// xfs_growfs requires the mount point, not the device
+		// It must be run on a mounted filesystem
+		if volumePath == "" {
+			return fmt.Errorf("volume path is required for xfs filesystem resize")
+		}
+		resizeCmd = m.execCommand("xfs_growfs", volumePath)
+	default:
+		return fmt.Errorf("unsupported filesystem type for resize: %s", fsType)
+	}
+
+	// Execute resize command
+	output, err = resizeCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("filesystem resize failed: %w, output: %s", err, string(output))
+	}
+
+	klog.V(4).Infof("resize output: %s", string(output))
+	klog.V(2).Infof("Successfully resized filesystem on %s", device)
+	return nil
 }
 
 // GetDeviceStats returns filesystem statistics for the given path

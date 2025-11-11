@@ -213,7 +213,7 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 **Issues**:
 - [#21] Create Helm chart
 - [#22] Add monitoring/metrics
-- [#23] Implement volume expansion support
+- [#23] Implement volume expansion support ✅ **Completed**
 - [#24] Add comprehensive error handling ✅ **Completed**
 - [#25] Create CI/CD workflows (build, test, release)
 - [#26] Implement orphan volume detection and cleanup ✅ **Completed**
@@ -221,7 +221,12 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 **Deliverables**:
 - Helm chart with configurable values
 - Prometheus metrics endpoint
-- Volume expansion support (`ControllerExpandVolume`, `NodeExpandVolume`)
+- ✅ Volume expansion support (`ControllerExpandVolume`, `NodeExpandVolume`)
+  - ✅ RDS backend resize via `/disk set` command
+  - ✅ Filesystem resize for ext2/ext3/ext4 (resize2fs) and xfs (xfs_growfs)
+  - ✅ EXPAND_VOLUME capability declared for controller and node
+  - ✅ Prevents volume shrinking (expansion only)
+  - ✅ Idempotent operations with proper error handling
 - ✅ Improved error handling:
   - ✅ Retries with exponential backoff (already implemented in SSH client)
   - ✅ Better error messages and audit logging
@@ -404,7 +409,7 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 ---
 
 **Last Updated**: 2025-11-10
-**Current Milestone**: Milestone 5 (Production Readiness) - In Progress
+**Current Milestone**: Milestone 5 (Production Readiness - In Progress)
 **Next Milestone**: Future Enhancements (Post v0.1.0)
 **Completed Milestones**:
 - ✅ Milestone 1 (Foundation) - SSH client, Identity service, build system

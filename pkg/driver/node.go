@@ -397,9 +397,57 @@ func (ns *NodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 	}, nil
 }
 
-// NodeExpandVolume expands a volume (not yet implemented)
+// NodeExpandVolume expands the filesystem on the node after volume expansion
 func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "NodeExpandVolume is not yet implemented")
+	volumeID := req.GetVolumeId()
+	volumePath := req.GetVolumePath()
+
+	klog.V(2).Infof("NodeExpandVolume called for volume: %s, path: %s", volumeID, volumePath)
+
+	// Validate request
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+	if volumePath == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume path is required")
+	}
+
+	// Check if volume path is mounted
+	mounted, err := ns.mounter.IsLikelyMountPoint(volumePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check if volume is mounted: %v", err)
+	}
+	if !mounted {
+		return nil, status.Errorf(codes.FailedPrecondition, "volume path %s is not mounted", volumePath)
+	}
+
+	// Derive NQN from volume ID to get device path
+	nqn, err := volumeIDToNQN(volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to derive NQN from volume ID: %v", err)
+	}
+
+	// Get device path using NVMe connector
+	devicePath, err := ns.nvmeConn.GetDevicePath(nqn)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get device path: %v", err)
+	}
+
+	klog.V(2).Infof("Expanding filesystem on device %s for volume %s", devicePath, volumeID)
+
+	// Resize the filesystem to use the expanded device
+	if err := ns.mounter.ResizeFilesystem(devicePath, volumePath); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resize filesystem: %v", err)
+	}
+
+	// Get updated capacity
+	capacityBytes := req.GetCapacityRange().GetRequiredBytes()
+
+	klog.V(2).Infof("Successfully expanded volume %s filesystem to %d bytes", volumeID, capacityBytes)
+
+	return &csi.NodeExpandVolumeResponse{
+		CapacityBytes: capacityBytes,
+	}, nil
 }
 
 // Helper functions

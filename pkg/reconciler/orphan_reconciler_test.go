@@ -28,6 +28,10 @@ func (m *mockRDSClient) DeleteVolume(slot string) error {
 	return nil
 }
 
+func (m *mockRDSClient) ResizeVolume(slot string, newSizeBytes int64) error {
+	return nil
+}
+
 func (m *mockRDSClient) GetVolume(slot string) (*rds.VolumeInfo, error) {
 	for _, vol := range m.volumes {
 		if vol.Slot == slot {

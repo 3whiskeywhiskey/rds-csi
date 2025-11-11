@@ -333,9 +333,75 @@ func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	return nil, status.Error(codes.Unimplemented, "ListSnapshots is not yet implemented")
 }
 
-// ControllerExpandVolume is not yet implemented
+// ControllerExpandVolume expands a volume on the backend storage
 func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ControllerExpandVolume is not yet implemented")
+	volumeID := req.GetVolumeId()
+	klog.V(2).Infof("ControllerExpandVolume called for volume: %s", volumeID)
+
+	// Validate request
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+
+	// Validate volume ID format
+	if err := utils.ValidateVolumeID(volumeID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
+	}
+
+	// Get required capacity
+	requiredBytes := req.GetCapacityRange().GetRequiredBytes()
+	if requiredBytes == 0 {
+		return nil, status.Error(codes.InvalidArgument, "required capacity is required")
+	}
+
+	// Enforce size limits
+	if requiredBytes < minVolumeSizeBytes {
+		return nil, status.Errorf(codes.OutOfRange, "required bytes %d is less than minimum %d", requiredBytes, minVolumeSizeBytes)
+	}
+
+	limitBytes := req.GetCapacityRange().GetLimitBytes()
+	if limitBytes > 0 && requiredBytes > limitBytes {
+		return nil, status.Errorf(codes.OutOfRange, "required bytes %d exceeds limit bytes %d", requiredBytes, limitBytes)
+	}
+
+	if requiredBytes > maxVolumeSizeBytes {
+		return nil, status.Errorf(codes.OutOfRange, "required bytes %d exceeds maximum %d", requiredBytes, maxVolumeSizeBytes)
+	}
+
+	// Check if volume exists
+	existingVolume, err := cs.driver.rdsClient.GetVolume(volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "volume %s not found: %v", volumeID, err)
+	}
+
+	// Check if expansion is needed
+	if existingVolume.FileSizeBytes >= requiredBytes {
+		klog.V(2).Infof("Volume %s already at or above requested size (%d >= %d), no expansion needed",
+			volumeID, existingVolume.FileSizeBytes, requiredBytes)
+		return &csi.ControllerExpandVolumeResponse{
+			CapacityBytes:         existingVolume.FileSizeBytes,
+			NodeExpansionRequired: false,
+		}, nil
+	}
+
+	// Resize volume on RDS
+	klog.V(2).Infof("Expanding volume %s from %d to %d bytes", volumeID, existingVolume.FileSizeBytes, requiredBytes)
+
+	if err := cs.driver.rdsClient.ResizeVolume(volumeID, requiredBytes); err != nil {
+		// Check if this is a capacity error
+		if containsString(err.Error(), "not enough space") {
+			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS for expansion: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to resize volume on RDS: %v", err)
+	}
+
+	klog.V(2).Infof("Successfully expanded volume %s on RDS to %d bytes", volumeID, requiredBytes)
+
+	// Return response indicating node expansion is required to resize the filesystem
+	return &csi.ControllerExpandVolumeResponse{
+		CapacityBytes:         requiredBytes,
+		NodeExpansionRequired: true,
+	}, nil
 }
 
 // ListVolumes lists all volumes on RDS
