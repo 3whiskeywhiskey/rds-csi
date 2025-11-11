@@ -219,6 +219,36 @@ func (c *sshClient) ListFiles(path string) ([]FileInfo, error) {
 	return files, nil
 }
 
+// DeleteFile deletes a file on RDS
+func (c *sshClient) DeleteFile(path string) error {
+	klog.V(4).Infof("Deleting file: %s", path)
+
+	// SECURITY: Validate path to prevent command injection
+	if err := utils.ValidateFilePath(path); err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	// RouterOS file paths don't include leading /, so strip it if present
+	searchPath := strings.TrimPrefix(path, "/")
+
+	// Build /file remove command
+	cmd := fmt.Sprintf(`/file remove [find name="%s"]`, regexp.QuoteMeta(searchPath))
+
+	// Execute command
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+
+	// RouterOS doesn't return output on successful delete, but check for errors
+	if strings.Contains(strings.ToLower(output), "error") || strings.Contains(strings.ToLower(output), "failure") {
+		return fmt.Errorf("error deleting file: %s", output)
+	}
+
+	klog.V(4).Infof("Successfully deleted file: %s", path)
+	return nil
+}
+
 // parseVolumeInfo parses RouterOS disk print output for a single volume
 func parseVolumeInfo(output string) (*VolumeInfo, error) {
 	volume := &VolumeInfo{}

@@ -323,10 +323,17 @@ func (r *OrphanReconciler) reconcileOrphanedFiles(rdsVolumes []rds.VolumeInfo) (
 			orphan.FileName, orphan.FilePath, orphan.SizeBytes, orphan.CreatedAt)
 
 		if r.config.DryRun {
-			klog.Infof("[DRY-RUN] Orphaned file requires manual cleanup: %s", orphan.FilePath)
-		} else {
-			klog.Warningf("Orphaned file requires manual cleanup: %s (automatic deletion not supported for files without disk objects)", orphan.FilePath)
+			klog.Infof("[DRY-RUN] Would delete orphaned file: %s", orphan.FilePath)
+			continue
 		}
+
+		// Delete the orphaned file
+		if err := r.config.RDSClient.DeleteFile(orphan.FilePath); err != nil {
+			klog.Errorf("Failed to delete orphaned file %s: %v", orphan.FilePath, err)
+			continue
+		}
+
+		klog.Infof("Successfully deleted orphaned file: %s", orphan.FilePath)
 	}
 
 	return orphans, nil

@@ -22,6 +22,7 @@ type RDSClient interface {
 
 	// File operations
 	ListFiles(path string) ([]FileInfo, error)
+	DeleteFile(path string) error
 
 	// Capacity queries
 	GetCapacity(basePath string) (*CapacityInfo, error)

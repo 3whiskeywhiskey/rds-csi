@@ -86,7 +86,7 @@ spec:
             - "-enable-orphan-reconciler"
             - "-orphan-check-interval=1h"
             - "-orphan-grace-period=5m"
-            - "-orphan-dry-run=true"  # Starting with dry-run, set to false to actually delete orphans
+            - "-orphan-dry-run=false"  # Active cleanup mode - will delete orphaned volumes
             - "-v=5"
             # SECURITY: For testing only, you can skip host key verification with:
             # - "-rds-insecure-skip-verify=true"
