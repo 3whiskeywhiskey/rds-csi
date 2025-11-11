@@ -64,6 +64,10 @@ func (m *mockRDSClient) ListFiles(path string) ([]FileInfo, error) {
 	return nil, nil
 }
 
+func (m *mockRDSClient) DeleteFile(path string) error {
+	return nil
+}
+
 func (m *mockRDSClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 	return nil, nil
 }

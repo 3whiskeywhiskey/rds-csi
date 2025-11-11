@@ -16,6 +16,7 @@ type mockRDSClient struct {
 	volumes        []rds.VolumeInfo
 	files          []rds.FileInfo
 	deletedVolumes []string
+	deletedFiles   []string
 }
 
 func (m *mockRDSClient) CreateVolume(opts rds.CreateVolumeOptions) error {
@@ -55,6 +56,11 @@ func (m *mockRDSClient) ListVolumes() ([]rds.VolumeInfo, error) {
 
 func (m *mockRDSClient) ListFiles(path string) ([]rds.FileInfo, error) {
 	return m.files, nil
+}
+
+func (m *mockRDSClient) DeleteFile(path string) error {
+	m.deletedFiles = append(m.deletedFiles, path)
+	return nil
 }
 
 func (m *mockRDSClient) Connect() error {
