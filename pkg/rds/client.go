@@ -20,6 +20,9 @@ type RDSClient interface {
 	VerifyVolumeExists(slot string) error
 	ListVolumes() ([]VolumeInfo, error)
 
+	// File operations
+	ListFiles(path string) ([]FileInfo, error)
+
 	// Capacity queries
 	GetCapacity(basePath string) (*CapacityInfo, error)
 

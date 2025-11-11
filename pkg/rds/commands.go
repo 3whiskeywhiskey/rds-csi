@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/klog/v2"
 
@@ -188,6 +189,35 @@ func (c *sshClient) ListVolumes() ([]VolumeInfo, error) {
 	return volumes, nil
 }
 
+// ListFiles lists files in a directory on RDS
+func (c *sshClient) ListFiles(path string) ([]FileInfo, error) {
+	klog.V(4).Infof("Listing files in %s", path)
+
+	// SECURITY: Validate path to prevent command injection
+	if err := utils.ValidateFilePath(path); err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
+
+	// Build /file print command
+	// Use "where name~" for pattern matching (~ is RouterOS regex match operator)
+	// To list all .img files in a directory, we match files that start with the path
+	cmd := fmt.Sprintf(`/file print detail where name~"^%s"`, regexp.QuoteMeta(path))
+
+	// Execute command
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files: %w", err)
+	}
+
+	// Parse file list
+	files, err := parseFileList(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse file list: %w", err)
+	}
+
+	return files, nil
+}
+
 // parseVolumeInfo parses RouterOS disk print output for a single volume
 func parseVolumeInfo(output string) (*VolumeInfo, error) {
 	volume := &VolumeInfo{}
@@ -326,6 +356,81 @@ func parseCapacityInfo(output string) (*CapacityInfo, error) {
 	}
 
 	return capacity, nil
+}
+
+// parseFileList parses RouterOS file print output for multiple files
+func parseFileList(output string) ([]FileInfo, error) {
+	var files []FileInfo
+
+	// Normalize multi-line output
+	normalized := normalizeRouterOSOutput(output)
+
+	// Split by file entries (each starts with a number)
+	entries := regexp.MustCompile(`(?m)^\s*\d+\s+`).Split(normalized, -1)
+
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+
+		file, err := parseFileInfo(entry)
+		if err != nil {
+			klog.V(4).Infof("Skipping unparseable file entry: %v", err)
+			continue
+		}
+
+		files = append(files, *file)
+	}
+
+	return files, nil
+}
+
+// parseFileInfo parses RouterOS file print output for a single file
+func parseFileInfo(output string) (*FileInfo, error) {
+	file := &FileInfo{}
+
+	// Normalize multi-line output
+	normalized := normalizeRouterOSOutput(output)
+
+	// Extract name (path)
+	if match := regexp.MustCompile(`name="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		file.Path = match[1]
+		// Extract filename from path
+		parts := strings.Split(file.Path, "/")
+		if len(parts) > 0 {
+			file.Name = parts[len(parts)-1]
+		}
+	} else if match := regexp.MustCompile(`name=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		file.Path = match[1]
+		parts := strings.Split(file.Path, "/")
+		if len(parts) > 0 {
+			file.Name = parts[len(parts)-1]
+		}
+	}
+
+	// Extract type
+	if match := regexp.MustCompile(`type="?([^"\s]+)"?`).FindStringSubmatch(normalized); len(match) > 1 {
+		file.Type = match[1]
+	}
+
+	// Extract size (numbers may have spaces like "10 737 418 240")
+	if match := regexp.MustCompile(`size=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		sizeStr := strings.ReplaceAll(match[1], " ", "")
+		if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
+			file.SizeBytes = size
+		}
+	}
+
+	// Extract creation time (if available)
+	// RouterOS format: creation-time=jan/02/2025 10:30:45
+	if match := regexp.MustCompile(`creation-time=(\w+/\d+/\d+\s+\d+:\d+:\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		// Parse RouterOS time format
+		if t, err := time.Parse("jan/02/2006 15:04:05", match[1]); err == nil {
+			file.CreatedAt = t
+		}
+	}
+
+	return file, nil
 }
 
 // validateCreateVolumeOptions validates volume creation options
