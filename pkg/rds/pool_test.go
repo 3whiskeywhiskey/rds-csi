@@ -48,6 +48,10 @@ func (m *mockRDSClient) DeleteVolume(slot string) error {
 	return nil
 }
 
+func (m *mockRDSClient) ResizeVolume(slot string, newSizeBytes int64) error {
+	return nil
+}
+
 func (m *mockRDSClient) GetVolume(slot string) (*VolumeInfo, error) {
 	return nil, nil
 }
