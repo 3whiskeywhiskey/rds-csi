@@ -58,6 +58,18 @@ spec:
       serviceAccountName: rds-csi-controller
       priorityClassName: system-cluster-critical
 
+      # Prefer control-plane nodes to avoid r640 kubelet connectivity issues
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: In
+                    values:
+                      - "true"
+
       # Tolerate control-plane taints
       tolerations:
         - key: node-role.kubernetes.io/control-plane
