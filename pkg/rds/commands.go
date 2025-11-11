@@ -238,7 +238,7 @@ func (c *sshClient) DeleteFile(path string) error {
 	searchPath := strings.TrimPrefix(path, "/")
 
 	// Build /file remove command
-	cmd := fmt.Sprintf(`/file remove [find name="%s"]`, regexp.QuoteMeta(searchPath))
+	cmd := fmt.Sprintf(`/file remove [find name="%s"]`, searchPath)
 
 	// Execute command
 	output, err := c.runCommand(cmd)
