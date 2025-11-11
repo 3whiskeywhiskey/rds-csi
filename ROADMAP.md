@@ -206,7 +206,7 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 
 ---
 
-### Milestone 5: Production Readiness (Weeks 11-12)
+### Milestone 5: Production Readiness (Weeks 11-12) ⚙️ **In Progress**
 
 **Objective**: Harden for production use and create release artifacts
 
@@ -214,17 +214,26 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 - [#21] Create Helm chart
 - [#22] Add monitoring/metrics
 - [#23] Implement volume expansion support
-- [#24] Add comprehensive error handling
+- [#24] Add comprehensive error handling ✅ **Completed**
 - [#25] Create CI/CD workflows (build, test, release)
+- [#26] Implement orphan volume detection and cleanup ✅ **Completed**
 
 **Deliverables**:
 - Helm chart with configurable values
 - Prometheus metrics endpoint
 - Volume expansion support (`ControllerExpandVolume`, `NodeExpandVolume`)
-- Improved error handling:
-  - Retries with exponential backoff
-  - Better error messages
-  - Graceful degradation
+- ✅ Improved error handling:
+  - ✅ Retries with exponential backoff (already implemented in SSH client)
+  - ✅ Better error messages and audit logging
+  - ✅ Graceful degradation and idempotent operations
+  - ✅ Enhanced DeleteVolume with safety checks
+- ✅ Orphan volume reconciliation (pkg/reconciler/):
+  - ✅ Periodic scanning for orphaned volumes (configurable interval)
+  - ✅ Cross-reference RDS volumes with Kubernetes PVs
+  - ✅ Graceful cleanup with configurable grace period
+  - ✅ Dry-run mode for safe validation (default enabled)
+  - ✅ Comprehensive test coverage (11 test cases)
+  - ✅ Documentation in docs/orphan-reconciler.md
 - CI/CD workflows:
   - Lint and test on PRs
   - Build multi-arch images on tag
@@ -236,7 +245,25 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 - Metrics visible in Prometheus
 - Can expand volumes dynamically
 - CI/CD pipeline functional
+- ✅ Orphan detection and cleanup working (dry-run and active modes)
 - Ready for alpha release (v0.1.0)
+
+**Implementation Notes**:
+- **Orphan Reconciler** (2025-11-10):
+  - Addresses storage leaks from test failures, force deletions, and controller crashes
+  - Configurable via flags: `-enable-orphan-reconciler`, `-orphan-check-interval`, `-orphan-grace-period`, `-orphan-dry-run`
+  - Uses in-cluster Kubernetes client to list PVs
+  - Runs in controller pod, no additional deployment required
+  - Only processes CSI-managed volumes (pvc-* prefix)
+  - Includes comprehensive safety features and documentation
+- **Enhanced Error Handling** (2025-11-10):
+  - DeleteVolume now includes safety checks and audit logging
+  - Better idempotent behavior (returns success if volume doesn't exist)
+  - Improved log messages for debugging and troubleshooting
+- **Race Condition Handling**:
+  - SSH client already implements exponential backoff retry (3 retries, 1s/2s/4s)
+  - Distinguishes retryable vs non-retryable errors
+  - Automatic reconnection on connection loss
 
 ---
 
@@ -372,11 +399,12 @@ This document outlines the development phases and timeline for the RDS CSI Drive
 | 2025-11-05 | 1.1 | Milestones 1 & 2 completed, updated status |
 | 2025-11-05 | 1.2 | Milestone 3 completed (Node Service implementation) |
 | 2025-11-06 | 1.3 | Milestone 4 completed (Kubernetes Integration, E2E testing) |
+| 2025-11-10 | 1.4 | Milestone 5 progress: Orphan reconciliation, enhanced error handling |
 
 ---
 
-**Last Updated**: 2025-11-06
-**Current Milestone**: Milestone 5 (Production Readiness)
+**Last Updated**: 2025-11-10
+**Current Milestone**: Milestone 5 (Production Readiness) - In Progress
 **Next Milestone**: Future Enhancements (Post v0.1.0)
 **Completed Milestones**:
 - ✅ Milestone 1 (Foundation) - SSH client, Identity service, build system

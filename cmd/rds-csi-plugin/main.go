@@ -6,10 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	"k8s.io/klog/v2"
+	"time"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -29,6 +32,15 @@ var (
 	// Mode flags
 	controllerMode = flag.Bool("controller", false, "Run in controller mode")
 	nodeMode       = flag.Bool("node", false, "Run in node mode")
+
+	// Orphan reconciler flags
+	enableOrphanReconciler = flag.Bool("enable-orphan-reconciler", false, "Enable orphan volume detection and cleanup")
+	orphanCheckInterval    = flag.Duration("orphan-check-interval", 1*time.Hour, "Interval between orphan checks")
+	orphanGracePeriod      = flag.Duration("orphan-grace-period", 5*time.Minute, "Minimum age before considering a volume orphaned")
+	orphanDryRun           = flag.Bool("orphan-dry-run", true, "Dry-run mode for orphan cleanup (only log, don't delete)")
+
+	// Kubernetes configuration
+	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not specified)")
 
 	// Version flag
 	version = flag.Bool("version", false, "Print version and exit")
@@ -86,18 +98,33 @@ func main() {
 		}
 	}
 
+	// Create Kubernetes client if needed (for orphan reconciler)
+	var k8sClient kubernetes.Interface
+	if *controllerMode && *enableOrphanReconciler {
+		k8sClient, err = createKubernetesClient(*kubeconfig)
+		if err != nil {
+			klog.Fatalf("Failed to create Kubernetes client: %v", err)
+		}
+		klog.Info("Kubernetes client initialized for orphan reconciler")
+	}
+
 	// Create driver configuration
 	config := driver.DriverConfig{
-		DriverName:            *driverName,
-		NodeID:                *nodeID,
-		RDSAddress:            *rdsAddress,
-		RDSPort:               *rdsPort,
-		RDSUser:               *rdsUser,
-		RDSPrivateKey:         privateKey,
-		RDSHostKey:            hostKey,
-		RDSInsecureSkipVerify: *rdsInsecure,
-		EnableController:      *controllerMode,
-		EnableNode:            *nodeMode,
+		DriverName:             *driverName,
+		NodeID:                 *nodeID,
+		RDSAddress:             *rdsAddress,
+		RDSPort:                *rdsPort,
+		RDSUser:                *rdsUser,
+		RDSPrivateKey:          privateKey,
+		RDSHostKey:             hostKey,
+		RDSInsecureSkipVerify:  *rdsInsecure,
+		K8sClient:              k8sClient,
+		EnableOrphanReconciler: *enableOrphanReconciler,
+		OrphanCheckInterval:    *orphanCheckInterval,
+		OrphanGracePeriod:      *orphanGracePeriod,
+		OrphanDryRun:           *orphanDryRun,
+		EnableController:       *controllerMode,
+		EnableNode:             *nodeMode,
 	}
 
 	// Create driver
@@ -126,4 +153,34 @@ func main() {
 
 	// Keep running
 	select {}
+}
+
+// createKubernetesClient creates a Kubernetes client using in-cluster config or kubeconfig file
+func createKubernetesClient(kubeconfigPath string) (kubernetes.Interface, error) {
+	var config *rest.Config
+	var err error
+
+	if kubeconfigPath != "" {
+		// Use kubeconfig file
+		klog.V(2).Infof("Using kubeconfig file: %s", kubeconfigPath)
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build config from kubeconfig: %w", err)
+		}
+	} else {
+		// Use in-cluster config
+		klog.V(2).Info("Using in-cluster Kubernetes config")
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+		}
+	}
+
+	// Create the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
+	}
+
+	return clientset, nil
 }
