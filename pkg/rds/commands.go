@@ -200,8 +200,9 @@ func (c *sshClient) ListFiles(path string) ([]FileInfo, error) {
 
 	// Build /file print command
 	// Use "where name~" for pattern matching (~ is RouterOS regex match operator)
-	// To list all .img files in a directory, we match files that start with the path
-	cmd := fmt.Sprintf(`/file print detail where name~"^%s"`, regexp.QuoteMeta(path))
+	// RouterOS file paths don't include leading /, so strip it if present
+	searchPath := strings.TrimPrefix(path, "/")
+	cmd := fmt.Sprintf(`/file print detail where name~"%s"`, regexp.QuoteMeta(searchPath))
 
 	// Execute command
 	output, err := c.runCommand(cmd)
