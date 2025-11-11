@@ -223,12 +223,18 @@ func (c *sshClient) ListFiles(path string) ([]FileInfo, error) {
 func (c *sshClient) DeleteFile(path string) error {
 	klog.V(4).Infof("Deleting file: %s", path)
 
+	// RouterOS file paths don't include leading /, so add it if missing for validation
+	validationPath := path
+	if !strings.HasPrefix(path, "/") {
+		validationPath = "/" + path
+	}
+
 	// SECURITY: Validate path to prevent command injection
-	if err := utils.ValidateFilePath(path); err != nil {
+	if err := utils.ValidateFilePath(validationPath); err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	// RouterOS file paths don't include leading /, so strip it if present
+	// RouterOS file paths don't include leading /, so strip it for the command
 	searchPath := strings.TrimPrefix(path, "/")
 
 	// Build /file remove command
