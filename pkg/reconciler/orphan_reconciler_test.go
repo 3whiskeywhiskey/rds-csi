@@ -293,6 +293,8 @@ func TestOrphanReconciler_OrphanedFiles(t *testing.T) {
 				{Slot: "pvc-123", FilePath: "/storage-pool/metal-csi/pvc-123.img", FileSizeBytes: 10737418240},
 			},
 			files: []rds.FileInfo{
+				// Note: Mock returns normalized paths (with leading /) as parseFileInfo() would
+				// In production, RouterOS /file print returns paths without /, but parseFileInfo() adds it
 				{Name: "pvc-123.img", Path: "/storage-pool/metal-csi/pvc-123.img", SizeBytes: 10737418240, Type: "file"},
 				{Name: "pvc-orphan1.img", Path: "/storage-pool/metal-csi/pvc-orphan1.img", SizeBytes: 10737418240, Type: "file"},
 				{Name: "pvc-orphan2.img", Path: "/storage-pool/metal-csi/pvc-orphan2.img", SizeBytes: 10737418240, Type: "file"},
@@ -320,6 +322,7 @@ func TestOrphanReconciler_OrphanedFiles(t *testing.T) {
 				{Slot: "pvc-456", FilePath: "/storage-pool/metal-csi/pvc-456.img", FileSizeBytes: 10737418240},
 			},
 			files: []rds.FileInfo{
+				// Mock returns normalized paths as parseFileInfo() would
 				{Name: "pvc-123.img", Path: "/storage-pool/metal-csi/pvc-123.img", SizeBytes: 10737418240, Type: "file"},
 				{Name: "pvc-456.img", Path: "/storage-pool/metal-csi/pvc-456.img", SizeBytes: 10737418240, Type: "file"},
 			},
