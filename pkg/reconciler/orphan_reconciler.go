@@ -186,7 +186,7 @@ func (r *OrphanReconciler) reconcile(ctx context.Context) error {
 	// Reconcile orphaned files (files without disk objects)
 	fileOrphans := []OrphanedFile{}
 	if r.config.BasePath != "" {
-		fileOrphans, err = r.reconcileOrphanedFiles(rdsVolumes)
+		fileOrphans, err = r.reconcileOrphanedFiles(rdsVolumes, activeVolumeIDs)
 		if err != nil {
 			klog.Errorf("Failed to reconcile orphaned files: %v", err)
 		}
@@ -265,8 +265,8 @@ func (r *OrphanReconciler) reconcileOrphanedDisks(rdsVolumes []rds.VolumeInfo, a
 	return orphans
 }
 
-// reconcileOrphanedFiles identifies orphaned files (files without disk objects)
-func (r *OrphanReconciler) reconcileOrphanedFiles(rdsVolumes []rds.VolumeInfo) ([]OrphanedFile, error) {
+// reconcileOrphanedFiles identifies orphaned files (files without disk objects AND without PVs)
+func (r *OrphanReconciler) reconcileOrphanedFiles(rdsVolumes []rds.VolumeInfo, activeVolumeIDs map[string]bool) ([]OrphanedFile, error) {
 	klog.V(3).Infof("Checking for orphaned files in %s", r.config.BasePath)
 
 	// Get all files in the base path
@@ -298,7 +298,16 @@ func (r *OrphanReconciler) reconcileOrphanedFiles(rdsVolumes []rds.VolumeInfo) (
 			continue
 		}
 
-		// File appears to be orphaned
+		// Extract volume ID from file name (e.g., "pvc-xxx.img" -> "pvc-xxx")
+		volumeID := strings.TrimSuffix(file.Name, ".img")
+
+		// Skip if this file is referenced by an active PV
+		if activeVolumeIDs[volumeID] {
+			klog.V(5).Infof("File %s is referenced by active PV %s (missing disk object)", file.Path, volumeID)
+			continue
+		}
+
+		// File appears to be orphaned (no disk object AND no PV)
 		orphan := OrphanedFile{
 			FileName:  file.Name,
 			FilePath:  file.Path,
