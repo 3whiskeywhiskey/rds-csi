@@ -21,7 +21,8 @@ type MockRDSServer struct {
 	port     int
 	listener net.Listener
 	config   *ssh.ServerConfig
-	volumes  map[string]*MockVolume
+	volumes  map[string]*MockVolume // Disk objects indexed by slot
+	files    map[string]*MockFile   // Files indexed by path
 	mu       sync.RWMutex
 	shutdown chan struct{}
 }
@@ -34,6 +35,14 @@ type MockVolume struct {
 	NVMETCPPort   int
 	NVMETCPNQN    string
 	Exported      bool
+}
+
+// MockFile represents a file on the mock RDS filesystem
+type MockFile struct {
+	Path      string
+	SizeBytes int64
+	Type      string
+	CreatedAt string
 }
 
 // NewMockRDSServer creates a new mock RDS server for testing
@@ -55,6 +64,7 @@ func NewMockRDSServer(port int) (*MockRDSServer, error) {
 		port:     port,
 		config:   config,
 		volumes:  make(map[string]*MockVolume),
+		files:    make(map[string]*MockFile),
 		shutdown: make(chan struct{}),
 	}
 
@@ -113,6 +123,59 @@ func (s *MockRDSServer) ListVolumes() []*MockVolume {
 		volumes = append(volumes, vol)
 	}
 	return volumes
+}
+
+// GetFile returns a file by path
+func (s *MockRDSServer) GetFile(path string) (*MockFile, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	file, ok := s.files[path]
+	return file, ok
+}
+
+// ListFiles returns all files
+func (s *MockRDSServer) ListFiles() []*MockFile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	files := make([]*MockFile, 0, len(s.files))
+	for _, file := range s.files {
+		files = append(files, file)
+	}
+	return files
+}
+
+// CreateOrphanedFile creates a file without a corresponding disk object (for testing)
+func (s *MockRDSServer) CreateOrphanedFile(path string, sizeBytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files[path] = &MockFile{
+		Path:      path,
+		SizeBytes: sizeBytes,
+		Type:      ".img",
+		CreatedAt: "2025-11-11 12:00:00",
+	}
+}
+
+// CreateOrphanedVolume creates a disk object without a file (for testing)
+func (s *MockRDSServer) CreateOrphanedVolume(slot, filePath string, sizeBytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Create volume but DON'T create the backing file
+	s.volumes[slot] = &MockVolume{
+		Slot:          slot,
+		FilePath:      filePath,
+		FileSizeBytes: sizeBytes,
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", slot),
+		Exported:      true,
+	}
+}
+
+// DeleteFile deletes a file (for testing cleanup scenarios)
+func (s *MockRDSServer) DeleteFile(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.files, path)
 }
 
 func (s *MockRDSServer) acceptConnections() {
@@ -250,6 +313,13 @@ func (s *MockRDSServer) executeCommand(command string) (string, int) {
 		return output, code
 	}
 
+	// Parse /file remove command
+	if strings.HasPrefix(command, "/file remove") {
+		output, code := s.handleFileRemove(command)
+		klog.V(3).Infof("Mock RDS /file remove returned code %d", code)
+		return output, code
+	}
+
 	klog.Warningf("Mock RDS: Unrecognized command: %s", command)
 	return fmt.Sprintf("bad command name %s\n", command), 1
 }
@@ -299,7 +369,15 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 		Exported:      true,
 	}
 
-	klog.V(2).Infof("Mock RDS: Created volume %s", slot)
+	// Also create the backing file (simulating real RDS behavior)
+	s.files[filePath] = &MockFile{
+		Path:      filePath,
+		SizeBytes: fileSize,
+		Type:      ".img",
+		CreatedAt: "2025-11-11 12:00:00",
+	}
+
+	klog.V(2).Infof("Mock RDS: Created volume %s with backing file %s", slot, filePath)
 	return "", 0
 }
 
@@ -317,13 +395,25 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.volumes[slot]; !exists {
+	vol, exists := s.volumes[slot]
+	if !exists {
 		// Idempotent - not an error if volume doesn't exist
 		return "", 0
 	}
 
+	// Delete the disk object
 	delete(s.volumes, slot)
-	klog.V(2).Infof("Mock RDS: Deleted volume %s", slot)
+
+	// Also delete the backing file (simulating normal RDS behavior)
+	// Note: In some failure scenarios, the file might remain (orphaned)
+	// Tests can use DeleteFile() separately to simulate this
+	if vol.FilePath != "" {
+		delete(s.files, vol.FilePath)
+		klog.V(2).Infof("Mock RDS: Deleted volume %s and backing file %s", slot, vol.FilePath)
+	} else {
+		klog.V(2).Infof("Mock RDS: Deleted volume %s (no backing file)", slot)
+	}
+
 	return "", 0
 }
 
@@ -381,16 +471,103 @@ func (s *MockRDSServer) formatDiskDetail(vol *MockVolume) string {
 }
 
 func (s *MockRDSServer) handleFilePrintDetail(command string) (string, int) {
-	// Simulate filesystem capacity
-	// Parse: /file print detail where name="/storage-pool"
+	// Parse: /file print detail where name~"storage-pool/metal-csi"
+	// Extract the search pattern
+	re := regexp.MustCompile(`name~"([^"]+)"`)
+	matches := re.FindStringSubmatch(command)
 
-	output := `Name: /storage-pool
-Type: directory
-Size: 0
-Total: 7.23TiB
-Free: 5.42TiB
-`
-	return output, 0
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(matches) < 2 {
+		// No pattern specified, return all files (shouldn't happen in practice)
+		return "", 0
+	}
+
+	pattern := matches[1]
+	klog.V(4).Infof("Mock RDS: Listing files matching pattern: %s", pattern)
+
+	// Find all files matching the pattern
+	var output strings.Builder
+	i := 0
+
+	// Always include the directory entry first (if pattern matches)
+	if strings.Contains(pattern, "/") {
+		dirPath := "/" + pattern
+		output.WriteString(fmt.Sprintf(" %d   name=%s type=directory\n", i, dirPath))
+		output.WriteString(fmt.Sprintf("     last-modified=2025-11-11 16:47:07\n\n"))
+		i++
+	}
+
+	// Then list all matching files
+	for path, file := range s.files {
+		// Check if file path matches the pattern (simple substring match)
+		if !strings.Contains(path, pattern) {
+			continue
+		}
+
+		// Format size with units (matching RouterOS format)
+		sizeStr := formatSizeWithUnits(file.SizeBytes)
+
+		output.WriteString(fmt.Sprintf(" %d   name=%s\n", i, strings.TrimPrefix(path, "/")))
+		output.WriteString(fmt.Sprintf("     type=%s file size=%s last-modified=%s\n\n",
+			file.Type, sizeStr, file.CreatedAt))
+		i++
+	}
+
+	return output.String(), 0
+}
+
+// formatSizeWithUnits formats bytes as human-readable size (e.g., "10.0GiB", "1024.0MiB")
+func formatSizeWithUnits(bytes int64) string {
+	const (
+		KiB = 1024
+		MiB = 1024 * KiB
+		GiB = 1024 * MiB
+		TiB = 1024 * GiB
+	)
+
+	switch {
+	case bytes >= TiB:
+		return fmt.Sprintf("%.1fTiB", float64(bytes)/float64(TiB))
+	case bytes >= GiB:
+		return fmt.Sprintf("%.1fGiB", float64(bytes)/float64(GiB))
+	case bytes >= MiB:
+		return fmt.Sprintf("%.1fMiB", float64(bytes)/float64(MiB))
+	case bytes >= KiB:
+		return fmt.Sprintf("%.1fKiB", float64(bytes)/float64(KiB))
+	default:
+		return fmt.Sprintf("%d", bytes)
+	}
+}
+
+func (s *MockRDSServer) handleFileRemove(command string) (string, int) {
+	// Parse: /file remove [find name="storage-pool/metal-csi/pvc-123.img"]
+	re := regexp.MustCompile(`name="([^"]+)"`)
+	matches := re.FindStringSubmatch(command)
+
+	if len(matches) < 2 {
+		return "failure: invalid command format\n", 1
+	}
+
+	// RouterOS file paths don't have leading slash, but we normalize to have it
+	filePath := matches[1]
+	if !strings.HasPrefix(filePath, "/") {
+		filePath = "/" + filePath
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.files[filePath]; !exists {
+		// Idempotent - not an error if file doesn't exist
+		klog.V(3).Infof("Mock RDS: File %s not found (idempotent)", filePath)
+		return "", 0
+	}
+
+	delete(s.files, filePath)
+	klog.V(2).Infof("Mock RDS: Deleted file %s", filePath)
+	return "", 0
 }
 
 func (s *MockRDSServer) formatMountPointCapacity() string {
