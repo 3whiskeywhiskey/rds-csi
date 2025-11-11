@@ -222,11 +222,12 @@ func (c *sshClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 }
 
 // ListVolumes lists all volumes on RDS
+// ONLY volumes that are pvc- prefixed are returned
 func (c *sshClient) ListVolumes() ([]VolumeInfo, error) {
 	klog.V(4).Info("Listing all volumes")
 
 	// Build /disk print command
-	cmd := `/disk print detail`
+	cmd := `/disk print detail where slot~"pvc"`
 
 	// Execute command
 	output, err := c.runCommand(cmd)
