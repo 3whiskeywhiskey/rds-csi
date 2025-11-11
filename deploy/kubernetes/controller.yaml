@@ -19,10 +19,9 @@ stringData:
     i+W2kJyDFWDJJT1ctXflAAAACW1ldGFsLWNzaQECAwQ=
     -----END OPENSSH PRIVATE KEY-----
   # RDS SSH host public key (for host key verification)
-  # Replace this with your RDS server's actual public host key
-  # Get it with: ssh-keyscan -t ed25519 <rds-ip> 2>/dev/null | cut -d' ' -f2-
-  rds-host-key: |
-    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJnKnXilN1234567890abcdefghijklmnopqrstvuwxyz
+  # Replace this with your RDS server's actual host public key
+  # Get it with: ssh-keyscan -t rsa <rds-ip> 2>/dev/null | cut -d' ' -f2-
+  rds-host-key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDOtvaRLS0WYMhmf7HrF306T9uFioTMMSqyoNYhQSRVPo1TUQCafgc//auEWK9NOUxML9zkleFEYEBHkrCFimRh9L/gsfszN/FZLZdF94cA/uKhzdlZJoqOfo+hyn4lXcSwKjCXwYcXI1e2zY53RMZEyChoXVG7rryp615mYRABihwc3rJiIGIb4UZGlKc6Svw+AMGV6P3PhyRJfT4P1fxrJGLUyUvHVXrn0HpM8eoz9ExamZP1iSFk2z3MOqoWd8wqfE8A/KoWNYexhOJ5ywgsqOm84lTauhtHsF4QFqBcZ5taOthbOVcdQpv8iZJYN1DYSc3BXhPA7jjSE5PrHRhh"
 ---
 # ConfigMap for RDS connection settings
 apiVersion: v1
@@ -71,7 +70,7 @@ spec:
       containers:
         # RDS CSI Driver Controller
         - name: rds-csi-driver
-          image: ghcr.io/3whiskeywhiskey/rds-csi-driver:latest
+          image: ghcr.io/3whiskeywhiskey/rds-csi:dev
           imagePullPolicy: Always
           args:
             - "-endpoint=$(CSI_ENDPOINT)"
@@ -82,11 +81,12 @@ spec:
             - "-rds-user=$(RDS_USER)"
             - "-rds-key-file=/etc/rds-csi/rds-private-key"
             - "-rds-host-key=/etc/rds-csi/rds-host-key"
+            - "-rds-volume-base-path=$(RDS_VOLUME_BASE_PATH)"
             # Orphan reconciler settings (optional - enable to detect and cleanup orphaned volumes)
-            # - "-enable-orphan-reconciler"
-            # - "-orphan-check-interval=1h"
-            # - "-orphan-grace-period=5m"
-            # - "-orphan-dry-run=false"  # Set to false to actually delete orphans
+            - "-enable-orphan-reconciler"
+            - "-orphan-check-interval=1h"
+            - "-orphan-grace-period=5m"
+            - "-orphan-dry-run=true"  # Starting with dry-run, set to false to actually delete orphans
             - "-v=5"
             # SECURITY: For testing only, you can skip host key verification with:
             # - "-rds-insecure-skip-verify=true"
