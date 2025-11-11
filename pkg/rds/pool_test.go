@@ -60,6 +60,10 @@ func (m *mockRDSClient) ListVolumes() ([]VolumeInfo, error) {
 	return nil, nil
 }
 
+func (m *mockRDSClient) ListFiles(path string) ([]FileInfo, error) {
+	return nil, nil
+}
+
 func (m *mockRDSClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 	return nil, nil
 }
