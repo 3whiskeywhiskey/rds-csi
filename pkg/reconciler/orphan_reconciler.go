@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 )
 
 const (

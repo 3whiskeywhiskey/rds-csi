@@ -506,8 +506,14 @@ func parseFileInfo(output string) (*FileInfo, error) {
 		file.Type = match[1]
 	}
 
-	// Extract size (numbers may have spaces like "10 737 418 240")
-	if match := regexp.MustCompile(`size=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+	// Extract size from "file size=X.XGiB" (human-readable) or "size=NNN NNN NNN" (raw bytes)
+	// Try human-readable format first (e.g., "file size=10.0GiB")
+	if match := regexp.MustCompile(`file size=([\d.]+)\s*([KMGT]i?B)`).FindStringSubmatch(normalized); len(match) > 2 {
+		if bytes, err := parseSize(match[1], match[2]); err == nil {
+			file.SizeBytes = bytes
+		}
+	} else if match := regexp.MustCompile(`size=([\d\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		// Fallback to raw bytes format (numbers may have spaces like "10 737 418 240")
 		sizeStr := strings.ReplaceAll(match[1], " ", "")
 		if size, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
 			file.SizeBytes = size

@@ -342,3 +342,130 @@ func TestValidateCreateVolumeOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFileInfo_FileSizeFormats(t *testing.T) {
+	tests := []struct {
+		name         string
+		output       string
+		expectedSize int64
+		expectError  bool
+	}{
+		{
+			name: "file size in GiB",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    file size=10.0GiB last-modified=2025-11-11 14:32:41`,
+			expectedSize: 10 * 1024 * 1024 * 1024,
+			expectError:  false,
+		},
+		{
+			name: "file size in MiB",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    file size=1024.0MiB last-modified=2025-11-11 14:32:41`,
+			expectedSize: 1024 * 1024 * 1024,
+			expectError:  false,
+		},
+		{
+			name: "file size in TiB",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    file size=5.5TiB last-modified=2025-11-11 14:32:41`,
+			expectedSize: int64(5.5 * 1024 * 1024 * 1024 * 1024),
+			expectError:  false,
+		},
+		{
+			name: "file size in KiB",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    file size=512.0KiB last-modified=2025-11-11 14:32:41`,
+			expectedSize: 512 * 1024,
+			expectError:  false,
+		},
+		{
+			name: "raw size with spaces (fallback)",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    size=10 737 418 240 last-modified=2025-11-11 14:32:41`,
+			expectedSize: 10737418240,
+			expectError:  false,
+		},
+		{
+			name: "file size with GB (not GiB)",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    file size=50GB last-modified=2025-11-11 14:32:41`,
+			expectedSize: 50 * 1024 * 1024 * 1024, // parseSize treats GB as GiB
+			expectError:  false,
+		},
+		{
+			name: "small file size",
+			output: `name=storage-pool/metal-csi/test.img type=.img
+                    file size=100.0MiB last-modified=2025-11-11 14:32:41`,
+			expectedSize: 100 * 1024 * 1024,
+			expectError:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := parseFileInfo(tt.output)
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			// Allow 1 MB tolerance for floating point calculations
+			diff := file.SizeBytes - tt.expectedSize
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > 1024*1024 {
+				t.Errorf("Expected size %d bytes, got %d bytes (diff: %d)",
+					tt.expectedSize, file.SizeBytes, diff)
+			}
+		})
+	}
+}
+
+func TestParseFileList_MultipleFiles(t *testing.T) {
+	output := ` 0   name=storage-pool/metal-csi type=directory
+     last-modified=2025-11-11 16:47:07
+
+ 1   name=storage-pool/metal-csi/pvc-ccdecfad-a8bf-572e-9120-464c4d99f12f.img
+     type=.img file size=10.0GiB last-modified=2025-11-11 14:32:41
+
+ 2   name=storage-pool/metal-csi/pvc-0f923194-922a-5dd8-b376-c2c6ccb56dd8.img
+     type=.img file size=1024.0MiB last-modified=2025-11-11 16:47:07`
+
+	files, err := parseFileList(output)
+	if err != nil {
+		t.Fatalf("parseFileList failed: %v", err)
+	}
+
+	// Should find 2 .img files (directory is also parsed but that's ok)
+	imgFiles := 0
+	for _, file := range files {
+		if file.Type == ".img" {
+			imgFiles++
+
+			// Verify sizes are parsed correctly
+			switch file.Name {
+			case "pvc-ccdecfad-a8bf-572e-9120-464c4d99f12f.img":
+				expectedSize := int64(10 * 1024 * 1024 * 1024)
+				if file.SizeBytes != expectedSize {
+					t.Errorf("File 1: expected size %d, got %d", expectedSize, file.SizeBytes)
+				}
+			case "pvc-0f923194-922a-5dd8-b376-c2c6ccb56dd8.img":
+				expectedSize := int64(1024 * 1024 * 1024)
+				if file.SizeBytes != expectedSize {
+					t.Errorf("File 2: expected size %d, got %d", expectedSize, file.SizeBytes)
+				}
+			}
+		}
+	}
+
+	if imgFiles != 2 {
+		t.Errorf("Expected 2 .img files, found %d", imgFiles)
+	}
+}
