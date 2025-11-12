@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
@@ -171,15 +172,28 @@ func (r *OrphanReconciler) reconcile(ctx context.Context) error {
 
 	// Build a map of active volume IDs from Kubernetes PVs
 	activeVolumeIDs := make(map[string]bool)
+	klog.V(3).Infof("Scanning %d PersistentVolumes in Kubernetes", len(pvList.Items))
 	for _, pv := range pvList.Items {
 		// Only consider PVs from this CSI driver
 		if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == "rds.csi.srvlab.io" {
 			volumeID := pv.Spec.CSI.VolumeHandle
 			activeVolumeIDs[volumeID] = true
+			klog.V(3).Infof("  Found active PV: %s → VolumeHandle=%s, Phase=%s, ClaimRef=%s/%s",
+				pv.Name, volumeID, pv.Status.Phase,
+				getNamespace(pv.Spec.ClaimRef), getName(pv.Spec.ClaimRef))
 		}
 	}
 
-	klog.V(3).Infof("Found %d volumes in RDS, %d active PVs in Kubernetes", len(rdsVolumes), len(activeVolumeIDs))
+	klog.Infof("Orphan reconciliation: %d volumes in RDS, %d active PVs in Kubernetes", len(rdsVolumes), len(activeVolumeIDs))
+
+	// Log all RDS volumes for visibility
+	for _, vol := range rdsVolumes {
+		if strings.HasPrefix(vol.Slot, VolumeIDPrefix) {
+			hasActivePV := activeVolumeIDs[vol.Slot]
+			klog.V(3).Infof("  RDS volume: %s (size=%d bytes, path=%s, hasActivePV=%v)",
+				vol.Slot, vol.FileSizeBytes, vol.FilePath, hasActivePV)
+		}
+	}
 
 	// Reconcile orphaned disk objects (volumes without PVs)
 	diskOrphans := r.reconcileOrphanedDisks(rdsVolumes, activeVolumeIDs)
@@ -204,18 +218,22 @@ func (r *OrphanReconciler) reconcile(ctx context.Context) error {
 func (r *OrphanReconciler) reconcileOrphanedDisks(rdsVolumes []rds.VolumeInfo, activeVolumeIDs map[string]bool) []OrphanedVolume {
 	orphans := []OrphanedVolume{}
 
+	klog.V(3).Infof("Checking %d RDS volumes for orphans (CSI-managed volumes must start with '%s')", len(rdsVolumes), VolumeIDPrefix)
+
 	for _, vol := range rdsVolumes {
 		// Skip volumes that don't match our CSI-managed pattern
 		if !strings.HasPrefix(vol.Slot, VolumeIDPrefix) {
-			klog.V(5).Infof("Skipping non-CSI volume: %s", vol.Slot)
+			klog.V(5).Infof("  Skipping non-CSI volume: %s (does not start with '%s')", vol.Slot, VolumeIDPrefix)
 			continue
 		}
 
 		// Check if this volume has a corresponding PV
 		if activeVolumeIDs[vol.Slot] {
-			klog.V(5).Infof("Volume %s has active PV", vol.Slot)
+			klog.V(4).Infof("  Volume %s: HAS active PV - keeping", vol.Slot)
 			continue
 		}
+
+		klog.V(4).Infof("  Volume %s: NO active PV - marking as orphan candidate", vol.Slot)
 
 		// Volume appears to be orphaned
 		// Note: We can't get creation time from RDS, so we'll use grace period
@@ -366,4 +384,25 @@ func (r *OrphanReconciler) TriggerReconciliation(ctx context.Context) error {
 		return fmt.Errorf("reconciler is disabled")
 	}
 	return r.reconcile(ctx)
+}
+
+// Helper functions for safe access to ObjectReference fields
+func getNamespace(ref *v1.ObjectReference) string {
+	if ref == nil {
+		return "<none>"
+	}
+	if ref.Namespace == "" {
+		return "<none>"
+	}
+	return ref.Namespace
+}
+
+func getName(ref *v1.ObjectReference) string {
+	if ref == nil {
+		return "<none>"
+	}
+	if ref.Name == "" {
+		return "<none>"
+	}
+	return ref.Name
 }
