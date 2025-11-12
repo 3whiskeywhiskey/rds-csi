@@ -85,9 +85,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.OutOfRange, "required bytes %d exceeds maximum %d", requiredBytes, maxVolumeSizeBytes)
 	}
 
-	// Generate deterministic volume ID from volume name (for idempotency)
-	volumeID := utils.VolumeNameToID(req.GetName())
-	klog.V(2).Infof("Generated volume ID: %s for volume name: %s", volumeID, req.GetName())
+	// Use the volume name directly as the volume ID
+	// The external-provisioner passes the PV name (pvc-<uuid>) which is already unique and deterministic
+	volumeID := req.GetName()
+
+	// Validate the volume ID format
+	if err := utils.ValidateVolumeID(volumeID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume name format: %v", err)
+	}
+	klog.V(2).Infof("Using volume ID: %s (from volume name: %s)", volumeID, req.GetName())
 
 	// Check if volume already exists (idempotency)
 	existingVolume, err := cs.driver.rdsClient.GetVolume(volumeID)
