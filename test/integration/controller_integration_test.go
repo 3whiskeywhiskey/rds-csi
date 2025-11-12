@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -65,7 +64,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 
 	t.Run("CreateVolume_Success", func(t *testing.T) {
 		req := &csi.CreateVolumeRequest{
-			Name: "test-volume-1",
+			Name: "pvc-11111111-1111-1111-1111-111111111111",
 			CapacityRange: &csi.CapacityRange{
 				RequiredBytes: 1073741824, // 1 GiB
 			},
@@ -115,7 +114,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	t.Run("CreateVolume_Idempotency", func(t *testing.T) {
 		// Create volume first time
 		req := &csi.CreateVolumeRequest{
-			Name: "test-volume-2",
+			Name: "pvc-22222222-2222-2222-2222-222222222222",
 			CapacityRange: &csi.CapacityRange{
 				RequiredBytes: 2147483648, // 2 GiB
 			},
@@ -167,7 +166,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	t.Run("DeleteVolume_Success", func(t *testing.T) {
 		// First create a volume
 		createReq := &csi.CreateVolumeRequest{
-			Name: "test-volume-delete",
+			Name: "pvc-33333333-3333-3333-3333-333333333333",
 			CapacityRange: &csi.CapacityRange{
 				RequiredBytes: 1073741824,
 			},
@@ -247,7 +246,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	t.Run("ValidateVolumeCapabilities_Success", func(t *testing.T) {
 		// First create a volume
 		createReq := &csi.CreateVolumeRequest{
-			Name: "test-volume-validate",
+			Name: "pvc-44444444-4444-4444-4444-444444444444",
 			CapacityRange: &csi.CapacityRange{
 				RequiredBytes: 1073741824,
 			},
@@ -300,7 +299,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 	t.Run("ValidateVolumeCapabilities_Unsupported", func(t *testing.T) {
 		// Create a volume first
 		createReq := &csi.CreateVolumeRequest{
-			Name: "test-volume-unsupported",
+			Name: "pvc-55555555-5555-5555-5555-555555555555",
 			CapacityRange: &csi.CapacityRange{
 				RequiredBytes: 1073741824,
 			},
@@ -356,9 +355,14 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 
 	t.Run("ListVolumes_Success", func(t *testing.T) {
 		// Create a few volumes
-		for i := 0; i < 3; i++ {
+		volumeNames := []string{
+			"pvc-66666666-6666-6666-6666-666666666666",
+			"pvc-77777777-7777-7777-7777-777777777777",
+			"pvc-88888888-8888-8888-8888-888888888888",
+		}
+		for _, name := range volumeNames {
 			createReq := &csi.CreateVolumeRequest{
-				Name: fmt.Sprintf("test-volume-list-%d", i),
+				Name: name,
 				CapacityRange: &csi.CapacityRange{
 					RequiredBytes: 1073741824,
 				},
@@ -396,7 +400,7 @@ func TestControllerIntegrationWithMockRDS(t *testing.T) {
 
 	t.Run("CreateVolume_InvalidCapabilities", func(t *testing.T) {
 		req := &csi.CreateVolumeRequest{
-			Name: "test-volume-invalid",
+			Name: "pvc-99999999-9999-9999-9999-999999999999",
 			CapacityRange: &csi.CapacityRange{
 				RequiredBytes: 1073741824,
 			},
