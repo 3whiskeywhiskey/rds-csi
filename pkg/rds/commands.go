@@ -347,12 +347,18 @@ func parseVolumeInfo(output string) (*VolumeInfo, error) {
 		volume.Type = match[1]
 	}
 
-	// Extract file-path (can be quoted or with equals sign in path)
-	// Match: file-path=/path/to/file.img or file-path="/path/to/file.img"
-	if match := regexp.MustCompile(`file-path=([^\s]+\.img)`).FindStringSubmatch(normalized); len(match) > 1 {
+	// Extract file-path (can be quoted or span multiple lines after normalization)
+	// RouterOS output often splits long paths across lines, which normalizeRouterOSOutput
+	// joins with spaces. We need to handle: file-path=/path/to/pvc-xxx .img (with space)
+	if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		volume.FilePath = match[1]
-	} else if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+	} else if match := regexp.MustCompile(`file-path=(\S+\.img)`).FindStringSubmatch(normalized); len(match) > 1 {
+		// Simple case: path doesn't have spaces
 		volume.FilePath = match[1]
+	} else if match := regexp.MustCompile(`file-path=(\S+\s+\S+\.img)`).FindStringSubmatch(normalized); len(match) > 1 {
+		// Path was split across lines and has a space after normalization
+		// Remove the space to reconstruct the original path
+		volume.FilePath = strings.ReplaceAll(match[1], " ", "")
 	}
 	// Normalize to absolute path format
 	if volume.FilePath != "" && !strings.HasPrefix(volume.FilePath, "/") {
