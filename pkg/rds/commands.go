@@ -103,7 +103,7 @@ func (c *sshClient) ResizeVolume(slot string, newSizeBytes int64) error {
 	return nil
 }
 
-// DeleteVolume removes a volume from RDS
+// DeleteVolume removes a volume from RDS, including both the disk slot and backing file
 func (c *sshClient) DeleteVolume(slot string) error {
 	klog.V(2).Infof("Deleting volume %s", slot)
 
@@ -112,18 +112,42 @@ func (c *sshClient) DeleteVolume(slot string) error {
 		return err
 	}
 
-	// Build /disk remove command
-	cmd := fmt.Sprintf(`/disk remove [find slot=%s]`, slot)
-
-	// Execute command with retry
-	_, err := c.runCommandWithRetry(cmd, 3)
+	// Get volume info first to find the backing file path
+	volume, err := c.GetVolume(slot)
 	if err != nil {
 		// If volume doesn't exist, that's okay (idempotent)
-		if strings.Contains(err.Error(), "no such item") {
+		if strings.Contains(err.Error(), "not found") {
 			klog.V(3).Infof("Volume %s does not exist, skipping deletion", slot)
 			return nil
 		}
-		return fmt.Errorf("failed to delete volume: %w", err)
+		return fmt.Errorf("failed to get volume info before deletion: %w", err)
+	}
+
+	filePath := volume.FilePath
+	klog.V(3).Infof("Volume %s has backing file: %s", slot, filePath)
+
+	// Step 1: Remove the disk slot
+	cmd := fmt.Sprintf(`/disk remove [find slot=%s]`, slot)
+	_, err = c.runCommandWithRetry(cmd, 3)
+	if err != nil {
+		// If volume doesn't exist, that's okay (idempotent)
+		if strings.Contains(err.Error(), "no such item") {
+			klog.V(3).Infof("Volume %s disk slot does not exist, continuing to file cleanup", slot)
+		} else {
+			return fmt.Errorf("failed to remove disk slot: %w", err)
+		}
+	}
+	klog.V(3).Infof("Successfully removed disk slot for volume %s", slot)
+
+	// Step 2: Delete the backing file
+	if filePath != "" {
+		if err := c.DeleteFile(filePath); err != nil {
+			// Log but don't fail - the disk slot is already removed
+			// The orphan reconciler can clean up the file later if needed
+			klog.Warningf("Failed to delete backing file %s for volume %s: %v", filePath, slot, err)
+		} else {
+			klog.V(3).Infof("Successfully deleted backing file %s for volume %s", filePath, slot)
+		}
 	}
 
 	klog.V(2).Infof("Successfully deleted volume %s", slot)
