@@ -469,3 +469,128 @@ func TestParseFileList_MultipleFiles(t *testing.T) {
 		t.Errorf("Expected 2 .img files, found %d", imgFiles)
 	}
 }
+
+func TestParseRouterOSTime(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedYear int
+		expectedDay  int
+		expectZero   bool
+	}{
+		{
+			name:         "ISO format with last-modified",
+			input:        `name=test.img type=file last-modified=2025-11-12 00:36:13`,
+			expectedYear: 2025,
+			expectedDay:  12,
+			expectZero:   false,
+		},
+		{
+			name:         "ISO format with creation-time",
+			input:        `name=test.img type=file creation-time=2025-12-25 10:30:45`,
+			expectedYear: 2025,
+			expectedDay:  25,
+			expectZero:   false,
+		},
+		{
+			name:         "RouterOS month format with creation-time",
+			input:        `name=test.img type=file creation-time=jan/02/2025 00:00:00`,
+			expectedYear: 2025,
+			expectedDay:  2,
+			expectZero:   false,
+		},
+		{
+			name:         "RouterOS month format with last-modified",
+			input:        `name=test.img type=file last-modified=nov/15/2025 14:32:41`,
+			expectedYear: 2025,
+			expectedDay:  15,
+			expectZero:   false,
+		},
+		{
+			name:       "no time field",
+			input:      `name=test.img type=file size=1024`,
+			expectZero: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseRouterOSTime(tt.input)
+
+			if tt.expectZero {
+				if !result.IsZero() {
+					t.Errorf("Expected zero time, got %v", result)
+				}
+				return
+			}
+
+			if result.IsZero() {
+				t.Errorf("Expected non-zero time, got zero")
+				return
+			}
+
+			if result.Year() != tt.expectedYear {
+				t.Errorf("Expected year %d, got %d", tt.expectedYear, result.Year())
+			}
+
+			if result.Day() != tt.expectedDay {
+				t.Errorf("Expected day %d, got %d", tt.expectedDay, result.Day())
+			}
+		})
+	}
+}
+
+func TestParseFileInfo_CreatedAtParsing(t *testing.T) {
+	tests := []struct {
+		name         string
+		output       string
+		expectedYear int
+		expectZero   bool
+	}{
+		{
+			name: "ISO format last-modified",
+			output: `name=storage-pool/metal-csi/pvc-test.img type=.img
+                    file size=10.0GiB last-modified=2025-11-12 00:36:13`,
+			expectedYear: 2025,
+			expectZero:   false,
+		},
+		{
+			name: "RouterOS format creation-time",
+			output: `name=storage-pool/metal-csi/pvc-test.img type=.img
+                    file size=10.0GiB creation-time=jan/01/2025 00:00:00`,
+			expectedYear: 2025,
+			expectZero:   false,
+		},
+		{
+			name: "no time field",
+			output: `name=storage-pool/metal-csi/pvc-test.img type=.img
+                    file size=10.0GiB`,
+			expectZero: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := parseFileInfo(tt.output)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if tt.expectZero {
+				if !file.CreatedAt.IsZero() {
+					t.Errorf("Expected zero CreatedAt, got %v", file.CreatedAt)
+				}
+				return
+			}
+
+			if file.CreatedAt.IsZero() {
+				t.Errorf("Expected non-zero CreatedAt, got zero time")
+				return
+			}
+
+			if file.CreatedAt.Year() != tt.expectedYear {
+				t.Errorf("Expected year %d, got %d", tt.expectedYear, file.CreatedAt.Year())
+			}
+		})
+	}
+}

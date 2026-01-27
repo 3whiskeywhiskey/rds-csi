@@ -545,14 +545,12 @@ func parseFileInfo(output string) (*FileInfo, error) {
 		}
 	}
 
-	// Extract creation time (if available)
-	// RouterOS format: creation-time=jan/02/2025 10:30:45
-	if match := regexp.MustCompile(`creation-time=(\w+/\d+/\d+\s+\d+:\d+:\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
-		// Parse RouterOS time format
-		if t, err := time.Parse("jan/02/2006 15:04:05", match[1]); err == nil {
-			file.CreatedAt = t
-		}
-	}
+	// Extract creation/modification time (if available)
+	// RouterOS uses different field names and date formats:
+	// - creation-time or last-modified as field names
+	// - YYYY-MM-DD HH:MM:SS (ISO-like format, e.g., 2025-11-12 00:36:13)
+	// - mon/dd/yyyy HH:MM:SS (month/day/year format, e.g., jan/02/2025 10:30:45)
+	file.CreatedAt = parseRouterOSTime(normalized)
 
 	return file, nil
 }
@@ -694,4 +692,42 @@ func extractMountPoint(path string) string {
 	}
 
 	return path
+}
+
+// parseRouterOSTime extracts and parses time from RouterOS output
+// Handles multiple field names (creation-time, last-modified) and date formats
+func parseRouterOSTime(normalized string) time.Time {
+	// Try different field names that RouterOS might use
+	fieldPatterns := []string{
+		`creation-time=`,
+		`last-modified=`,
+	}
+
+	for _, fieldPrefix := range fieldPatterns {
+		// Try ISO-like format first: YYYY-MM-DD HH:MM:SS (e.g., 2025-11-12 00:36:13)
+		isoPattern := fieldPrefix + `(\d{4}-\d{2}-\d{2}\s+\d+:\d+:\d+)`
+		if match := regexp.MustCompile(isoPattern).FindStringSubmatch(normalized); len(match) > 1 {
+			if t, err := time.Parse("2006-01-02 15:04:05", match[1]); err == nil {
+				return t
+			}
+		}
+
+		// Try RouterOS month/day/year format: mon/dd/yyyy HH:MM:SS (e.g., jan/02/2025 10:30:45)
+		// Note: RouterOS uses lowercase month abbreviations, so we need to title-case the month
+		// for Go's time.Parse which expects "Jan" format
+		monthPattern := fieldPrefix + `([a-zA-Z]+/\d+/\d+\s+\d+:\d+:\d+)`
+		if match := regexp.MustCompile(monthPattern).FindStringSubmatch(normalized); len(match) > 1 {
+			// Title-case the month part for Go's time.Parse (e.g., "jan" -> "Jan", "nov" -> "Nov")
+			timeStr := match[1]
+			if len(timeStr) >= 3 {
+				timeStr = strings.ToUpper(timeStr[:1]) + strings.ToLower(timeStr[1:3]) + timeStr[3:]
+			}
+			if t, err := time.Parse("Jan/02/2006 15:04:05", timeStr); err == nil {
+				return t
+			}
+		}
+	}
+
+	// Return zero time if no match found
+	return time.Time{}
 }
