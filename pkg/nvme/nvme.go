@@ -357,7 +357,7 @@ func (c *connector) GetDevicePath(nqn string) (string, error) {
 			for _, ns := range namespaces {
 				nsName := filepath.Base(ns)
 				// Check if this namespace exists as a block device
-				if _, err := os.Stat("/sys/class/block/" + nsName); err == nil {
+				if _, err := os.Stat("/dev/" + nsName); err == nil {
 					return "/dev/" + nsName, nil
 				}
 
@@ -368,7 +368,7 @@ func (c *connector) GetDevicePath(nqn string) (string, error) {
 					var subsys, ctrl, namespace int
 					if _, err := fmt.Sscanf(nsName, "nvme%dc%dn%d", &subsys, &ctrl, &namespace); err == nil {
 						subsysDevice := fmt.Sprintf("nvme%dn%d", subsys, namespace)
-						if _, err := os.Stat("/sys/class/block/" + subsysDevice); err == nil {
+						if _, err := os.Stat("/dev/" + subsysDevice); err == nil {
 							return "/dev/" + subsysDevice, nil
 						}
 					}
