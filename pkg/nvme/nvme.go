@@ -492,7 +492,17 @@ func (c *connector) ConnectWithContext(ctx context.Context, target Target) (stri
 
 	if connected {
 		klog.V(2).Infof("Already connected to NQN: %s", target.NQN)
-		return c.GetDevicePath(target.NQN)
+		// Verify we can actually find the device - orphaned subsystems may
+		// appear connected but have no controllers/devices
+		devicePath, err := c.GetDevicePath(target.NQN)
+		if err == nil {
+			return devicePath, nil
+		}
+		// Device not found despite appearing connected - likely orphaned subsystem
+		// Try to disconnect and reconnect
+		klog.Warningf("NQN %s appears connected but no device found, attempting reconnect", target.NQN)
+		_ = c.DisconnectWithContext(ctx, target.NQN)
+		// Fall through to connect logic below
 	}
 
 	// Build nvme connect command
