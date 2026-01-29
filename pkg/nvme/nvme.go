@@ -341,11 +341,42 @@ func (c *connector) GetDevicePath(nqn string) (string, error) {
 
 		deviceNQN := strings.TrimSpace(string(data))
 		if deviceNQN == nqn {
-			// Found matching controller, now find the block device in /sys/class/block
-			controllerName := filepath.Base(controller)
+			// Found matching controller, now find the block device
+			// For NVMe-oF, namespaces appear as subdirectories under the controller
+			// with names like nvme2c1n2 (subsystem 2, controller 1, namespace 2)
+			// The corresponding block device may be either:
+			// - /dev/nvme2n2 (subsystem-based, preferred for multipath)
+			// - /dev/nvme2c1n2 (controller-based)
 
-			// Search for block devices matching this controller
-			// For NVMe-oF, the device is usually nvmeXnY (not nvmeXcYnZ)
+			// First, look for namespace directories directly under the controller
+			namespaces, err := filepath.Glob(filepath.Join(controller, "nvme*n*"))
+			if err != nil {
+				klog.V(5).Infof("Failed to scan namespaces under %s: %v", controller, err)
+			}
+
+			for _, ns := range namespaces {
+				nsName := filepath.Base(ns)
+				// Check if this namespace exists as a block device
+				if _, err := os.Stat("/sys/class/block/" + nsName); err == nil {
+					return "/dev/" + nsName, nil
+				}
+
+				// For controller-based paths (nvmeXcYnZ), also check subsystem-based path (nvmeXnZ)
+				// Extract subsystem number and namespace number
+				if strings.Contains(nsName, "c") {
+					// Parse nvmeXcYnZ to get X and Z
+					var subsys, ctrl, namespace int
+					if _, err := fmt.Sscanf(nsName, "nvme%dc%dn%d", &subsys, &ctrl, &namespace); err == nil {
+						subsysDevice := fmt.Sprintf("nvme%dn%d", subsys, namespace)
+						if _, err := os.Stat("/sys/class/block/" + subsysDevice); err == nil {
+							return "/dev/" + subsysDevice, nil
+						}
+					}
+				}
+			}
+
+			// Fallback: try the old method (controller name + n*)
+			controllerName := filepath.Base(controller)
 			blockDevices, err := filepath.Glob("/sys/class/block/" + controllerName + "n*")
 			if err != nil {
 				return "", fmt.Errorf("failed to scan block devices: %w", err)
