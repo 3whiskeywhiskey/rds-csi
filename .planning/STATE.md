@@ -10,29 +10,29 @@ See: .planning/PROJECT.md (updated 2026-01-30)
 ## Current Position
 
 Phase: 2 of 4 (Stale Mount Detection and Recovery)
-Plan: 4 of 4 complete
+Plan: 5 of 5 complete
 Status: Phase complete - All plans in Phase 2 complete
-Last activity: 2026-01-30 - Completed 02-04-PLAN.md (CSI integration)
+Last activity: 2026-01-30 - Completed 02-05-PLAN.md (Unit tests)
 
-Progress: [██░░░░░░░░] 33% (2/4 phases complete, 4/4 plans in phase 2)
+Progress: [███░░░░░░░] 37% (8/22 plans complete, 5/5 plans in phase 2)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
-- Average duration: 2.3 min
-- Total execution time: 0.27 hours
+- Total plans completed: 8
+- Average duration: 2.4 min
+- Total execution time: 0.32 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-foundation | 3 | 9 min | 3 min |
-| 02-stale-mount-detection | 4 | 8 min | 2 min |
+| 02-stale-mount-detection | 5 | 14 min | 2.8 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (2 min), 02-02 (3 min), 02-03 (1 min), 02-04 (2 min)
-- Trend: Consistent (averaging 2 min per plan in phase 2)
+- Last 5 plans: 02-02 (3 min), 02-03 (1 min), 02-04 (2 min), 02-05 (6 min)
+- Trend: Slight increase (testing tasks take longer than implementation)
 
 *Updated after each plan completion*
 
@@ -65,6 +65,10 @@ Recent decisions affecting current work:
 - NodePublishVolume checks and recovers stale mounts before bind mount
 - NodeGetVolumeStats reports abnormal VolumeCondition on stale (no recovery)
 - GetResolver() method on Connector interface for accessing DeviceResolver
+- Skip integration tests on macOS using testing.Short() (no /proc/self/mountinfo)
+- Use t.TempDir() for mock filesystems (auto-cleanup, no manual deletion)
+- Mock interfaces for unit testing (Mounter, fake Kubernetes client)
+- Accept fake client namespace quirks in event posting tests
 
 ### Pending Todos
 
@@ -77,9 +81,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 02-04-PLAN.md (CSI integration)
+Stopped at: Completed 02-05-PLAN.md (Unit tests) - Phase 2 complete
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-30 — Phase 2 complete (all 4 plans)*
+*Last updated: 2026-01-30 — Phase 2 complete (all 5 plans)*
