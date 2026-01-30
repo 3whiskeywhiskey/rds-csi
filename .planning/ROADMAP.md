@@ -13,7 +13,7 @@ This roadmap transforms the RDS CSI driver from functional-but-fragile to produc
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation - Device Path Resolution** - Reliable NQN-based device discovery
-- [ ] **Phase 2: Stale Mount Detection and Recovery** - Automatic recovery from controller renumbering
+- [x] **Phase 2: Stale Mount Detection and Recovery** - Automatic recovery from controller renumbering
 - [ ] **Phase 3: Reconnection Resilience** - Production-grade error handling and backoff
 - [ ] **Phase 4: Observability** - Monitoring and operational visibility
 
@@ -47,11 +47,11 @@ Plans:
 **Plans**: 5 plans in 4 waves
 
 Plans:
-- [ ] 02-01-PLAN.md - Mount infrastructure: procmounts parsing, force unmount, in-use detection (Wave 1)
-- [ ] 02-02-PLAN.md - Kubernetes event posting for mount failures (Wave 1, parallel)
-- [ ] 02-03-PLAN.md - Stale detection and recovery logic with retry (Wave 2)
-- [ ] 02-04-PLAN.md - Integration into CSI node operations (Wave 3)
-- [ ] 02-05-PLAN.md - Comprehensive unit tests (Wave 4)
+- [x] 02-01-PLAN.md - Mount infrastructure: procmounts parsing, force unmount, in-use detection (Wave 1)
+- [x] 02-02-PLAN.md - Kubernetes event posting for mount failures (Wave 1, parallel)
+- [x] 02-03-PLAN.md - Stale detection and recovery logic with retry (Wave 2)
+- [x] 02-04-PLAN.md - Integration into CSI node operations (Wave 3)
+- [x] 02-05-PLAN.md - Comprehensive unit tests (Wave 4)
 
 ### Phase 3: Reconnection Resilience
 **Goal**: Driver handles connection failures gracefully with proper backoff and configurable parameters
@@ -89,10 +89,10 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation - Device Path Resolution | 3/3 | Complete | 2026-01-30 |
-| 2. Stale Mount Detection and Recovery | 0/5 | Ready | - |
-| 3. Reconnection Resilience | 0/TBD | Not started | - |
+| 2. Stale Mount Detection and Recovery | 5/5 | Complete | 2026-01-30 |
+| 3. Reconnection Resilience | 0/TBD | Ready | - |
 | 4. Observability | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-01-30*
-*Last updated: 2026-01-30 - Phase 2 planned*
+*Last updated: 2026-01-30 - Phase 2 complete*

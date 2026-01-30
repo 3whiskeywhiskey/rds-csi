@@ -15,9 +15,9 @@ Requirements for production stability release. Each maps to roadmap phases.
 
 ### Mount Validation
 
-- [ ] **MOUNT-01**: Driver detects stale mounts by comparing mount device vs current device path
-- [ ] **MOUNT-02**: Driver automatically remounts staging path when stale mount detected
-- [ ] **MOUNT-03**: Driver can force unmount stuck mounts that won't unmount normally
+- [x] **MOUNT-01**: Driver detects stale mounts by comparing mount device vs current device path
+- [x] **MOUNT-02**: Driver automatically remounts staging path when stale mount detected
+- [x] **MOUNT-03**: Driver can force unmount stuck mounts that won't unmount normally
 
 ### Connection Resilience
 
@@ -67,9 +67,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DEVP-01 | Phase 1 | Complete |
 | DEVP-02 | Phase 1 | Complete |
 | DEVP-03 | Phase 1 | Complete |
-| MOUNT-01 | Phase 2 | Pending |
-| MOUNT-02 | Phase 2 | Pending |
-| MOUNT-03 | Phase 2 | Pending |
+| MOUNT-01 | Phase 2 | Complete |
+| MOUNT-02 | Phase 2 | Complete |
+| MOUNT-03 | Phase 2 | Complete |
 | CONN-01 | Phase 3 | Pending |
 | CONN-02 | Phase 3 | Pending |
 | CONN-03 | Phase 3 | Pending |
@@ -84,4 +84,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-30*
-*Last updated: 2026-01-30 — Phase 1 requirements complete*
+*Last updated: 2026-01-30 — Phase 2 requirements complete*
