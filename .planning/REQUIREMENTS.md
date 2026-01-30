@@ -64,24 +64,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEVP-01 | TBD | Pending |
-| DEVP-02 | TBD | Pending |
-| DEVP-03 | TBD | Pending |
-| MOUNT-01 | TBD | Pending |
-| MOUNT-02 | TBD | Pending |
-| MOUNT-03 | TBD | Pending |
-| CONN-01 | TBD | Pending |
-| CONN-02 | TBD | Pending |
-| CONN-03 | TBD | Pending |
-| OBS-01 | TBD | Pending |
-| OBS-02 | TBD | Pending |
-| OBS-03 | TBD | Pending |
+| DEVP-01 | Phase 1 | Pending |
+| DEVP-02 | Phase 1 | Pending |
+| DEVP-03 | Phase 1 | Pending |
+| MOUNT-01 | Phase 2 | Pending |
+| MOUNT-02 | Phase 2 | Pending |
+| MOUNT-03 | Phase 2 | Pending |
+| CONN-01 | Phase 3 | Pending |
+| CONN-02 | Phase 3 | Pending |
+| CONN-03 | Phase 3 | Pending |
+| OBS-01 | Phase 4 | Pending |
+| OBS-02 | Phase 4 | Pending |
+| OBS-03 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 12 total
-- Mapped to phases: 0
-- Unmapped: 12 (pending roadmap creation)
+- Mapped to phases: 12
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-30*
-*Last updated: 2026-01-30 after initial definition*
+*Last updated: 2026-01-30 after roadmap creation*
