@@ -46,6 +46,9 @@ type Connector interface {
 
 	// GetConfig returns current configuration
 	GetConfig() Config
+
+	// GetResolver returns the device resolver for NQN to device path resolution
+	GetResolver() *DeviceResolver
 }
 
 // Target represents an NVMe/TCP connection target
@@ -690,6 +693,11 @@ func (c *connector) GetMetrics() *Metrics {
 // GetConfig returns current configuration
 func (c *connector) GetConfig() Config {
 	return c.config
+}
+
+// GetResolver returns the device resolver
+func (c *connector) GetResolver() *DeviceResolver {
+	return c.resolver
 }
 
 // trackOperation records an active operation

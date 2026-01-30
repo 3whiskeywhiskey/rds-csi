@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -34,11 +35,13 @@ const (
 // NodeServer implements the CSI Node service
 type NodeServer struct {
 	csi.UnimplementedNodeServer
-	driver      *Driver
-	nvmeConn    nvme.Connector
-	mounter     mount.Mounter
-	nodeID      string
-	eventPoster *EventPoster // for posting K8s events
+	driver       *Driver
+	nvmeConn     nvme.Connector
+	mounter      mount.Mounter
+	nodeID       string
+	eventPoster  *EventPoster              // for posting K8s events
+	staleChecker *mount.StaleMountChecker  // for detecting stale mounts
+	recoverer    *mount.MountRecoverer     // for recovering stale mounts
 }
 
 // NewNodeServer creates a new Node service
@@ -49,12 +52,28 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 		eventPoster = NewEventPoster(k8sClient)
 	}
 
+	m := mount.NewMounter()
+	connector := nvme.NewConnector()
+
+	// Create stale mount checker using connector's resolver
+	staleChecker := mount.NewStaleMountChecker(connector.GetResolver())
+
+	// Create recovery with default config
+	recoverer := mount.NewMountRecoverer(
+		mount.DefaultRecoveryConfig(),
+		m,
+		staleChecker,
+		connector.GetResolver(),
+	)
+
 	return &NodeServer{
-		driver:      driver,
-		nvmeConn:    nvme.NewConnector(),
-		mounter:     mount.NewMounter(),
-		nodeID:      nodeID,
-		eventPoster: eventPoster,
+		driver:       driver,
+		nvmeConn:     connector,
+		mounter:      m,
+		nodeID:       nodeID,
+		eventPoster:  eventPoster,
+		staleChecker: staleChecker,
+		recoverer:    recoverer,
 	}
 }
 
@@ -460,6 +479,40 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 }
 
 // Helper functions
+
+// checkAndRecoverMount checks if staging mount is stale and attempts recovery
+// Returns nil if mount is healthy or recovery succeeded
+// Returns error if mount is stale and recovery failed
+func (ns *NodeServer) checkAndRecoverMount(ctx context.Context, stagingPath, nqn, fsType string, mountOptions []string, pvcNamespace, pvcName, volumeID string) error {
+	// Check for stale mount
+	stale, reason, err := ns.staleChecker.IsMountStale(stagingPath, nqn)
+	if err != nil {
+		klog.Warningf("Failed to check mount staleness for %s: %v", stagingPath, err)
+		// Don't fail the operation if we can't check - proceed optimistically
+		return nil
+	}
+
+	if !stale {
+		return nil
+	}
+
+	klog.Warningf("Stale mount detected at %s (reason: %s), attempting recovery", stagingPath, reason)
+
+	// Attempt recovery
+	result, err := ns.recoverer.Recover(ctx, stagingPath, nqn, fsType, mountOptions)
+	if err != nil {
+		// Recovery failed - post event and return error
+		if ns.eventPoster != nil {
+			ns.eventPoster.PostRecoveryFailed(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, result.Attempts, err)
+		}
+		return fmt.Errorf("mount recovery failed: %w", err)
+	}
+
+	klog.V(2).Infof("Mount recovery succeeded for %s (attempts: %d, device: %s -> %s)",
+		stagingPath, result.Attempts, result.OldDevice, result.NewDevice)
+
+	return nil
+}
 
 // postEvent posts an event if eventPoster is configured
 // Silently does nothing if eventPoster is nil (events disabled)
