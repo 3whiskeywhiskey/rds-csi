@@ -120,6 +120,7 @@ func TestDisconnect(t *testing.T) {
 				config:           DefaultConfig(),
 				metrics:          &Metrics{},
 				activeOperations: make(map[string]*operationTracker),
+				resolver:         NewDeviceResolver(),
 			}
 
 			err := c.Disconnect(tt.nqn)
@@ -167,6 +168,7 @@ func TestIsConnected(t *testing.T) {
 				config:           DefaultConfig(),
 				metrics:          &Metrics{},
 				activeOperations: make(map[string]*operationTracker),
+				resolver:         NewDeviceResolver(),
 			}
 
 			connected, err := c.IsConnected(tt.nqn)
@@ -187,6 +189,7 @@ func TestGetDevicePathNotFound(t *testing.T) {
 		config:           DefaultConfig(),
 		metrics:          &Metrics{},
 		activeOperations: make(map[string]*operationTracker),
+		resolver:         NewDeviceResolver(),
 	}
 
 	// Test with non-existent NQN
@@ -205,6 +208,7 @@ func TestWaitForDeviceTimeout(t *testing.T) {
 		config:           DefaultConfig(),
 		metrics:          &Metrics{},
 		activeOperations: make(map[string]*operationTracker),
+		resolver:         NewDeviceResolver(),
 	}
 
 	// Test timeout with non-existent device

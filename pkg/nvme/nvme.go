@@ -154,6 +154,7 @@ type connector struct {
 	activeOpsMu       sync.Mutex
 	healthcheckDone   chan struct{}
 	healthcheckCancel context.CancelFunc
+	resolver          *DeviceResolver // Caching resolver for device path lookups
 }
 
 // NewConnector creates a new NVMe connector with default configuration
@@ -324,6 +325,14 @@ func (c *connector) isConnectedLegacy(nqn string) (bool, error) {
 
 // GetDevicePath returns the block device path for a connected NVMe target
 func (c *connector) GetDevicePath(nqn string) (string, error) {
+	return c.resolver.ResolveDevicePath(nqn)
+}
+
+// DEPRECATED: getDevicePathLegacy is the old inline sysfs scanning implementation
+// kept for reference during migration
+//
+//nolint:unused // kept for reference during migration
+func (c *connector) getDevicePathLegacy(nqn string) (string, error) {
 	// Scan /sys/class/nvme for controllers
 	controllers, err := filepath.Glob("/sys/class/nvme/nvme*")
 	if err != nil {
@@ -440,7 +449,13 @@ func NewConnectorWithConfig(config Config) Connector {
 		activeOperations:  make(map[string]*operationTracker),
 		healthcheckDone:   make(chan struct{}),
 		healthcheckCancel: cancel,
+		resolver:          NewDeviceResolver(),
 	}
+
+	// Wire up connection check for orphan detection
+	c.resolver.SetIsConnectedFn(func(nqn string) (bool, error) {
+		return c.IsConnected(nqn)
+	})
 
 	// Start healthcheck if enabled
 	if config.EnableHealthcheck {
@@ -492,17 +507,22 @@ func (c *connector) ConnectWithContext(ctx context.Context, target Target) (stri
 
 	if connected {
 		klog.V(2).Infof("Already connected to NQN: %s", target.NQN)
-		// Verify we can actually find the device - orphaned subsystems may
-		// appear connected but have no controllers/devices
-		devicePath, err := c.GetDevicePath(target.NQN)
-		if err == nil {
-			return devicePath, nil
+
+		// Check for orphaned subsystem using resolver
+		orphaned, err := c.resolver.IsOrphanedSubsystem(target.NQN)
+		if err != nil {
+			klog.Warningf("Failed to check orphan status for %s: %v", target.NQN, err)
 		}
-		// Device not found despite appearing connected - likely orphaned subsystem
-		// Try to disconnect and reconnect
-		klog.Warningf("NQN %s appears connected but no device found, attempting reconnect", target.NQN)
-		_ = c.DisconnectWithContext(ctx, target.NQN)
-		// Fall through to connect logic below
+
+		if orphaned {
+			klog.Warningf("NQN %s is orphaned, forcing disconnect and reconnect", target.NQN)
+			c.resolver.Invalidate(target.NQN)
+			_ = c.DisconnectWithContext(ctx, target.NQN)
+			// Fall through to connect logic below
+		} else {
+			// Not orphaned - return device path via resolver
+			return c.resolver.ResolveDevicePath(target.NQN)
+		}
 	}
 
 	// Build nvme connect command
@@ -617,6 +637,9 @@ func (c *connector) DisconnectWithContext(ctx context.Context, nqn string) error
 		}
 		return fmt.Errorf("nvme disconnect failed: %w, output: %s", err, string(output))
 	}
+
+	// Invalidate resolver cache after successful disconnect
+	c.resolver.Invalidate(nqn)
 
 	klog.V(2).Infof("Successfully disconnected from NVMe target: %s", nqn)
 	return nil
