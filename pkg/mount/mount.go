@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/klog/v2"
 )
@@ -78,6 +81,14 @@ type Mounter interface {
 
 	// GetDeviceStats returns filesystem statistics
 	GetDeviceStats(path string) (*DeviceStats, error)
+
+	// ForceUnmount attempts normal unmount, then escalates to lazy unmount if needed
+	// Returns error if mount is in use (refuses to force unmount in-use mounts)
+	ForceUnmount(target string, timeout time.Duration) error
+
+	// IsMountInUse checks if any processes have open file handles under the mount path
+	// Returns (inUse bool, pids []int, err error)
+	IsMountInUse(path string) (bool, []int, error)
 }
 
 // DeviceStats represents filesystem statistics
@@ -428,4 +439,153 @@ func (m *mounter) GetDeviceStats(path string) (*DeviceStats, error) {
 	_, _ = fmt.Sscanf(fields[5], "%d", &stats.AvailableInodes)
 
 	return stats, nil
+}
+
+// IsMountInUse checks if any processes have open file handles under the mount path
+// Returns (inUse bool, pids []int, err error)
+func (m *mounter) IsMountInUse(path string) (bool, []int, error) {
+	klog.V(4).Infof("Checking if mount %s is in use", path)
+
+	// Resolve mount path to canonical form
+	canonicalPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// If path doesn't exist, it's not in use
+		if os.IsNotExist(err) {
+			return false, nil, nil
+		}
+		return false, nil, fmt.Errorf("failed to resolve symlinks for %s: %w", path, err)
+	}
+
+	// Ensure canonical path ends without trailing slash for prefix matching
+	canonicalPath = strings.TrimSuffix(canonicalPath, "/")
+
+	var pidsWithOpenFiles []int
+
+	// Scan /proc directory for all PIDs
+	procDir, err := os.Open("/proc")
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to open /proc: %w", err)
+	}
+	defer procDir.Close()
+
+	entries, err := procDir.Readdirnames(-1)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to read /proc: %w", err)
+	}
+
+	for _, entry := range entries {
+		// Skip non-numeric entries (only interested in PIDs)
+		pid, err := strconv.Atoi(entry)
+		if err != nil {
+			continue
+		}
+
+		// Check if this PID has open files under the mount path
+		fdPath := fmt.Sprintf("/proc/%d/fd", pid)
+		fdDir, err := os.Open(fdPath)
+		if err != nil {
+			// Permission denied is expected for processes of other users
+			// Also expected if process exited while we're scanning
+			continue
+		}
+
+		fdEntries, err := fdDir.Readdirnames(-1)
+		fdDir.Close()
+		if err != nil {
+			continue
+		}
+
+		// Check each file descriptor
+		for _, fdEntry := range fdEntries {
+			fdLink := filepath.Join(fdPath, fdEntry)
+			target, err := os.Readlink(fdLink)
+			if err != nil {
+				continue
+			}
+
+			// Check if target is under the mount path
+			if target == canonicalPath || strings.HasPrefix(target, canonicalPath+"/") {
+				klog.V(4).Infof("Process %d has open file handle: %s", pid, target)
+				pidsWithOpenFiles = append(pidsWithOpenFiles, pid)
+				break // Found at least one open file for this PID, no need to check more
+			}
+		}
+	}
+
+	inUse := len(pidsWithOpenFiles) > 0
+	if inUse {
+		klog.V(2).Infof("Mount %s is in use by %d process(es): %v", path, len(pidsWithOpenFiles), pidsWithOpenFiles)
+	} else {
+		klog.V(4).Infof("Mount %s is not in use", path)
+	}
+
+	return inUse, pidsWithOpenFiles, nil
+}
+
+// ForceUnmount attempts normal unmount, then escalates to lazy unmount if needed
+// Returns error if mount is in use (refuses to force unmount in-use mounts)
+func (m *mounter) ForceUnmount(target string, timeout time.Duration) error {
+	klog.V(2).Infof("ForceUnmount: attempting to unmount %s with timeout %v", target, timeout)
+
+	// Try normal unmount first
+	err := m.Unmount(target)
+	if err == nil {
+		klog.V(2).Infof("ForceUnmount: normal unmount succeeded for %s", target)
+		return nil
+	}
+
+	klog.V(2).Infof("ForceUnmount: normal unmount failed for %s: %v, waiting for mount to clear", target, err)
+
+	// Wait for mount to clear with polling
+	startTime := time.Now()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Check if still mounted
+			mounted, err := m.IsLikelyMountPoint(target)
+			if err != nil {
+				klog.V(4).Infof("ForceUnmount: error checking if mounted: %v", err)
+			}
+			if !mounted {
+				klog.V(2).Infof("ForceUnmount: mount cleared for %s", target)
+				return nil
+			}
+
+			// Check if timeout exceeded
+			if time.Since(startTime) >= timeout {
+				klog.V(2).Infof("ForceUnmount: timeout exceeded for %s, escalating to lazy unmount", target)
+				goto escalate
+			}
+
+		case <-time.After(timeout):
+			goto escalate
+		}
+	}
+
+escalate:
+	// Check if mount is in use before forcing
+	inUse, pids, err := m.IsMountInUse(target)
+	if err != nil {
+		klog.Warningf("ForceUnmount: failed to check if mount is in use: %v", err)
+		// Continue with lazy unmount despite error
+	}
+
+	if inUse {
+		return fmt.Errorf("refusing to force unmount %s: mount is in use by processes: %v", target, pids)
+	}
+
+	// Execute lazy unmount (umount -l)
+	klog.Warningf("ForceUnmount: escalating to lazy unmount for %s", target)
+	cmd := m.execCommand("umount", "-l", target)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("lazy unmount failed for %s: %w, output: %s", target, err, string(output))
+	}
+
+	klog.V(4).Infof("ForceUnmount: lazy unmount output: %s", string(output))
+	klog.Warningf("ForceUnmount: lazy unmount succeeded for %s", target)
+	return nil
 }
