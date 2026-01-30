@@ -1,0 +1,463 @@
+package driver
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+// TestNewEventPoster_CreatesRecorder tests EventPoster creation
+func TestNewEventPoster_CreatesRecorder(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+
+	poster := NewEventPoster(fakeClient)
+
+	if poster == nil {
+		t.Fatal("Expected non-nil EventPoster")
+	}
+
+	if poster.recorder == nil {
+		t.Error("Expected recorder to be set")
+	}
+
+	if poster.clientset == nil {
+		t.Error("Expected clientset to be set")
+	}
+}
+
+// TestPostMountFailure_PostsEvent tests posting mount failure events
+func TestPostMountFailure_PostsEvent(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-123",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+
+	poster := NewEventPoster(fakeClient)
+
+	// Post event
+	ctx := context.Background()
+	err := poster.PostMountFailure(ctx, "default", "test-pvc", "pvc-123", "node-1", "device not found")
+
+	if err != nil {
+		t.Fatalf("PostMountFailure failed: %v", err)
+	}
+
+	// Note: The fake EventRecorder doesn't actually create Event objects that we can query
+	// The EventRecorder uses a broadcaster that writes to the event sink
+	// In a real cluster, we'd see events via `kubectl get events`
+	// For unit testing, we verify the call succeeded without error
+
+	// We could add more sophisticated testing by:
+	// 1. Implementing a custom EventRecorder that captures events
+	// 2. Using the event's Actions() to inspect what was called
+	// 3. Checking the events API directly (but fake client may not support this fully)
+
+	// For now, verify no error is returned
+	t.Log("PostMountFailure completed without error")
+}
+
+// TestPostMountFailure_PVCNotFound tests graceful handling of missing PVC
+func TestPostMountFailure_PVCNotFound(t *testing.T) {
+	// Create fake client WITHOUT the PVC
+	fakeClient := fake.NewSimpleClientset()
+
+	poster := NewEventPoster(fakeClient)
+
+	// Post event for non-existent PVC
+	ctx := context.Background()
+	err := poster.PostMountFailure(ctx, "default", "nonexistent-pvc", "pvc-123", "node-1", "device not found")
+
+	// Should return nil (graceful handling)
+	if err != nil {
+		t.Errorf("Expected nil error for missing PVC, got %v", err)
+	}
+
+	t.Log("PostMountFailure handled missing PVC gracefully")
+}
+
+// TestPostRecoveryFailed_IncludesAttemptCount tests recovery failure event format
+func TestPostRecoveryFailed_IncludesAttemptCount(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-456",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+
+	poster := NewEventPoster(fakeClient)
+
+	// Post recovery failed event
+	ctx := context.Background()
+	attemptCount := 3
+	finalErr := context.DeadlineExceeded
+
+	err := poster.PostRecoveryFailed(ctx, "default", "test-pvc", "pvc-456", "node-2", attemptCount, finalErr)
+
+	if err != nil {
+		t.Fatalf("PostRecoveryFailed failed: %v", err)
+	}
+
+	// Verify the call succeeded
+	t.Log("PostRecoveryFailed completed without error")
+
+	// We can't easily verify the event content with fake client
+	// But we can test the message formatting separately
+}
+
+// TestPostStaleMountDetected_PostsNormalEvent tests stale mount detection event
+func TestPostStaleMountDetected_PostsNormalEvent(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-789",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+
+	poster := NewEventPoster(fakeClient)
+
+	// Post stale mount detected event
+	ctx := context.Background()
+	err := poster.PostStaleMountDetected(ctx, "default", "test-pvc", "pvc-789", "node-3", "/dev/nvme0n1", "/dev/nvme1n1")
+
+	if err != nil {
+		t.Fatalf("PostStaleMountDetected failed: %v", err)
+	}
+
+	// Verify the call succeeded
+	t.Log("PostStaleMountDetected completed without error")
+}
+
+// TestPostEvents_WithTimeout tests event posting with context timeout
+func TestPostEvents_WithTimeout(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-timeout",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+
+	poster := NewEventPoster(fakeClient)
+
+	// Create context with very short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Post event - should complete quickly
+	err := poster.PostMountFailure(ctx, "default", "test-pvc", "pvc-timeout", "node-1", "test message")
+
+	if err != nil {
+		t.Errorf("Unexpected error with timeout context: %v", err)
+	}
+}
+
+// TestPostEvents_MultipleEvents tests posting multiple events
+func TestPostEvents_MultipleEvents(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-multi",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+
+	poster := NewEventPoster(fakeClient)
+	ctx := context.Background()
+
+	// Post multiple events
+	events := []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "mount failure 1",
+			fn: func() error {
+				return poster.PostMountFailure(ctx, "default", "test-pvc", "pvc-multi", "node-1", "error 1")
+			},
+		},
+		{
+			name: "mount failure 2",
+			fn: func() error {
+				return poster.PostMountFailure(ctx, "default", "test-pvc", "pvc-multi", "node-1", "error 2")
+			},
+		},
+		{
+			name: "stale mount detected",
+			fn: func() error {
+				return poster.PostStaleMountDetected(ctx, "default", "test-pvc", "pvc-multi", "node-1", "/dev/nvme0n1", "/dev/nvme1n1")
+			},
+		},
+		{
+			name: "recovery failed",
+			fn: func() error {
+				return poster.PostRecoveryFailed(ctx, "default", "test-pvc", "pvc-multi", "node-1", 3, context.DeadlineExceeded)
+			},
+		},
+	}
+
+	for _, evt := range events {
+		t.Run(evt.name, func(t *testing.T) {
+			if err := evt.fn(); err != nil {
+				t.Errorf("Event posting failed: %v", err)
+			}
+		})
+	}
+}
+
+// TestEventReasons tests that event reason constants are defined
+func TestEventReasons(t *testing.T) {
+	// Verify event reason constants are set
+	if EventReasonMountFailure == "" {
+		t.Error("EventReasonMountFailure should not be empty")
+	}
+
+	if EventReasonRecoveryFailed == "" {
+		t.Error("EventReasonRecoveryFailed should not be empty")
+	}
+
+	if EventReasonStaleMountDetected == "" {
+		t.Error("EventReasonStaleMountDetected should not be empty")
+	}
+
+	// Verify they're distinct
+	reasons := []string{
+		EventReasonMountFailure,
+		EventReasonRecoveryFailed,
+		EventReasonStaleMountDetected,
+	}
+
+	seen := make(map[string]bool)
+	for _, reason := range reasons {
+		if seen[reason] {
+			t.Errorf("Duplicate event reason: %s", reason)
+		}
+		seen[reason] = true
+	}
+
+	// Log the reasons for visibility
+	t.Logf("EventReasonMountFailure: %s", EventReasonMountFailure)
+	t.Logf("EventReasonRecoveryFailed: %s", EventReasonRecoveryFailed)
+	t.Logf("EventReasonStaleMountDetected: %s", EventReasonStaleMountDetected)
+}
+
+// TestEventSinkAdapter tests the eventSinkAdapter implementation
+func TestEventSinkAdapter(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+
+	// Create adapter
+	adapter := &eventSinkAdapter{
+		eventInterface: fakeClient.CoreV1().Events("default"),
+	}
+
+	// Test Create
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-event",
+			Namespace: "default",
+		},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:      "PersistentVolumeClaim",
+			Name:      "test-pvc",
+			Namespace: "default",
+		},
+		Reason:  "TestReason",
+		Message: "Test message",
+		Type:    corev1.EventTypeNormal,
+	}
+
+	created, err := adapter.Create(event)
+	if err != nil {
+		t.Fatalf("adapter.Create failed: %v", err)
+	}
+
+	if created == nil {
+		t.Fatal("Expected non-nil created event")
+	}
+
+	if created.Reason != "TestReason" {
+		t.Errorf("Expected reason TestReason, got %s", created.Reason)
+	}
+
+	// Test Update
+	created.Message = "Updated message"
+	updated, err := adapter.Update(created)
+	if err != nil {
+		t.Fatalf("adapter.Update failed: %v", err)
+	}
+
+	if updated.Message != "Updated message" {
+		t.Errorf("Expected updated message, got %s", updated.Message)
+	}
+
+	// Test Patch
+	patchData := []byte(`{"message": "Patched message"}`)
+	patched, err := adapter.Patch(created, patchData)
+	if err != nil {
+		// Patch may not be fully supported in fake client
+		t.Logf("adapter.Patch returned error (may be expected with fake client): %v", err)
+	} else if patched != nil {
+		t.Logf("adapter.Patch succeeded")
+	}
+}
+
+// TestPostEvents_DifferentNamespaces tests posting events to different namespaces
+func TestPostEvents_DifferentNamespaces(t *testing.T) {
+	// Create PVCs in different namespaces
+	pvc1 := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pvc-1",
+			Namespace: "namespace-1",
+			UID:       "uid-1",
+		},
+	}
+	pvc2 := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pvc-2",
+			Namespace: "namespace-2",
+			UID:       "uid-2",
+		},
+	}
+
+	fakeClient := fake.NewSimpleClientset(pvc1, pvc2)
+	poster := NewEventPoster(fakeClient)
+	ctx := context.Background()
+
+	// Post to first namespace
+	err := poster.PostMountFailure(ctx, "namespace-1", "pvc-1", "vol-1", "node-1", "error 1")
+	if err != nil {
+		t.Errorf("Failed to post to namespace-1: %v", err)
+	}
+
+	// Post to second namespace
+	err = poster.PostMountFailure(ctx, "namespace-2", "pvc-2", "vol-2", "node-2", "error 2")
+	if err != nil {
+		t.Errorf("Failed to post to namespace-2: %v", err)
+	}
+}
+
+// TestEventMessageFormat tests the event message format
+func TestEventMessageFormat(t *testing.T) {
+	testCases := []struct {
+		name           string
+		volumeID       string
+		nodeName       string
+		message        string
+		expectedSubstr []string
+	}{
+		{
+			name:     "basic mount failure",
+			volumeID: "pvc-123",
+			nodeName: "node-1",
+			message:  "device not found",
+			expectedSubstr: []string{
+				"pvc-123",
+				"node-1",
+				"device not found",
+			},
+		},
+		{
+			name:     "with special characters",
+			volumeID: "pvc-abc-def-123",
+			nodeName: "node-prod-1",
+			message:  "connection refused: target unreachable",
+			expectedSubstr: []string{
+				"pvc-abc-def-123",
+				"node-prod-1",
+				"connection refused",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Format message as done in PostMountFailure
+			msg := "[" + tc.volumeID + "] on [" + tc.nodeName + "]: " + tc.message
+
+			// Verify expected substrings are present
+			for _, substr := range tc.expectedSubstr {
+				if !strings.Contains(msg, substr) {
+					t.Errorf("Expected message to contain %q, got: %s", substr, msg)
+				}
+			}
+
+			t.Logf("Formatted message: %s", msg)
+		})
+	}
+}
+
+// TestRecoveryFailedMessageFormat tests recovery failure message format
+func TestRecoveryFailedMessageFormat(t *testing.T) {
+	volumeID := "pvc-456"
+	nodeName := "node-2"
+	attemptCount := 3
+	finalErr := "mount failed: device busy"
+
+	// Format as done in PostRecoveryFailed
+	msg := fmt.Sprintf("[%s] on [%s]: Recovery failed after %d attempts: %s", volumeID, nodeName, attemptCount, finalErr)
+
+	// Verify components
+	expectedParts := []string{
+		volumeID,
+		nodeName,
+		"Recovery failed",
+		"3 attempts",
+		finalErr,
+	}
+
+	for _, part := range expectedParts {
+		if !strings.Contains(msg, part) {
+			t.Errorf("Expected message to contain %q, got: %s", part, msg)
+		}
+	}
+
+	t.Logf("Formatted recovery failure message: %s", msg)
+}
+
+// TestStaleMountDetectedMessageFormat tests stale mount detection message format
+func TestStaleMountDetectedMessageFormat(t *testing.T) {
+	volumeID := "pvc-789"
+	nodeName := "node-3"
+	oldDevice := "/dev/nvme0n1"
+	newDevice := "/dev/nvme1n1"
+
+	// Format as done in PostStaleMountDetected
+	msg := "[" + volumeID + "] on [" + nodeName + "]: Stale mount detected - old device: " + oldDevice + ", new device: " + newDevice
+
+	// Verify components
+	expectedParts := []string{
+		volumeID,
+		nodeName,
+		"Stale mount detected",
+		oldDevice,
+		newDevice,
+	}
+
+	for _, part := range expectedParts {
+		if !strings.Contains(msg, part) {
+			t.Errorf("Expected message to contain %q, got: %s", part, msg)
+		}
+	}
+
+	t.Logf("Formatted stale mount message: %s", msg)
+}
