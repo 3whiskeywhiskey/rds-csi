@@ -22,10 +22,11 @@ type cacheEntry struct {
 
 // DeviceResolver resolves NQN to device paths with caching
 type DeviceResolver struct {
-	scanner *SysfsScanner
-	cache   map[string]*cacheEntry
-	mu      sync.RWMutex
-	ttl     time.Duration
+	scanner       *SysfsScanner
+	cache         map[string]*cacheEntry
+	mu            sync.RWMutex
+	ttl           time.Duration
+	isConnectedFn func(nqn string) (bool, error) // Injected for testing and connector integration
 }
 
 // ResolverConfig holds resolver configuration
@@ -202,4 +203,49 @@ func (r *DeviceResolver) String() string {
 	stats := r.GetCacheStats()
 	return fmt.Sprintf("DeviceResolver(ttl=%v, entries=%d, expired=%d)",
 		r.ttl, stats.Entries, stats.ExpiredNum)
+}
+
+// SetIsConnectedFn sets the connection check function for integration with connector.
+// This enables orphan detection by allowing the resolver to check if a subsystem
+// appears connected in nvme list-subsys output.
+func (r *DeviceResolver) SetIsConnectedFn(fn func(nqn string) (bool, error)) {
+	r.isConnectedFn = fn
+}
+
+// IsOrphanedSubsystem detects orphaned subsystems - appear connected but have no device.
+// An orphaned subsystem occurs when the controller loses connection but the
+// subsystem entry persists in nvme list-subsys output.
+//
+// Returns:
+// - (true, nil): Subsystem appears connected but no device found - orphaned
+// - (false, nil): Not connected OR connected with valid device - not orphaned
+// - (false, err): Error checking connection state
+func (r *DeviceResolver) IsOrphanedSubsystem(nqn string) (bool, error) {
+	// Can't check without connector integration
+	if r.isConnectedFn == nil {
+		klog.V(4).Infof("IsOrphanedSubsystem: no isConnectedFn set, cannot check NQN %s", nqn)
+		return false, nil
+	}
+
+	// Check if subsystem appears connected
+	connected, err := r.isConnectedFn(nqn)
+	if err != nil {
+		return false, fmt.Errorf("failed to check connection state for NQN %s: %w", nqn, err)
+	}
+
+	if !connected {
+		klog.V(4).Infof("IsOrphanedSubsystem: NQN %s is not connected, not orphaned", nqn)
+		return false, nil
+	}
+
+	// Connected - try to find device via fresh sysfs scan (bypass cache)
+	devicePath, err := r.scanner.FindDeviceByNQN(nqn)
+	if err == nil && devicePath != "" {
+		klog.V(4).Infof("IsOrphanedSubsystem: NQN %s connected with device %s, not orphaned", nqn, devicePath)
+		return false, nil
+	}
+
+	// Appears connected but no device found - this is an orphaned subsystem
+	klog.Warningf("Orphaned subsystem detected: NQN %s appears connected but has no device", nqn)
+	return true, nil
 }
