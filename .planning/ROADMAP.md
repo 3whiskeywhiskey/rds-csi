@@ -44,10 +44,14 @@ Plans:
   2. Driver automatically remounts staging paths when staleness detected (transparent to pods)
   3. Driver force-unmounts stuck mounts that won't unmount normally using lazy unmount
   4. Driver posts Kubernetes events to PVC when mount failures or recovery actions occur
-**Plans**: TBD
+**Plans**: 5 plans in 4 waves
 
 Plans:
-- [ ] TBD during planning
+- [ ] 02-01-PLAN.md - Mount infrastructure: procmounts parsing, force unmount, in-use detection (Wave 1)
+- [ ] 02-02-PLAN.md - Kubernetes event posting for mount failures (Wave 1, parallel)
+- [ ] 02-03-PLAN.md - Stale detection and recovery logic with retry (Wave 2)
+- [ ] 02-04-PLAN.md - Integration into CSI node operations (Wave 3)
+- [ ] 02-05-PLAN.md - Comprehensive unit tests (Wave 4)
 
 ### Phase 3: Reconnection Resilience
 **Goal**: Driver handles connection failures gracefully with proper backoff and configurable parameters
@@ -80,15 +84,15 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation - Device Path Resolution | 3/3 | Complete | 2026-01-30 |
-| 2. Stale Mount Detection and Recovery | 0/TBD | Not started | - |
+| 2. Stale Mount Detection and Recovery | 0/5 | Ready | - |
 | 3. Reconnection Resilience | 0/TBD | Not started | - |
 | 4. Observability | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-01-30*
-*Last updated: 2026-01-30 — Phase 1 complete*
+*Last updated: 2026-01-30 - Phase 2 planned*
