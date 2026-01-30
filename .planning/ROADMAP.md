@@ -12,7 +12,7 @@ This roadmap transforms the RDS CSI driver from functional-but-fragile to produc
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation - Device Path Resolution** - Reliable NQN-based device discovery
+- [x] **Phase 1: Foundation - Device Path Resolution** - Reliable NQN-based device discovery
 - [ ] **Phase 2: Stale Mount Detection and Recovery** - Automatic recovery from controller renumbering
 - [ ] **Phase 3: Reconnection Resilience** - Production-grade error handling and backoff
 - [ ] **Phase 4: Observability** - Monitoring and operational visibility
@@ -31,9 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans in 2 waves
 
 Plans:
-- [ ] 01-01-PLAN.md - Sysfs scanning and DeviceResolver with TTL cache (Wave 1)
-- [ ] 01-02-PLAN.md - Orphan detection and connector integration (Wave 2)
-- [ ] 01-03-PLAN.md - Comprehensive unit tests (Wave 2, parallel)
+- [x] 01-01-PLAN.md - Sysfs scanning and DeviceResolver with TTL cache (Wave 1)
+- [x] 01-02-PLAN.md - Orphan detection and connector integration (Wave 2)
+- [x] 01-03-PLAN.md - Comprehensive unit tests (Wave 2, parallel)
 
 ### Phase 2: Stale Mount Detection and Recovery
 **Goal**: Driver automatically detects and recovers from stale mounts caused by NVMe-oF reconnections
@@ -84,11 +84,11 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation - Device Path Resolution | 0/3 | Planned | - |
+| 1. Foundation - Device Path Resolution | 3/3 | Complete | 2026-01-30 |
 | 2. Stale Mount Detection and Recovery | 0/TBD | Not started | - |
 | 3. Reconnection Resilience | 0/TBD | Not started | - |
 | 4. Observability | 0/TBD | Not started | - |
 
 ---
 *Roadmap created: 2026-01-30*
-*Last updated: 2026-01-30*
+*Last updated: 2026-01-30 — Phase 1 complete*

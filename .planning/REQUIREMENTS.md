@@ -9,9 +9,9 @@ Requirements for production stability release. Each maps to roadmap phases.
 
 ### Device Path Resolution
 
-- [ ] **DEVP-01**: Driver resolves device path by NQN lookup in sysfs, not hardcoded paths
-- [ ] **DEVP-02**: Driver detects orphaned subsystems (appear connected but no device path)
-- [ ] **DEVP-03**: Driver caches NQN-to-path mappings with TTL and validation
+- [x] **DEVP-01**: Driver resolves device path by NQN lookup in sysfs, not hardcoded paths
+- [x] **DEVP-02**: Driver detects orphaned subsystems (appear connected but no device path)
+- [x] **DEVP-03**: Driver caches NQN-to-path mappings with TTL and validation
 
 ### Mount Validation
 
@@ -64,9 +64,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEVP-01 | Phase 1 | Pending |
-| DEVP-02 | Phase 1 | Pending |
-| DEVP-03 | Phase 1 | Pending |
+| DEVP-01 | Phase 1 | Complete |
+| DEVP-02 | Phase 1 | Complete |
+| DEVP-03 | Phase 1 | Complete |
 | MOUNT-01 | Phase 2 | Pending |
 | MOUNT-02 | Phase 2 | Pending |
 | MOUNT-03 | Phase 2 | Pending |
@@ -84,4 +84,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-30*
-*Last updated: 2026-01-30 after roadmap creation*
+*Last updated: 2026-01-30 — Phase 1 requirements complete*
