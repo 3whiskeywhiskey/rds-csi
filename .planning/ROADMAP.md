@@ -28,10 +28,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. Driver detects orphaned subsystems (appear connected but have no device) before attempting use
   3. Driver stores NQN (not device path) in staging metadata and resolves on-demand
   4. All device lookups use cached resolver with TTL validation (no hardcoded /dev/nvmeXnY assumptions)
-**Plans**: TBD
+**Plans**: 3 plans in 2 waves
 
 Plans:
-- [ ] TBD during planning
+- [ ] 01-01-PLAN.md - Sysfs scanning and DeviceResolver with TTL cache (Wave 1)
+- [ ] 01-02-PLAN.md - Orphan detection and connector integration (Wave 2)
+- [ ] 01-03-PLAN.md - Comprehensive unit tests (Wave 2, parallel)
 
 ### Phase 2: Stale Mount Detection and Recovery
 **Goal**: Driver automatically detects and recovers from stale mounts caused by NVMe-oF reconnections
@@ -82,7 +84,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation - Device Path Resolution | 0/TBD | Not started | - |
+| 1. Foundation - Device Path Resolution | 0/3 | Planned | - |
 | 2. Stale Mount Detection and Recovery | 0/TBD | Not started | - |
 | 3. Reconnection Resilience | 0/TBD | Not started | - |
 | 4. Observability | 0/TBD | Not started | - |
