@@ -42,6 +42,9 @@ type Driver struct {
 	// RDS client (interface allows different implementations: SSH, API, mock)
 	rdsClient rds.RDSClient
 
+	// Kubernetes client (for events and reconciler)
+	k8sClient kubernetes.Interface
+
 	// Orphan reconciler (optional)
 	reconciler *reconciler.OrphanReconciler
 
@@ -92,9 +95,10 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	klog.Infof("Driver: %s Version: %s GitCommit: %s BuildDate: %s", config.DriverName, config.Version, gitCommit, buildDate)
 
 	driver := &Driver{
-		name:    config.DriverName,
-		version: config.Version,
-		nodeID:  config.NodeID,
+		name:      config.DriverName,
+		version:   config.Version,
+		nodeID:    config.NodeID,
+		k8sClient: config.K8sClient,
 	}
 
 	// Initialize RDS client if controller is enabled
@@ -233,7 +237,7 @@ func (d *Driver) Run(endpoint string) error {
 	// Initialize node service if enabled
 	if d.nodeID != "" {
 		klog.Info("Node service enabled")
-		d.ns = NewNodeServer(d, d.nodeID)
+		d.ns = NewNodeServer(d, d.nodeID, d.k8sClient)
 	}
 
 	// Start orphan reconciler if configured

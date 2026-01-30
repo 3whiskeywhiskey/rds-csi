@@ -7,6 +7,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
@@ -33,19 +34,27 @@ const (
 // NodeServer implements the CSI Node service
 type NodeServer struct {
 	csi.UnimplementedNodeServer
-	driver   *Driver
-	nvmeConn nvme.Connector
-	mounter  mount.Mounter
-	nodeID   string
+	driver      *Driver
+	nvmeConn    nvme.Connector
+	mounter     mount.Mounter
+	nodeID      string
+	eventPoster *EventPoster // for posting K8s events
 }
 
 // NewNodeServer creates a new Node service
-func NewNodeServer(driver *Driver, nodeID string) *NodeServer {
+// If k8sClient is provided, events will be posted for mount failures
+func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface) *NodeServer {
+	var eventPoster *EventPoster
+	if k8sClient != nil {
+		eventPoster = NewEventPoster(k8sClient)
+	}
+
 	return &NodeServer{
-		driver:   driver,
-		nvmeConn: nvme.NewConnector(),
-		mounter:  mount.NewMounter(),
-		nodeID:   nodeID,
+		driver:      driver,
+		nvmeConn:    nvme.NewConnector(),
+		mounter:     mount.NewMounter(),
+		nodeID:      nodeID,
+		eventPoster: eventPoster,
 	}
 }
 
@@ -451,6 +460,16 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 }
 
 // Helper functions
+
+// postEvent posts an event if eventPoster is configured
+// Silently does nothing if eventPoster is nil (events disabled)
+func (ns *NodeServer) postEvent(ctx context.Context, pvcNamespace, pvcName, volumeID, reason, message string) {
+	if ns.eventPoster == nil {
+		return
+	}
+	// Actual posting handled by EventPoster methods in Plan 04
+	// This is a placeholder for future integration
+}
 
 // volumeIDToNQN converts a volume ID to an NVMe Qualified Name
 func volumeIDToNQN(volumeID string) (string, error) {
