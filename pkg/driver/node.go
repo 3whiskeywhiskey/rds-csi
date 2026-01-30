@@ -298,6 +298,33 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			"staging path %s is not mounted", stagingPath)
 	}
 
+	// Check for stale mount and attempt recovery
+	// Extract NQN from volume context or derive from volumeID
+	volumeContext := req.GetVolumeContext()
+	nqn := volumeContext[volumeContextNQN]
+	if nqn == "" {
+		nqn, _ = volumeIDToNQN(volumeID)
+	}
+	if nqn != "" {
+		fsType := defaultFSType
+		if mnt := req.GetVolumeCapability().GetMount(); mnt != nil && mnt.FsType != "" {
+			fsType = mnt.FsType
+		}
+		// Get mount options for recovery (base options, not bind options)
+		stagingMountOptions := []string{}
+		if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
+			stagingMountOptions = mnt.MountFlags
+		}
+
+		// Extract PVC info from volume context if available
+		pvcNamespace := volumeContext["csi.storage.k8s.io/pvc/namespace"]
+		pvcName := volumeContext["csi.storage.k8s.io/pvc/name"]
+
+		if err := ns.checkAndRecoverMount(ctx, stagingPath, nqn, fsType, stagingMountOptions, pvcNamespace, pvcName, volumeID); err != nil {
+			return nil, status.Errorf(codes.Internal, "stale mount recovery failed: %v", err)
+		}
+	}
+
 	// Build mount options
 	mountOptions := []string{"bind"}
 	if req.GetReadonly() {
@@ -379,6 +406,27 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	}
 	if volumePath == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume path is required")
+	}
+
+	// Check for stale mount if we can derive NQN
+	// For stats, we just need to verify mount is healthy
+	nqn, err := volumeIDToNQN(volumeID)
+	if err == nil && ns.staleChecker != nil {
+		stale, reason, checkErr := ns.staleChecker.IsMountStale(volumePath, nqn)
+		if checkErr != nil {
+			klog.V(4).Infof("Could not check mount staleness: %v", checkErr)
+		} else if stale {
+			// For GetVolumeStats, we report unhealthy rather than attempting recovery
+			// Recovery should happen in NodePublishVolume when pod accesses volume
+			klog.Warningf("Stale mount detected for volume %s at %s (reason: %s)", volumeID, volumePath, reason)
+			return &csi.NodeGetVolumeStatsResponse{
+				Usage: []*csi.VolumeUsage{},
+				VolumeCondition: &csi.VolumeCondition{
+					Abnormal: true,
+					Message:  fmt.Sprintf("Stale mount detected: %s", reason),
+				},
+			}, nil
+		}
 	}
 
 	// Get device statistics
