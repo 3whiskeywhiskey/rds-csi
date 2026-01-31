@@ -75,6 +75,16 @@ func (am *AttachmentManager) TrackAttachment(ctx context.Context, volumeID, node
 	am.mu.Unlock()
 
 	klog.V(2).Infof("Tracked attachment: volume=%s, node=%s", volumeID, nodeID)
+
+	// Persist to PV annotations (outside of lock - I/O operation)
+	if err := am.persistAttachment(ctx, volumeID, nodeID); err != nil {
+		// Rollback in-memory state on persistence failure
+		am.mu.Lock()
+		delete(am.attachments, volumeID)
+		am.mu.Unlock()
+		return fmt.Errorf("failed to persist attachment: %w", err)
+	}
+
 	return nil
 }
 
@@ -101,6 +111,14 @@ func (am *AttachmentManager) UntrackAttachment(ctx context.Context, volumeID str
 	am.mu.Unlock()
 
 	klog.V(2).Infof("Untracked attachment: volume=%s", volumeID)
+
+	// Clear PV annotations (outside of lock - I/O operation)
+	// Log warning if it fails but don't fail the operation
+	// (in-memory state is source of truth during runtime)
+	if err := am.clearAttachment(ctx, volumeID); err != nil {
+		klog.Warningf("Failed to clear attachment annotation for volume %s: %v", volumeID, err)
+	}
+
 	return nil
 }
 
