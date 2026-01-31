@@ -56,6 +56,12 @@ type Driver struct {
 	// Attachment manager (for controller only)
 	attachmentManager *attachment.AttachmentManager
 
+	// Attachment reconciler (for controller only)
+	attachmentReconciler *attachment.AttachmentReconciler
+
+	// Grace period for attachment handoff during live migration
+	attachmentGracePeriod time.Duration
+
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
 	cscaps []*csi.ControllerServiceCapability
@@ -88,6 +94,11 @@ type DriverConfig struct {
 	OrphanCheckInterval    time.Duration
 	OrphanGracePeriod      time.Duration
 	OrphanDryRun           bool
+
+	// Attachment reconciler settings
+	EnableAttachmentReconciler  bool
+	AttachmentReconcileInterval time.Duration // Default: 5 minutes
+	AttachmentGracePeriod       time.Duration // Default: 30 seconds
 
 	// Mode flags
 	EnableController bool
@@ -140,6 +151,30 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	if config.EnableController && config.K8sClient != nil {
 		driver.attachmentManager = attachment.NewAttachmentManager(config.K8sClient)
 		klog.Info("Attachment manager created")
+	}
+
+	// Initialize attachment reconciler if enabled
+	if config.EnableController && config.EnableAttachmentReconciler && config.K8sClient != nil && driver.attachmentManager != nil {
+		reconcilerConfig := attachment.ReconcilerConfig{
+			Manager:     driver.attachmentManager,
+			K8sClient:   config.K8sClient,
+			Interval:    config.AttachmentReconcileInterval,
+			GracePeriod: config.AttachmentGracePeriod,
+			Metrics:     config.Metrics,
+		}
+
+		attachmentReconciler, err := attachment.NewAttachmentReconciler(reconcilerConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create attachment reconciler: %w", err)
+		}
+
+		driver.attachmentReconciler = attachmentReconciler
+		driver.attachmentGracePeriod = config.AttachmentGracePeriod
+		if driver.attachmentGracePeriod <= 0 {
+			driver.attachmentGracePeriod = 30 * time.Second
+		}
+		klog.Infof("Attachment reconciler enabled (interval=%v, grace_period=%v)",
+			config.AttachmentReconcileInterval, config.AttachmentGracePeriod)
 	}
 
 	// Add volume capabilities
@@ -288,6 +323,15 @@ func (d *Driver) Run(endpoint string) error {
 		klog.Info("Attachment manager initialized")
 	}
 
+	// Start attachment reconciler if configured
+	if d.attachmentReconciler != nil {
+		ctx := context.Background()
+		if err := d.attachmentReconciler.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start attachment reconciler: %w", err)
+		}
+		klog.Info("Attachment reconciler started")
+	}
+
 	// Start orphan reconciler if configured
 	if d.reconciler != nil {
 		ctx := context.Background()
@@ -312,6 +356,12 @@ func (d *Driver) Run(endpoint string) error {
 // Stop stops the driver and cleans up resources
 func (d *Driver) Stop() {
 	klog.Info("Stopping RDS CSI driver")
+
+	// Stop attachment reconciler if running
+	if d.attachmentReconciler != nil {
+		d.attachmentReconciler.Stop()
+		klog.Info("Attachment reconciler stopped")
+	}
 
 	// Stop orphan reconciler if running
 	if d.reconciler != nil {
@@ -354,4 +404,9 @@ func (d *Driver) GetMetrics() *observability.Metrics {
 // GetAttachmentManager returns the attachment manager (may be nil if controller disabled)
 func (d *Driver) GetAttachmentManager() *attachment.AttachmentManager {
 	return d.attachmentManager
+}
+
+// GetAttachmentGracePeriod returns the configured grace period for attachment handoff.
+func (d *Driver) GetAttachmentGracePeriod() time.Duration {
+	return d.attachmentGracePeriod
 }
