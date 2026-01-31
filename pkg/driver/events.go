@@ -147,3 +147,49 @@ func (ep *EventPoster) PostStaleMountDetected(ctx context.Context, pvcNamespace,
 
 	return nil
 }
+
+// PostConnectionFailure posts a Warning event when NVMe connection fails
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, nodeName, targetAddress, err
+func (ep *EventPoster) PostConnectionFailure(ctx context.Context, pvcNamespace, pvcName, volumeID, nodeName, targetAddress string, err error) error {
+	pvc, getErr := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if getErr != nil {
+		klog.Warningf("Failed to get PVC %s/%s for connection failure event: %v", pvcNamespace, pvcName, getErr)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s] on [%s]: Connection to %s failed: %v", volumeID, nodeName, targetAddress, err)
+	ep.recorder.Event(pvc, corev1.EventTypeWarning, EventReasonConnectionFailure, eventMessage)
+
+	klog.V(2).Infof("Posted connection failure event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostConnectionRecovery posts a Normal event when NVMe connection is recovered
+func (ep *EventPoster) PostConnectionRecovery(ctx context.Context, pvcNamespace, pvcName, volumeID, nodeName, targetAddress string, attempts int) error {
+	pvc, getErr := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if getErr != nil {
+		klog.Warningf("Failed to get PVC %s/%s for connection recovery event: %v", pvcNamespace, pvcName, getErr)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s] on [%s]: Connection to %s recovered after %d attempts", volumeID, nodeName, targetAddress, attempts)
+	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonConnectionRecovery, eventMessage)
+
+	klog.V(2).Infof("Posted connection recovery event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostOrphanDetected logs when an orphan NVMe connection is detected.
+// Orphans have no associated PVC, so this logs rather than posting a K8s event.
+// The log format is structured for easy parsing by log aggregation systems.
+func (ep *EventPoster) PostOrphanDetected(ctx context.Context, nodeName, nqn string) error {
+	klog.Infof("OrphanDetected: node=%s nqn=%s", nodeName, nqn)
+	return nil
+}
+
+// PostOrphanCleaned logs when an orphan NVMe connection is cleaned up.
+// Orphans have no associated PVC, so this logs rather than posting a K8s event.
+func (ep *EventPoster) PostOrphanCleaned(ctx context.Context, nodeName, nqn string) error {
+	klog.Infof("OrphanCleaned: node=%s nqn=%s", nodeName, nqn)
+	return nil
+}
