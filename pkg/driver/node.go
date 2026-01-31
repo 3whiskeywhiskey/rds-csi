@@ -213,10 +213,10 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	devicePath, err := ns.nvmeConn.ConnectWithRetry(ctx, target, connConfig)
 	if err != nil {
-		// Post connection failure event
+		// Post connection failure event (ignore error - event posting is best effort)
 		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
 			targetAddr := fmt.Sprintf("%s:%d", nvmeAddress, port)
-			ns.eventPoster.PostConnectionFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, targetAddr, err)
+			_ = ns.eventPoster.PostConnectionFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, targetAddr, err)
 		}
 		// Log volume stage failure
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
@@ -227,9 +227,9 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	// Step 2: Format filesystem if needed
 	if err := ns.mounter.Format(devicePath, fsType); err != nil {
-		// Post mount failure event (format is part of mount preparation)
+		// Post mount failure event (format is part of mount preparation, ignore error - best effort)
 		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-			ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to format device %s: %v", devicePath, err))
+			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to format device %s: %v", devicePath, err))
 		}
 		// Cleanup on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
@@ -245,9 +245,9 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	if err := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); err != nil {
-		// Post mount failure event
+		// Post mount failure event (ignore error - event posting is best effort)
 		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-			ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to mount %s to %s: %v", devicePath, stagingPath, err))
+			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to mount %s to %s: %v", devicePath, stagingPath, err))
 		}
 		// Cleanup on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
