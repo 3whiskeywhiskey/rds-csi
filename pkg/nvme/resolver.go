@@ -212,6 +212,12 @@ func (r *DeviceResolver) SetIsConnectedFn(fn func(nqn string) (bool, error)) {
 	r.isConnectedFn = fn
 }
 
+// ListConnectedSubsystems returns all NQNs that have subsystem entries in sysfs.
+// This scans /sys/class/nvme-subsystem/*/subsysnqn for connected subsystems.
+func (r *DeviceResolver) ListConnectedSubsystems() ([]string, error) {
+	return r.scanner.ListSubsystemNQNs()
+}
+
 // IsOrphanedSubsystem detects orphaned subsystems - appear connected but have no device.
 // An orphaned subsystem occurs when the controller loses connection but the
 // subsystem entry persists in nvme list-subsys output.

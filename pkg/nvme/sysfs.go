@@ -130,6 +130,41 @@ func (s *SysfsScanner) FindBlockDevice(controllerPath string) (string, error) {
 	return "", fmt.Errorf("no block device found for controller %s", controllerName)
 }
 
+// ListSubsystemNQNs returns all NQNs from /sys/class/nvme-subsystem/*/subsysnqn
+// This provides enumeration of all connected NVMe subsystems for orphan detection.
+func (s *SysfsScanner) ListSubsystemNQNs() ([]string, error) {
+	subsysDir := filepath.Join(s.Root, "class", "nvme-subsystem")
+
+	entries, err := os.ReadDir(subsysDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			klog.V(4).Infof("ListSubsystemNQNs: nvme-subsystem directory does not exist")
+			return nil, nil // No subsystems connected
+		}
+		return nil, fmt.Errorf("failed to read nvme-subsystem directory: %w", err)
+	}
+
+	var nqns []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		nqnPath := filepath.Join(subsysDir, entry.Name(), "subsysnqn")
+		data, err := os.ReadFile(nqnPath)
+		if err != nil {
+			klog.V(4).Infof("ListSubsystemNQNs: could not read NQN from %s: %v", nqnPath, err)
+			continue
+		}
+		nqn := strings.TrimSpace(string(data))
+		if nqn != "" {
+			nqns = append(nqns, nqn)
+		}
+	}
+
+	klog.V(4).Infof("ListSubsystemNQNs: found %d subsystems", len(nqns))
+	return nqns, nil
+}
+
 // FindDeviceByNQN scans all controllers to find the device path for a given NQN
 // This is a convenience function that combines ScanControllers, ReadSubsysNQN, and FindBlockDevice
 func (s *SysfsScanner) FindDeviceByNQN(nqn string) (string, error) {

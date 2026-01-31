@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 )
 
 var (
@@ -128,6 +130,23 @@ func main() {
 		OrphanDryRun:           *orphanDryRun,
 		EnableController:       *controllerMode,
 		EnableNode:             *nodeMode,
+	}
+
+	// Cleanup orphaned NVMe connections on node startup
+	// This prevents accumulation of orphaned connections after node restarts
+	if *nodeMode {
+		klog.Info("Running orphan NVMe connection cleanup on startup")
+
+		// Create a connector for cleanup (same as node server uses internally)
+		cleanupConnector := nvme.NewConnector()
+		cleaner := nvme.NewOrphanCleaner(cleanupConnector)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		if err := cleaner.CleanupOrphanedConnections(ctx); err != nil {
+			// Log warning but don't fail startup - cleanup is best effort
+			klog.Warningf("Orphan NVMe cleanup failed (non-fatal): %v", err)
+		}
+		cancel()
 	}
 
 	// Create driver

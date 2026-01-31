@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -142,6 +143,27 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		}
 	}
 
+	// Extract connection parameters from VolumeContext
+	connConfig := nvme.DefaultConnectionConfig()
+
+	if val, ok := volumeContext["ctrlLossTmo"]; ok {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			connConfig.CtrlLossTmo = parsed
+		}
+	}
+
+	if val, ok := volumeContext["reconnectDelay"]; ok {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			connConfig.ReconnectDelay = parsed
+		}
+	}
+
+	if val, ok := volumeContext["keepAliveTmo"]; ok {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			connConfig.KeepAliveTmo = parsed
+		}
+	}
+
 	klog.V(2).Infof("Staging volume %s: NQN=%s, Address=%s:%d, FSType=%s",
 		volumeID, nqn, nvmeAddress, port, fsType)
 
@@ -151,7 +173,7 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	startTime := time.Now()
 
-	// Step 1: Connect to NVMe/TCP target
+	// Step 1: Connect to NVMe/TCP target with retry support
 	target := nvme.Target{
 		Transport:     "tcp",
 		NQN:           nqn,
@@ -159,7 +181,10 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		TargetPort:    port,
 	}
 
-	devicePath, err := ns.nvmeConn.Connect(target)
+	klog.V(2).Infof("Connecting with config: ctrl_loss_tmo=%d, reconnect_delay=%d (with retry)",
+		connConfig.CtrlLossTmo, connConfig.ReconnectDelay)
+
+	devicePath, err := ns.nvmeConn.ConnectWithRetry(ctx, target, connConfig)
 	if err != nil {
 		// Log volume stage failure
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
