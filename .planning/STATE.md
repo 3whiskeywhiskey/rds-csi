@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-30)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** Phase 4 - Observability
+**Current focus:** Phase 4 - Observability (COMPLETE)
 
 ## Current Position
 
 Phase: 4 of 4 (Observability)
-Plan: 4 of 5 complete (04-01, 04-02, 04-03, 04-04)
-Status: Phase 4 in progress
-Last activity: 2026-01-31 - Completed 04-03-PLAN.md
+Plan: 5 of 5 complete (04-01, 04-02, 04-03, 04-04, 04-05)
+Status: Phase 4 complete - All phases complete
+Last activity: 2026-01-31 - Completed 04-05-PLAN.md
 
-Progress: [█████████░] 94% (16/17 plans complete)
+Progress: [██████████] 100% (17/17 plans complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
-- Average duration: 2.4 min
-- Total execution time: 0.63 hours
+- Total plans completed: 17
+- Average duration: 2.6 min
+- Total execution time: 0.73 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [█████████░] 94% (16/17 plans complete)
 | 01-foundation | 3 | 9 min | 3 min |
 | 02-stale-mount-detection | 5 | 14 min | 2.8 min |
 | 03-reconnection-resilience | 4 | 11 min | 2.75 min |
-| 04-observability | 4 | 10 min | 2.5 min |
+| 04-observability | 5 | 16 min | 3.2 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (1 min), 04-04 (1 min), 04-02 (3 min), 04-03 (5 min)
-- Trend: Phase 4 nearing completion - HTTP metrics server instrumented
+- Last 5 plans: 04-01 (1 min), 04-04 (1 min), 04-02 (3 min), 04-03 (5 min), 04-05 (6 min)
+- Trend: All phases complete - project milestone achieved
 
 *Updated after each plan completion*
 
@@ -96,21 +96,23 @@ Recent decisions affecting current work:
 - Port 9809 for metrics server (common storage controller port)
 - Named return values for defer-based metrics recording
 - Setter injection (SetPromMetrics, SetMetrics) for optional metrics support
+- SetMountDeviceFunc added to StaleMountChecker for cross-package test injection
+- Device mismatch test adapted for macOS (tests inconclusive path)
 
 ### Pending Todos
 
-None yet.
+None - all phases complete.
 
 ### Blockers/Concerns
 
-None yet.
+None - project implementation complete.
 
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 04-03-PLAN.md - HTTP metrics server and instrumentation
+Stopped at: Completed 04-05-PLAN.md - Observability unit tests (Prometheus + VolumeCondition)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 - Phase 4 Plan 3 complete, HTTP metrics server and CSI instrumentation*
+*Last updated: 2026-01-31 - Phase 4 complete, all 17 plans executed successfully*
