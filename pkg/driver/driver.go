@@ -9,6 +9,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
 )
@@ -45,6 +46,9 @@ type Driver struct {
 	// Kubernetes client (for events and reconciler)
 	k8sClient kubernetes.Interface
 
+	// Prometheus metrics (may be nil if disabled)
+	metrics *observability.Metrics
+
 	// Orphan reconciler (optional)
 	reconciler *reconciler.OrphanReconciler
 
@@ -71,6 +75,9 @@ type DriverConfig struct {
 
 	// Kubernetes client (required for orphan reconciler)
 	K8sClient kubernetes.Interface
+
+	// Prometheus metrics (optional, nil to disable)
+	Metrics *observability.Metrics
 
 	// Orphan reconciler settings
 	EnableOrphanReconciler bool
@@ -99,6 +106,7 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		version:   config.Version,
 		nodeID:    config.NodeID,
 		k8sClient: config.K8sClient,
+		metrics:   config.Metrics,
 	}
 
 	// Initialize RDS client if controller is enabled
@@ -310,4 +318,9 @@ func (d *Driver) AddControllerServiceCapabilities() {
 // AddNodeServiceCapabilities adds node service capabilities (exported for testing)
 func (d *Driver) AddNodeServiceCapabilities() {
 	d.addNodeServiceCapabilities()
+}
+
+// GetMetrics returns the Prometheus metrics instance (may be nil if disabled)
+func (d *Driver) GetMetrics() *observability.Metrics {
+	return d.metrics
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/driver"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
 var (
@@ -45,6 +47,9 @@ var (
 
 	// Kubernetes configuration
 	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not specified)")
+
+	// Metrics configuration
+	metricsAddr = flag.String("metrics-address", ":9809", "Address for Prometheus metrics endpoint (empty to disable)")
 
 	// Version flag
 	version = flag.Bool("version", false, "Print version and exit")
@@ -112,6 +117,13 @@ func main() {
 		klog.Info("Kubernetes client initialized for orphan reconciler")
 	}
 
+	// Create Prometheus metrics
+	var promMetrics *observability.Metrics
+	if *metricsAddr != "" {
+		promMetrics = observability.NewMetrics()
+		klog.Infof("Prometheus metrics enabled on %s", *metricsAddr)
+	}
+
 	// Create driver configuration
 	config := driver.DriverConfig{
 		DriverName:             *driverName,
@@ -124,6 +136,7 @@ func main() {
 		RDSInsecureSkipVerify:  *rdsInsecure,
 		RDSVolumeBasePath:      *rdsVolumeBasePath,
 		K8sClient:              k8sClient,
+		Metrics:                promMetrics,
 		EnableOrphanReconciler: *enableOrphanReconciler,
 		OrphanCheckInterval:    *orphanCheckInterval,
 		OrphanGracePeriod:      *orphanGracePeriod,
@@ -154,6 +167,19 @@ func main() {
 	drv, err := driver.NewDriver(config)
 	if err != nil {
 		klog.Fatalf("Failed to create driver: %v", err)
+	}
+
+	// Start metrics HTTP server
+	if promMetrics != nil {
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promMetrics.Handler())
+
+			klog.Infof("Starting metrics server on %s", *metricsAddr)
+			if err := http.ListenAndServe(*metricsAddr, mux); err != nil && err != http.ErrServerClosed {
+				klog.Errorf("Metrics server failed: %v", err)
+			}
+		}()
 	}
 
 	// Handle shutdown gracefully
