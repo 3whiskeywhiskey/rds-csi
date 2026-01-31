@@ -79,10 +79,14 @@ Plans:
   2. Driver reports volume health condition via NodeGetVolumeStats response
   3. Driver exposes Prometheus metrics endpoint showing connection failures, mount operations, and orphan detection
   4. Operators can query metrics to understand driver behavior and diagnose issues proactively
-**Plans**: TBD
+**Plans**: 5 plans in 3 waves
 
 Plans:
-- [ ] TBD during planning
+- [ ] 04-01-PLAN.md - Add GET_VOLUME_STATS and VOLUME_CONDITION capabilities, update NodeGetVolumeStats (Wave 1)
+- [ ] 04-02-PLAN.md - Create Prometheus metrics package with CSI-specific metrics (Wave 1, parallel)
+- [ ] 04-03-PLAN.md - Add HTTP metrics server and integrate metrics into driver (Wave 2)
+- [ ] 04-04-PLAN.md - Extend EventPoster with connection and orphan event types (Wave 2, parallel)
+- [ ] 04-05-PLAN.md - Comprehensive unit tests for observability features (Wave 3)
 
 ## Progress
 
@@ -94,8 +98,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 1. Foundation - Device Path Resolution | 3/3 | Complete | 2026-01-30 |
 | 2. Stale Mount Detection and Recovery | 5/5 | Complete | 2026-01-30 |
 | 3. Reconnection Resilience | 4/4 | Complete | 2026-01-30 |
-| 4. Observability | 0/TBD | Not started | - |
+| 4. Observability | 0/5 | Planned | - |
 
 ---
 *Roadmap created: 2026-01-30*
-*Last updated: 2026-01-30 - Phase 3 complete*
+*Last updated: 2026-01-30 - Phase 4 planned*
