@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 7 of 7 (Robustness and Observability)
-Plan: 1 of TBD complete
+Plan: 2 of TBD complete
 Status: In progress
-Last activity: 2026-01-31 — Completed 07-01-PLAN.md (grace period tracking and metrics)
+Last activity: 2026-01-31 — Completed 07-02-PLAN.md (attachment reconciler and grace period enforcement)
 
-Progress: [███████░░░] 70%
+Progress: [████████░░] 75%
 
 ## Milestone History
 
@@ -53,6 +53,9 @@ Progress: [███████░░░] 70%
 | GRACE-01  | Per-volume grace period with detachTimestamps map | 07-01 | Preserves detach history for migration |
 | METRICS-01 | Sub-second histogram buckets (0.01-5s)    | 07-01 | Attachment ops mostly in-memory |
 | EVENTS-01 | Normal event type for routine lifecycle    | 07-01 | VolumeAttached/Detached not failures |
+| RECONCILE-01 | Fail-open on K8s API errors during reconciliation | 07-02 | Don't clear valid attachments on transient errors |
+| RECONCILE-02 | 5-minute reconciler interval default      | 07-02 | Balance cleanup latency vs API load |
+| GRACE-02  | Grace period check before node validation  | 07-02 | Allows migration handoff before conflict |
 
 ### Pending Todos
 
@@ -68,9 +71,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 07-01-PLAN.md (grace period tracking and attachment metrics)
+Stopped at: Completed 07-02-PLAN.md (attachment reconciler and grace period enforcement)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 7 Plan 1 complete (grace period and metrics)*
+*Last updated: 2026-01-31 — Phase 7 Plan 2 complete (attachment reconciler and grace period)*
