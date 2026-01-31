@@ -22,6 +22,9 @@ type AttachmentManager struct {
 	// attachments maps volumeID to attachment state
 	attachments map[string]*AttachmentState
 
+	// detachTimestamps tracks last detach time per volume for grace period calculation
+	detachTimestamps map[string]time.Time
+
 	// volumeLocks provides per-volume operation locking
 	volumeLocks *VolumeLockManager
 
@@ -32,9 +35,10 @@ type AttachmentManager struct {
 // NewAttachmentManager creates a new AttachmentManager
 func NewAttachmentManager(k8sClient kubernetes.Interface) *AttachmentManager {
 	return &AttachmentManager{
-		attachments: make(map[string]*AttachmentState),
-		volumeLocks: NewVolumeLockManager(),
-		k8sClient:   k8sClient,
+		attachments:      make(map[string]*AttachmentState),
+		detachTimestamps: make(map[string]time.Time),
+		volumeLocks:      NewVolumeLockManager(),
+		k8sClient:        k8sClient,
 	}
 }
 
@@ -105,8 +109,10 @@ func (am *AttachmentManager) UntrackAttachment(ctx context.Context, volumeID str
 		return nil
 	}
 
-	// Delete under write lock
+	// Delete under write lock and record detach timestamp
 	am.mu.Lock()
+	// Record detach timestamp for grace period tracking
+	am.detachTimestamps[volumeID] = time.Now()
 	delete(am.attachments, volumeID)
 	am.mu.Unlock()
 
@@ -146,4 +152,37 @@ func (am *AttachmentManager) ListAttachments() map[string]*AttachmentState {
 	}
 
 	return copy
+}
+
+// IsWithinGracePeriod checks if a volume was recently detached and is within grace period.
+// This allows live migration handoff by preventing false conflicts.
+// Returns true if volume was detached less than gracePeriod ago.
+func (am *AttachmentManager) IsWithinGracePeriod(volumeID string, gracePeriod time.Duration) bool {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	detachTime, exists := am.detachTimestamps[volumeID]
+	if !exists {
+		return false
+	}
+
+	return time.Since(detachTime) < gracePeriod
+}
+
+// GetDetachTimestamp returns the last detach timestamp for a volume.
+// Returns zero time if volume was never detached.
+func (am *AttachmentManager) GetDetachTimestamp(volumeID string) time.Time {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	return am.detachTimestamps[volumeID]
+}
+
+// ClearDetachTimestamp removes the detach timestamp for a volume.
+// Called after successful reattachment.
+func (am *AttachmentManager) ClearDetachTimestamp(volumeID string) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	delete(am.detachTimestamps, volumeID)
 }

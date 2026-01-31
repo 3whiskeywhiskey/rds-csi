@@ -14,4 +14,8 @@ type AttachmentState struct {
 
 	// AttachedAt is the timestamp when the volume was attached to the node
 	AttachedAt time.Time
+
+	// DetachedAt is the timestamp when the volume was detached.
+	// nil if volume is currently attached. Used for grace period calculation.
+	DetachedAt *time.Time
 }
