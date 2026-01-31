@@ -24,7 +24,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: 3whiskeywhiskey/rds-csi-driver
+  IMAGE_NAME: 3whiskeywhiskey/rds-csi
 
 jobs:
   # Check if we should create a release based on commits
