@@ -29,6 +29,9 @@ const (
 	// Orphan cleanup events
 	EventReasonOrphanDetected = "OrphanDetected"
 	EventReasonOrphanCleaned  = "OrphanCleaned"
+
+	// Attachment conflict events
+	EventReasonAttachmentConflict = "AttachmentConflict"
 )
 
 // EventPoster posts Kubernetes events for mount operations
@@ -232,5 +235,30 @@ func (ep *EventPoster) PostOrphanCleaned(ctx context.Context, nodeName, nqn stri
 	if ep.metrics != nil {
 		ep.metrics.RecordEventPosted(EventReasonOrphanCleaned)
 	}
+	return nil
+}
+
+// PostAttachmentConflict posts a Warning event when a volume attachment is rejected
+// due to the volume being attached to a different node.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, requestedNode, attachedNode
+func (ep *EventPoster) PostAttachmentConflict(ctx context.Context, pvcNamespace, pvcName, volumeID, requestedNode, attachedNode string) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		// Don't fail the operation just because event couldn't be posted
+		klog.Warningf("Failed to get PVC %s/%s for attachment conflict event: %v", pvcNamespace, pvcName, err)
+		return nil
+	}
+
+	// Format message with actionable information for operators
+	eventMessage := fmt.Sprintf("[%s]: Attachment to node %s rejected - volume already attached to node %s. Delete the pod on %s to release the volume.", volumeID, requestedNode, attachedNode, attachedNode)
+
+	ep.recorder.Event(pvc, corev1.EventTypeWarning, EventReasonAttachmentConflict, eventMessage)
+
+	// Record metric
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonAttachmentConflict)
+	}
+
+	klog.V(2).Infof("Posted attachment conflict event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 	return nil
 }
