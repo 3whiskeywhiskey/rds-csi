@@ -9,6 +9,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
@@ -51,6 +52,9 @@ type Driver struct {
 
 	// Orphan reconciler (optional)
 	reconciler *reconciler.OrphanReconciler
+
+	// Attachment manager (for controller only)
+	attachmentManager *attachment.AttachmentManager
 
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
@@ -130,6 +134,12 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 
 		driver.rdsClient = rdsClient
 		klog.Infof("Connected to RDS at %s:%d", config.RDSAddress, config.RDSPort)
+	}
+
+	// Initialize attachment manager if controller is enabled
+	if config.EnableController && config.K8sClient != nil {
+		driver.attachmentManager = attachment.NewAttachmentManager(config.K8sClient)
+		klog.Info("Attachment manager created")
 	}
 
 	// Add volume capabilities
@@ -262,6 +272,15 @@ func (d *Driver) Run(endpoint string) error {
 		d.ns = NewNodeServer(d, d.nodeID, d.k8sClient)
 	}
 
+	// Initialize attachment manager state
+	if d.attachmentManager != nil {
+		ctx := context.Background()
+		if err := d.attachmentManager.Initialize(ctx); err != nil {
+			return fmt.Errorf("failed to initialize attachment manager: %w", err)
+		}
+		klog.Info("Attachment manager initialized")
+	}
+
 	// Start orphan reconciler if configured
 	if d.reconciler != nil {
 		ctx := context.Background()
@@ -323,4 +342,9 @@ func (d *Driver) AddNodeServiceCapabilities() {
 // GetMetrics returns the Prometheus metrics instance (may be nil if disabled)
 func (d *Driver) GetMetrics() *observability.Metrics {
 	return d.metrics
+}
+
+// GetAttachmentManager returns the attachment manager (may be nil if controller disabled)
+func (d *Driver) GetAttachmentManager() *attachment.AttachmentManager {
+	return d.attachmentManager
 }
