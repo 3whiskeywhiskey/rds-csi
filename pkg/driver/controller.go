@@ -8,6 +8,8 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
@@ -332,9 +334,158 @@ func (cs *ControllerServer) ControllerGetCapabilities(ctx context.Context, req *
 	}, nil
 }
 
-// ControllerPublishVolume is not supported (node-local attachment)
+// validateBlockingNodeExists checks if a node still exists in Kubernetes.
+// Returns (exists, error) - if node is deleted, exists=false, error=nil.
+// Used for self-healing when blocking node is deleted without cleanup.
+func (cs *ControllerServer) validateBlockingNodeExists(ctx context.Context, nodeID string) (bool, error) {
+	if cs.driver.k8sClient == nil {
+		// No k8s client = can't validate, assume node exists (fail-closed)
+		return true, nil
+	}
+	_, err := cs.driver.k8sClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil // Node deleted
+		}
+		return false, err // API error
+	}
+	return true, nil
+}
+
+// buildPublishContext creates the publish_context map with NVMe connection parameters.
+// Uses snake_case keys to match existing volumeContext conventions.
+func (cs *ControllerServer) buildPublishContext(volume *rds.VolumeInfo, params map[string]string) map[string]string {
+	fsType := "ext4"
+	if fs, ok := params[paramFSType]; ok && fs != "" {
+		fsType = fs
+	}
+
+	return map[string]string{
+		"nvme_address": cs.getNVMEAddress(params),
+		"nvme_port":    fmt.Sprintf("%d", volume.NVMETCPPort),
+		"nvme_nqn":     volume.NVMETCPNQN,
+		"fs_type":      fsType,
+	}
+}
+
+// postAttachmentConflictEvent posts a K8s event for an attachment conflict.
+// Best effort - failures are logged but don't affect the main operation.
+func (cs *ControllerServer) postAttachmentConflictEvent(ctx context.Context, req *csi.ControllerPublishVolumeRequest, attachedNode string) {
+	// Extract PVC info from volume context if available
+	volCtx := req.GetVolumeContext()
+	pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+	pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+
+	if pvcNamespace == "" || pvcName == "" {
+		klog.V(3).Infof("Cannot post attachment conflict event: PVC info not in volume context")
+		return
+	}
+
+	// Create temporary EventPoster if we have k8s client
+	if cs.driver.k8sClient == nil {
+		return
+	}
+
+	poster := NewEventPoster(cs.driver.k8sClient)
+	if err := poster.PostAttachmentConflict(ctx, pvcNamespace, pvcName, req.GetVolumeId(), req.GetNodeId(), attachedNode); err != nil {
+		klog.Warningf("Failed to post attachment conflict event: %v", err)
+	}
+}
+
+// ControllerPublishVolume tracks volume attachment to a node and enforces RWO semantics.
+// Returns publish_context with NVMe connection parameters for NodeStageVolume.
 func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ControllerPublishVolume is not supported")
+	volumeID := req.GetVolumeId()
+	nodeID := req.GetNodeId()
+
+	klog.V(2).Infof("ControllerPublishVolume called for volume %s to node %s", volumeID, nodeID)
+
+	// Validate request
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node ID is required")
+	}
+
+	// Validate volume ID format (security: prevent injection)
+	if err := utils.ValidateVolumeID(volumeID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
+	}
+
+	// Verify volume exists on RDS
+	volume, err := cs.driver.rdsClient.GetVolume(volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "volume %s not found: %v", volumeID, err)
+	}
+
+	// Get attachment manager
+	am := cs.driver.GetAttachmentManager()
+	if am == nil {
+		// No attachment manager = skip tracking (single-node scenario or disabled)
+		klog.V(3).Infof("Attachment manager not available, skipping tracking for volume %s", volumeID)
+		return &csi.ControllerPublishVolumeResponse{
+			PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
+		}, nil
+	}
+
+	// Check existing attachment
+	existing, exists := am.GetAttachment(volumeID)
+	if exists {
+		if existing.NodeID == nodeID {
+			// CSI-01: Idempotent - already attached to same node
+			klog.V(2).Infof("Volume %s already attached to node %s (idempotent)", volumeID, nodeID)
+			return &csi.ControllerPublishVolumeResponse{
+				PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
+			}, nil
+		}
+
+		// CSI-06: Before rejecting, verify blocking node still exists
+		nodeExists, err := cs.validateBlockingNodeExists(ctx, existing.NodeID)
+		if err != nil {
+			// API error - fail closed to prevent data corruption
+			klog.Errorf("Failed to verify node %s existence: %v", existing.NodeID, err)
+			return nil, status.Errorf(codes.Internal, "failed to verify node %s: %v", existing.NodeID, err)
+		}
+
+		if !nodeExists {
+			// Node deleted - auto-clear stale attachment (self-healing)
+			klog.Warningf("Volume %s attached to deleted node %s, clearing stale attachment", volumeID, existing.NodeID)
+			if err := am.UntrackAttachment(ctx, volumeID); err != nil {
+				klog.Warningf("Failed to clear stale attachment for volume %s: %v", volumeID, err)
+				// Continue anyway - in-memory state may be stale
+			}
+			// Fall through to allow new attachment
+		} else {
+			// CSI-02: Node exists - genuine RWO conflict
+			klog.Warningf("Volume %s already attached to node %s, rejecting attachment to node %s",
+				volumeID, existing.NodeID, nodeID)
+
+			// Post event for operator visibility (best effort)
+			cs.postAttachmentConflictEvent(ctx, req, existing.NodeID)
+
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"volume %s already attached to node %s, cannot attach to %s",
+				volumeID, existing.NodeID, nodeID)
+		}
+	}
+
+	// Track new attachment (uses per-volume lock internally)
+	if err := am.TrackAttachment(ctx, volumeID, nodeID); err != nil {
+		// Check if this is a conflict (race condition - another request won)
+		if existing, exists := am.GetAttachment(volumeID); exists && existing.NodeID != nodeID {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"volume %s already attached to node %s, cannot attach to %s",
+				volumeID, existing.NodeID, nodeID)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to track attachment: %v", err)
+	}
+
+	klog.V(2).Infof("Successfully published volume %s to node %s", volumeID, nodeID)
+
+	return &csi.ControllerPublishVolumeResponse{
+		PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
+	}, nil
 }
 
 // ControllerUnpublishVolume is not supported (node-local attachment)
