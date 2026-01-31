@@ -62,6 +62,9 @@ type Driver struct {
 	// Grace period for attachment handoff during live migration
 	attachmentGracePeriod time.Duration
 
+	// VMI grouper for per-VMI operation serialization
+	vmiGrouper *VMIGrouper
+
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
 	cscaps []*csi.ControllerServiceCapability
@@ -99,6 +102,10 @@ type DriverConfig struct {
 	EnableAttachmentReconciler  bool
 	AttachmentReconcileInterval time.Duration // Default: 5 minutes
 	AttachmentGracePeriod       time.Duration // Default: 30 seconds
+
+	// VMI serialization settings (for kubevirt concurrent operation mitigation)
+	EnableVMISerialization bool          // Enable per-VMI operation locks
+	VMICacheTTL            time.Duration // Cache TTL for PVC->VMI mapping (default: 60s)
 
 	// Mode flags
 	EnableController bool
@@ -182,6 +189,16 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		}
 		klog.Infof("Attachment reconciler enabled (interval=%v, grace_period=%v)",
 			config.AttachmentReconcileInterval, config.AttachmentGracePeriod)
+	}
+
+	// Initialize VMI grouper for per-VMI operation serialization
+	if config.EnableController && config.EnableVMISerialization && config.K8sClient != nil {
+		driver.vmiGrouper = NewVMIGrouper(VMIGrouperConfig{
+			K8sClient: config.K8sClient,
+			CacheTTL:  config.VMICacheTTL,
+			Enabled:   true,
+		})
+		klog.Infof("VMI serialization enabled (cache_ttl=%v)", config.VMICacheTTL)
 	}
 
 	// Add volume capabilities
@@ -416,4 +433,9 @@ func (d *Driver) GetAttachmentManager() *attachment.AttachmentManager {
 // GetAttachmentGracePeriod returns the configured grace period for attachment handoff.
 func (d *Driver) GetAttachmentGracePeriod() time.Duration {
 	return d.attachmentGracePeriod
+}
+
+// GetVMIGrouper returns the VMI grouper for per-VMI operation serialization (may be nil if disabled).
+func (d *Driver) GetVMIGrouper() *VMIGrouper {
+	return d.vmiGrouper
 }

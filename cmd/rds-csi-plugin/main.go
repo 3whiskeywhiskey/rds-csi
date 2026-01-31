@@ -45,6 +45,14 @@ var (
 	orphanGracePeriod      = flag.Duration("orphan-grace-period", 5*time.Minute, "Minimum age before considering a volume orphaned")
 	orphanDryRun           = flag.Bool("orphan-dry-run", true, "Dry-run mode for orphan cleanup (only log, don't delete)")
 
+	// Attachment management flags
+	attachmentGracePeriod       = flag.Duration("attachment-grace-period", 30*time.Second, "Grace period for attachment handoff during live migration")
+	attachmentReconcileInterval = flag.Duration("attachment-reconcile-interval", 5*time.Minute, "Interval between attachment reconciliation checks")
+
+	// VMI serialization flags (kubevirt concurrent operation mitigation)
+	enableVMISerialization = flag.Bool("enable-vmi-serialization", false, "Enable per-VMI operation serialization to mitigate kubevirt concurrency issues")
+	vmiCacheTTL            = flag.Duration("vmi-cache-ttl", 60*time.Second, "Cache TTL for PVC-to-VMI mapping lookups")
+
 	// Kubernetes configuration
 	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not specified)")
 
@@ -107,14 +115,14 @@ func main() {
 		}
 	}
 
-	// Create Kubernetes client if needed (for orphan reconciler)
+	// Create Kubernetes client if needed (for orphan reconciler, attachment tracking, or VMI serialization)
 	var k8sClient kubernetes.Interface
-	if *controllerMode && *enableOrphanReconciler {
+	if *controllerMode && (*enableOrphanReconciler || *enableVMISerialization) {
 		k8sClient, err = createKubernetesClient(*kubeconfig)
 		if err != nil {
 			klog.Fatalf("Failed to create Kubernetes client: %v", err)
 		}
-		klog.Info("Kubernetes client initialized for orphan reconciler")
+		klog.Info("Kubernetes client initialized")
 	}
 
 	// Create Prometheus metrics
@@ -137,12 +145,17 @@ func main() {
 		RDSVolumeBasePath:      *rdsVolumeBasePath,
 		K8sClient:              k8sClient,
 		Metrics:                promMetrics,
-		EnableOrphanReconciler: *enableOrphanReconciler,
-		OrphanCheckInterval:    *orphanCheckInterval,
-		OrphanGracePeriod:      *orphanGracePeriod,
-		OrphanDryRun:           *orphanDryRun,
-		EnableController:       *controllerMode,
-		EnableNode:             *nodeMode,
+		EnableOrphanReconciler:      *enableOrphanReconciler,
+		OrphanCheckInterval:         *orphanCheckInterval,
+		OrphanGracePeriod:           *orphanGracePeriod,
+		OrphanDryRun:                *orphanDryRun,
+		EnableAttachmentReconciler:  true, // Always enable attachment reconciler in controller mode
+		AttachmentGracePeriod:       *attachmentGracePeriod,
+		AttachmentReconcileInterval: *attachmentReconcileInterval,
+		EnableVMISerialization:      *enableVMISerialization,
+		VMICacheTTL:                 *vmiCacheTTL,
+		EnableController:            *controllerMode,
+		EnableNode:                  *nodeMode,
 	}
 
 	// Cleanup orphaned NVMe connections on node startup
