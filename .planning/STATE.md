@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 
 ## Current Position
 
-Phase: 5 of 7 (Attachment Manager Foundation) ✓ VERIFIED
-Plan: All 3 plans complete
-Status: Phase verified, ready for Phase 6
-Last activity: 2026-01-31 — Phase 5 executed and verified (4/4 must-haves)
+Phase: 6 of 7 (CSI Publish/Unpublish)
+Plan: 1 of 3 complete
+Status: In progress
+Last activity: 2026-01-31 — Completed 06-01-PLAN.md
 
-Progress: [███░░░░░░░] 33%
+Progress: [████░░░░░░] 40%
 
 ## Milestone History
 
@@ -41,10 +41,12 @@ Progress: [███░░░░░░░] 33%
 | ATTACH-04 | Rollback on persistence failure             | 05-02 | Ensures in-memory/PV consistency |
 | ATTACH-05 | PV annotations for state persistence        | 05-02 | Survives controller restarts |
 | ATTACH-06 | Initialize before orphan reconciler         | 05-02 | State ready before operations |
+| CSI-01    | Warning event type for attachment conflicts | 06-01 | Blocks pod scheduling         |
+| CSI-02    | Actionable message format with both nodes   | 06-01 | Operator visibility           |
 
 ### Pending Todos
 
-None — roadmap just created.
+None
 
 ### Blockers/Concerns
 
@@ -56,9 +58,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Phase 5 complete and verified
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 5 executed and verified*
+*Last updated: 2026-01-31 — Completed 06-01-PLAN.md*
