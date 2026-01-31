@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 7 of 7 (Robustness and Observability)
-Plan: 2 of TBD complete
+Plan: 3 of TBD complete
 Status: In progress
-Last activity: 2026-01-31 — Completed 07-02-PLAN.md (attachment reconciler and grace period enforcement)
+Last activity: 2026-01-31 — Completed 07-03-PLAN.md (comprehensive attachment tests and race fixes)
 
-Progress: [████████░░] 75%
+Progress: [████████░░] 80%
 
 ## Milestone History
 
@@ -56,6 +56,9 @@ Progress: [████████░░] 75%
 | RECONCILE-01 | Fail-open on K8s API errors during reconciliation | 07-02 | Don't clear valid attachments on transient errors |
 | RECONCILE-02 | 5-minute reconciler interval default      | 07-02 | Balance cleanup latency vs API load |
 | GRACE-02  | Grace period check before node validation  | 07-02 | Allows migration handoff before conflict |
+| TEST-03   | Use fake.NewSimpleClientset for reconciler tests | 07-03 | Standard Kubernetes testing approach |
+| BUG-01    | Fix double-stop panic by clearing channels | 07-03 | Subsequent Stop() calls are no-op |
+| BUG-02    | Fix race condition with local channel capture | 07-03 | Eliminate concurrent read/write on channels |
 
 ### Pending Todos
 
@@ -71,9 +74,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 07-02-PLAN.md (attachment reconciler and grace period enforcement)
+Stopped at: Completed 07-03-PLAN.md (comprehensive attachment tests and race fixes)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 7 Plan 2 complete (attachment reconciler and grace period)*
+*Last updated: 2026-01-31 — Phase 7 Plan 3 complete (comprehensive attachment tests and race fixes)*
