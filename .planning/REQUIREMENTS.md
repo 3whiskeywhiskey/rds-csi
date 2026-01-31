@@ -27,9 +27,9 @@ Requirements for production stability release. Each maps to roadmap phases.
 
 ### Observability
 
-- [ ] **OBS-01**: Driver posts Kubernetes events for mount failures and recovery actions
-- [ ] **OBS-02**: Driver reports volume health condition via NodeGetVolumeStats
-- [ ] **OBS-03**: Driver exposes Prometheus metrics endpoint for monitoring
+- [x] **OBS-01**: Driver posts Kubernetes events for mount failures and recovery actions
+- [x] **OBS-02**: Driver reports volume health condition via NodeGetVolumeStats
+- [x] **OBS-03**: Driver exposes Prometheus metrics endpoint for monitoring
 
 ## v2 Requirements
 
@@ -73,9 +73,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-01 | Phase 3 | Complete |
 | CONN-02 | Phase 3 | Complete |
 | CONN-03 | Phase 3 | Complete |
-| OBS-01 | Phase 4 | Pending |
-| OBS-02 | Phase 4 | Pending |
-| OBS-03 | Phase 4 | Pending |
+| OBS-01 | Phase 4 | Complete |
+| OBS-02 | Phase 4 | Complete |
+| OBS-03 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 12 total
@@ -84,4 +84,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-30*
-*Last updated: 2026-01-30 — Phase 3 requirements complete*
+*Last updated: 2026-01-30 — All v1 requirements complete*

@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation - Device Path Resolution** - Reliable NQN-based device discovery
 - [x] **Phase 2: Stale Mount Detection and Recovery** - Automatic recovery from controller renumbering
 - [x] **Phase 3: Reconnection Resilience** - Production-grade error handling and backoff
-- [ ] **Phase 4: Observability** - Monitoring and operational visibility
+- [x] **Phase 4: Observability** - Monitoring and operational visibility
 
 ## Phase Details
 
@@ -82,11 +82,11 @@ Plans:
 **Plans**: 5 plans in 3 waves
 
 Plans:
-- [ ] 04-01-PLAN.md - Add GET_VOLUME_STATS and VOLUME_CONDITION capabilities, update NodeGetVolumeStats (Wave 1)
-- [ ] 04-02-PLAN.md - Create Prometheus metrics package with CSI-specific metrics (Wave 1, parallel)
-- [ ] 04-03-PLAN.md - Add HTTP metrics server and integrate metrics into driver (Wave 2)
-- [ ] 04-04-PLAN.md - Extend EventPoster with connection and orphan event types (Wave 2, parallel)
-- [ ] 04-05-PLAN.md - Comprehensive unit tests for observability features (Wave 3)
+- [x] 04-01-PLAN.md - Add GET_VOLUME_STATS and VOLUME_CONDITION capabilities, update NodeGetVolumeStats (Wave 1)
+- [x] 04-02-PLAN.md - Create Prometheus metrics package with CSI-specific metrics (Wave 1, parallel)
+- [x] 04-03-PLAN.md - Add HTTP metrics server and integrate metrics into driver (Wave 2)
+- [x] 04-04-PLAN.md - Extend EventPoster with connection and orphan event types (Wave 1)
+- [x] 04-05-PLAN.md - Comprehensive unit tests for observability features (Wave 3)
 
 ## Progress
 
@@ -98,8 +98,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 1. Foundation - Device Path Resolution | 3/3 | Complete | 2026-01-30 |
 | 2. Stale Mount Detection and Recovery | 5/5 | Complete | 2026-01-30 |
 | 3. Reconnection Resilience | 4/4 | Complete | 2026-01-30 |
-| 4. Observability | 0/5 | Planned | - |
+| 4. Observability | 5/5 | Complete | 2026-01-30 |
 
 ---
 *Roadmap created: 2026-01-30*
-*Last updated: 2026-01-30 - Phase 4 planned*
+*Last updated: 2026-01-30 - All phases complete*
