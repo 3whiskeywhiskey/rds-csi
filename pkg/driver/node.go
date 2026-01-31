@@ -56,6 +56,11 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 	m := mount.NewMounter()
 	connector := nvme.NewConnector()
 
+	// Pass Prometheus metrics to connector if available
+	if driver.metrics != nil {
+		connector.SetPromMetrics(driver.metrics)
+	}
+
 	// Create stale mount checker using connector's resolver
 	staleChecker := mount.NewStaleMountChecker(connector.GetResolver())
 
@@ -66,6 +71,11 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 		staleChecker,
 		connector.GetResolver(),
 	)
+
+	// Pass metrics to recoverer if available
+	if driver.metrics != nil {
+		recoverer.SetMetrics(driver.metrics)
+	}
 
 	return &NodeServer{
 		driver:       driver,
@@ -84,7 +94,15 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 // 2. Waiting for the block device to appear
 // 3. Formatting the filesystem if needed
 // 4. Mounting the filesystem to the staging path
-func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (resp *csi.NodeStageVolumeResponse, err error) {
+	// Record metrics for this operation
+	metricsStart := time.Now()
+	defer func() {
+		if ns.driver.metrics != nil {
+			ns.driver.metrics.RecordVolumeOp("stage", err, time.Since(metricsStart))
+		}
+	}()
+
 	volumeID := req.GetVolumeId()
 	stagingPath := req.GetStagingTargetPath()
 
@@ -228,7 +246,15 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 // This involves:
 // 1. Unmounting the filesystem from the staging path
 // 2. Disconnecting from the NVMe/TCP target
-func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (resp *csi.NodeUnstageVolumeResponse, err error) {
+	// Record metrics for this operation
+	metricsStart := time.Now()
+	defer func() {
+		if ns.driver.metrics != nil {
+			ns.driver.metrics.RecordVolumeOp("unstage", err, time.Since(metricsStart))
+		}
+	}()
+
 	volumeID := req.GetVolumeId()
 	stagingPath := req.GetStagingTargetPath()
 
@@ -452,6 +478,10 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 			// For GetVolumeStats, we report unhealthy rather than attempting recovery
 			// Recovery should happen in NodePublishVolume when pod accesses volume
 			klog.Warningf("Stale mount detected for volume %s at %s (reason: %s)", volumeID, volumePath, reason)
+			// Record stale mount metric
+			if ns.driver.metrics != nil {
+				ns.driver.metrics.RecordStaleMountDetected()
+			}
 			volumeCondition = &csi.VolumeCondition{
 				Abnormal: true,
 				Message:  fmt.Sprintf("Stale mount detected: %s", reason),

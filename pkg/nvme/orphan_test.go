@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
 // MockConnector implements the Connector interface for testing
@@ -77,6 +79,10 @@ func (m *MockConnector) GetConfig() Config {
 
 func (m *MockConnector) GetResolver() *DeviceResolver {
 	return m.resolver
+}
+
+func (m *MockConnector) SetPromMetrics(metrics *observability.Metrics) {
+	// No-op for mock
 }
 
 // MockResolver is a test helper to control resolver behavior

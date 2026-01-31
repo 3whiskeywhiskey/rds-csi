@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"k8s.io/klog/v2"
 )
 
@@ -42,6 +43,7 @@ type MountRecoverer struct {
 	mounter  Mounter
 	checker  *StaleMountChecker
 	resolver *nvme.DeviceResolver
+	metrics  *observability.Metrics
 }
 
 // NewMountRecoverer creates a new mount recoverer
@@ -52,6 +54,11 @@ func NewMountRecoverer(config RecoveryConfig, mounter Mounter, checker *StaleMou
 		checker:  checker,
 		resolver: resolver,
 	}
+}
+
+// SetMetrics sets the Prometheus metrics instance for recording recovery operations
+func (r *MountRecoverer) SetMetrics(metrics *observability.Metrics) {
+	r.metrics = metrics
 }
 
 // Recover attempts to recover a stale mount by unmounting and remounting with the correct device
@@ -180,10 +187,18 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 			mountPath, result.OldDevice, result.NewDevice, attempt)
 		result.Recovered = true
 		result.FinalError = nil
+		// Record successful recovery metric
+		if r.metrics != nil {
+			r.metrics.RecordStaleRecovery(nil)
+		}
 		return result, nil
 	}
 
 	// All attempts failed
 	klog.Errorf("Mount recovery failed for %s after %d attempts: %v", mountPath, r.config.MaxAttempts, result.FinalError)
+	// Record failed recovery metric
+	if r.metrics != nil {
+		r.metrics.RecordStaleRecovery(result.FinalError)
+	}
 	return result, result.FinalError
 }

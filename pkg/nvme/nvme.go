@@ -12,6 +12,7 @@ import (
 
 	"k8s.io/klog/v2"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
@@ -55,6 +56,9 @@ type Connector interface {
 
 	// GetResolver returns the device resolver for NQN to device path resolution
 	GetResolver() *DeviceResolver
+
+	// SetPromMetrics sets the Prometheus metrics instance for recording operations
+	SetPromMetrics(metrics *observability.Metrics)
 }
 
 // Target represents an NVMe/TCP connection target
@@ -159,6 +163,7 @@ type connector struct {
 	execCommand       func(name string, args ...string) *exec.Cmd
 	config            Config
 	metrics           *Metrics
+	promMetrics       *observability.Metrics // Prometheus metrics (optional)
 	activeOperations  map[string]*operationTracker
 	activeOpsMu       sync.Mutex
 	healthcheckDone   chan struct{}
@@ -481,7 +486,7 @@ func (c *connector) ConnectWithContext(ctx context.Context, target Target) (stri
 }
 
 // ConnectWithConfig establishes NVMe/TCP connection with custom connection config
-func (c *connector) ConnectWithConfig(ctx context.Context, target Target, config ConnectionConfig) (string, error) {
+func (c *connector) ConnectWithConfig(ctx context.Context, target Target, config ConnectionConfig) (devicePath string, err error) {
 	// SECURITY: Validate NQN format before using in commands
 	if err := utils.ValidateNQN(target.NQN); err != nil {
 		return "", fmt.Errorf("invalid target NQN: %w", err)
@@ -512,6 +517,10 @@ func (c *connector) ConnectWithConfig(ctx context.Context, target Target, config
 		c.metrics.connectCount++
 		c.metrics.connectDurationTotal += duration
 		c.metrics.mu.Unlock()
+		// Record Prometheus metrics
+		if c.promMetrics != nil {
+			c.promMetrics.RecordNVMeConnect(err, duration)
+		}
 	}()
 
 	// Check if already connected
@@ -568,13 +577,14 @@ func (c *connector) ConnectWithConfig(ctx context.Context, target Target, config
 	}
 
 	// Wait for device with context
-	devicePath, err := c.waitForDeviceWithContext(ctx, target.NQN)
+	devicePath, err = c.waitForDeviceWithContext(ctx, target.NQN)
 	if err != nil {
 		_ = c.DisconnectWithContext(context.Background(), target.NQN)
 		c.metrics.mu.Lock()
 		c.metrics.connectErrors++
 		c.metrics.mu.Unlock()
-		return "", fmt.Errorf("device did not appear: %w", err)
+		err = fmt.Errorf("device did not appear: %w", err)
+		return "", err
 	}
 
 	klog.V(2).Infof("Successfully connected to NVMe target, device: %s", devicePath)
@@ -674,6 +684,11 @@ func (c *connector) DisconnectWithContext(ctx context.Context, nqn string) error
 	// Invalidate resolver cache after successful disconnect
 	c.resolver.Invalidate(nqn)
 
+	// Record Prometheus metrics for successful disconnect
+	if c.promMetrics != nil {
+		c.promMetrics.RecordNVMeDisconnect()
+	}
+
 	klog.V(2).Infof("Successfully disconnected from NVMe target: %s", nqn)
 	return nil
 }
@@ -728,6 +743,11 @@ func (c *connector) GetConfig() Config {
 // GetResolver returns the device resolver
 func (c *connector) GetResolver() *DeviceResolver {
 	return c.resolver
+}
+
+// SetPromMetrics sets the Prometheus metrics instance for recording operations
+func (c *connector) SetPromMetrics(metrics *observability.Metrics) {
+	c.promMetrics = metrics
 }
 
 // trackOperation records an active operation
