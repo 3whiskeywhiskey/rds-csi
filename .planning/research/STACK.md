@@ -1,260 +1,408 @@
-# Stack Research: NVMe-oF Connection Stability
+# Stack Research: v0.3.0 Volume Fencing
 
-**Domain:** NVMe over Fabrics (NVMe-oF) CSI Driver Reliability
+**Domain:** CSI ControllerPublishVolume/ControllerUnpublishVolume with Attachment Tracking
 **Researched:** 2026-01-30
-**Confidence:** HIGH
+**Confidence:** HIGH (using existing codebase patterns + official Kubernetes documentation)
 
-## Recommended Stack
+## Executive Summary
 
-### Core Linux Kernel Components
+Volume fencing implementation requires **zero new dependencies**. The existing stack (client-go v0.28.0, sync primitives, CSI spec v1.10.0) provides everything needed. This document specifies the exact APIs, patterns, and concurrency primitives to use.
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| Native NVMe Multipath (nvme_core.multipath) | Kernel 4.15+ | Automatic path failover and device stability | Default in RHEL 9/SUSE 15+, lower overhead than DM multipath, handles controller renumbering via subsystem-level devices. Provides numa/round-robin/queue-depth policies with ANA (Asymmetric Namespace Access) support. |
-| Kernel NVMe-oF Parameters (ctrl_loss_tmo, reconnect_delay) | Kernel 4.x+ | Automatic reconnection on connection loss | Built into kernel NVMe-oF stack. `ctrl_loss_tmo` sets max retry duration, `reconnect_delay` sets retry interval. Essential for handling temporary network disruptions without manual intervention. |
-| /sys/class/nvme and /sys/class/nvme-subsystem | Kernel 4.15+ | Device discovery and management | Authoritative source for NVMe device state. Provides subsysnqn, controller state, namespace mappings. More reliable than parsing nvme-cli output. |
+## Recommended Stack Additions
 
-### Command-Line Tools
+### No New Dependencies Required
 
-| Tool | Version | Purpose | Why Recommended |
-|------|---------|---------|-----------------|
-| nvme-cli | 2.x (maintenance) or 3.x (current) | NVMe device management | Official Linux NVMe management tool. Version 2.x is stable and well-documented. Version 3.x integrates libnvme directly (no external dependency). Both support `list-subsys -o json` for programmatic parsing. Minimum kernel 4.15 required. |
-| udev | System default | Persistent device naming | Creates `/dev/disk/by-id/` symlinks based on device WWIDs/UUIDs. More stable than `/dev/disk/by-path` which uses PCI addresses that change on reconnection. Use for persistent volume identification. |
+| Category | Technology | Version | Already In go.mod | Notes |
+|----------|------------|---------|-------------------|-------|
+| PV Annotation CRUD | k8s.io/client-go | v0.28.0 | **Yes** | PersistentVolumes().Update() |
+| Concurrency | sync.RWMutex | stdlib | **Yes** | Match existing codebase patterns |
+| CSI Capability | CSI Spec | v1.10.0 | **Yes** | PUBLISH_UNPUBLISH_VOLUME already defined |
+| Retry on Conflict | k8s.io/client-go/util/retry | v0.28.0 | **Yes** | Part of client-go |
 
-### Go Libraries and Approaches
+**Rationale:** The v0.2.0 codebase already uses client-go v0.28.0 for the orphan reconciler (`pkg/reconciler/orphan_reconciler.go` line 168). Volume fencing uses the same client for PV annotation updates.
 
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| Direct sysfs parsing | N/A | Read NVMe device state from /sys/class/nvme* | **RECOMMENDED for CSI driver**. Avoids shelling out to nvme-cli. Read `/sys/class/nvme/nvme*/subsysnqn`, `/sys/class/nvme-subsystem/nvme-subsys*/iopolicy`, namespace directories. Reliable and fast. |
-| libnvme via CGO | Latest | C library bindings for NVMe management | **Optional, higher complexity**. Provides typed API for NVMe operations. Requires CGO, increases binary size, couples to C library version. Only use if need advanced NVMe admin commands beyond basic connect/disconnect. |
-| kubernetes-csi/csi-lib-iscsi | Latest | Multipath device management (iSCSI reference) | **Reference implementation only**. Study `multipath.go` for patterns on handling device mapper multipath, flushing devices, resize operations. Not directly usable for NVMe but shows CSI multipath patterns. |
-| Exec nvme-cli commands | nvme-cli 2.x/3.x | Shell out to nvme command | **Current approach, acceptable**. Simple and reliable. Use `nvme list-subsys -o json` and parse JSON for connection state. Use context.Context for timeouts. |
+## Kubernetes client-go Patterns for PV Annotation CRUD
 
-## Installation
+### 1. Get-Modify-Update Pattern
 
-### System Requirements
-
-```bash
-# Ensure kernel version supports NVMe multipath
-uname -r  # Should be >= 4.15
-
-# Install nvme-cli
-# Debian/Ubuntu
-apt-get install nvme-cli
-
-# RHEL/CentOS
-dnf install nvme-cli
-
-# Check nvme-cli version
-nvme version
-```
-
-### Kernel Configuration
-
-```bash
-# Enable native NVMe multipath (usually enabled by default on modern distros)
-# Add to kernel boot parameters or set at runtime:
-
-# Boot parameter (persistent):
-# Add to /etc/default/grub: nvme_core.multipath=Y
-
-# Runtime (temporary):
-echo Y > /sys/module/nvme_core/parameters/multipath
-
-# Set I/O policy (optional, default is numa):
-echo "round-robin" > /sys/module/nvme_core/parameters/iopolicy
-# OR per-subsystem:
-echo "round-robin" > /sys/class/nvme-subsystem/nvme-subsys0/iopolicy
-```
-
-### NVMe Connection Parameters for Stability
-
-```bash
-# When connecting, use these parameters for automatic recovery:
-nvme connect -t tcp \
-  -a <target-ip> \
-  -s <port> \
-  -n <nqn> \
-  --ctrl-loss-tmo=60 \      # Max 60s of retries before giving up
-  --reconnect-delay=2 \     # Retry every 2s
-  --keep-alive-tmo=30       # Keep-alive heartbeat every 30s
-```
-
-## Alternatives Considered
-
-| Category | Recommended | Alternative | Why Not Alternative |
-|----------|-------------|-------------|---------------------|
-| Multipath Stack | Native NVMe Multipath (nvme_core.multipath=Y) | Device Mapper Multipath (DM multipath) | DM multipath has higher CPU overhead, requires disabling native NVMe multipath globally. Use only if need advanced path selection policies beyond numa/round-robin/queue-depth. |
-| Device Identification | /dev/disk/by-id/* symlinks | Direct /dev/nvme*n* paths | Direct paths change on controller renumbering (nvme0 → nvme3 after reconnect). /dev/disk/by-id uses WWIDs and persists across reconnections. |
-| Device Discovery | Parse /sys/class/nvme* directly | Call `nvme list-subsys -o json` | Both valid. sysfs is faster, no subprocess overhead. nvme-cli JSON is more structured. For CSI driver, sysfs preferred for performance. |
-| Go NVMe Library | Direct sysfs + exec nvme-cli | libnvme via CGO | CGO adds complexity, build dependencies, binary size. Only beneficial if need admin commands (format, fw-update). CSI drivers primarily need connect/disconnect/discover which work fine via CLI. |
-
-## What NOT to Use
-
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| /dev/disk/by-path/* symlinks | Based on PCI bus addresses which change when controllers reconnect (nvme0 at 0000:01:00.0 → nvme3 at same PCI address after disconnect/reconnect cycle). | /dev/disk/by-id/* (WWN/UUID-based) or NQN-based lookup via /sys/class/nvme/*/subsysnqn |
-| Parsing `nvme list` plain text output | Output format changes between versions, not designed for parsing. | `nvme list-subsys -o json` for structured, parseable output |
-| Disabling native NVMe multipath (nvme_core.multipath=N) | Causes device path instability. Each controller gets separate nvme* number. On reconnect, new controller number assigned, breaking mounts. | Keep native multipath enabled (Y), use subsystem-level devices (nvme0n1 instead of nvme0c0n1) |
-| Hardcoded device paths in mount code | Paths change on reconnection. | Look up device by NQN via sysfs or use persistent symlinks from udev |
-
-## Stack Patterns by Scenario
-
-### Scenario 1: Handle Controller Renumbering (Current Bug)
-
-**Problem:** After network disruption, controller reconnects as nvme3 instead of nvme0, but mount still references /dev/nvme0n1.
-
-**Solution:**
-- Enable native NVMe multipath (nvme_core.multipath=Y)
-- Use subsystem-level device naming (nvme0n1) instead of controller-specific (nvme0c0n1)
-- Look up device path by NQN, not hardcoded path:
+Use the standard Kubernetes pattern: Get resource, modify in memory, Update resource.
 
 ```go
-// Read subsysnqn for all controllers
-controllers, _ := filepath.Glob("/sys/class/nvme/nvme*")
-for _, ctrl := range controllers {
-    nqnBytes, _ := os.ReadFile(filepath.Join(ctrl, "subsysnqn"))
-    if strings.TrimSpace(string(nqnBytes)) == targetNQN {
-        // Found matching controller, now find namespace
-        namespaces, _ := filepath.Glob(filepath.Join(ctrl, "nvme*n*"))
-        // Return first namespace block device
-        return "/dev/" + filepath.Base(namespaces[0])
-    }
+import (
+    corev1 "k8s.io/api/core/v1"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/util/retry"
+)
+
+// SetAttachmentAnnotation sets the node attachment annotation on a PV
+func SetAttachmentAnnotation(ctx context.Context, client kubernetes.Interface, pvName, nodeID string) error {
+    return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+        // 1. Get current PV
+        pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+        if err != nil {
+            return err
+        }
+
+        // 2. Modify annotations in memory
+        if pv.Annotations == nil {
+            pv.Annotations = make(map[string]string)
+        }
+        pv.Annotations["rds.csi.srvlab.io/attached-node"] = nodeID
+        pv.Annotations["rds.csi.srvlab.io/attached-at"] = time.Now().UTC().Format(time.RFC3339)
+
+        // 3. Update PV
+        _, err = client.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+        return err
+    })
 }
 ```
 
-### Scenario 2: Automatic Reconnection After Network Outage
+**Why `retry.RetryOnConflict`:** PV updates can fail with HTTP 409 Conflict if another process (kubelet, controller) modified the PV between Get and Update. The retry wrapper handles this automatically with exponential backoff.
 
-**Problem:** Storage network has brief outage (5-10 seconds), need volumes to survive without pod restart.
+### 2. Annotation Key Format
 
-**Solution:**
-- Set `ctrl_loss_tmo=60` and `reconnect_delay=2` when connecting
-- Kernel will automatically retry for up to 60 seconds, reconnecting every 2 seconds
-- Application I/O blocks during reconnection, resumes when connection restored
-- No CSI driver intervention needed
+| Annotation | Value | Purpose |
+|------------|-------|---------|
+| `rds.csi.srvlab.io/attached-node` | Node ID (e.g., `metal-1`) | Which node owns the attachment |
+| `rds.csi.srvlab.io/attached-at` | RFC3339 timestamp | When attachment was created |
 
-```bash
-nvme connect -t tcp -a 10.42.68.1 -s 4420 -n nqn.2000-02.com.mikrotik:pvc-12345 \
-  --ctrl-loss-tmo=60 --reconnect-delay=2
-```
+**Rationale:** Use driver-specific prefix to avoid conflicts. RFC3339 timestamps are human-readable and parseable.
 
-### Scenario 3: Detecting Stale Connections (Orphaned Subsystems)
-
-**Problem:** Subsystem shows as "connected" (`nvme list-subsys` finds NQN) but no controllers/devices exist.
-
-**Solution:**
-- Check not just subsystem existence but also device existence:
+### 3. Clear Attachment Annotation
 
 ```go
-func isReallyConnected(nqn string) (bool, error) {
-    // 1. Check subsystem exists
-    subsysConnected, _ := nvmeListSubsysContains(nqn)
-    if !subsysConnected {
-        return false, nil
-    }
+func ClearAttachmentAnnotation(ctx context.Context, client kubernetes.Interface, pvName string) error {
+    return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+        pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+        if err != nil {
+            return err
+        }
 
-    // 2. Verify actual device path exists
-    devicePath, err := getDevicePathByNQN(nqn)
+        // Remove annotation (delete from map)
+        delete(pv.Annotations, "rds.csi.srvlab.io/attached-node")
+        delete(pv.Annotations, "rds.csi.srvlab.io/attached-at")
+
+        _, err = client.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+        return err
+    })
+}
+```
+
+### 4. Get Attachment State
+
+```go
+func GetAttachmentState(ctx context.Context, client kubernetes.Interface, pvName string) (nodeID string, attachedAt time.Time, err error) {
+    pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
     if err != nil {
-        // Subsystem exists but no device - orphaned!
-        return false, fmt.Errorf("orphaned subsystem: %w", err)
+        return "", time.Time{}, err
     }
 
-    // 3. Verify device node accessible
-    if _, err := os.Stat(devicePath); err != nil {
-        return false, fmt.Errorf("device node not accessible: %w", err)
+    nodeID = pv.Annotations["rds.csi.srvlab.io/attached-node"]
+    if ts := pv.Annotations["rds.csi.srvlab.io/attached-at"]; ts != "" {
+        attachedAt, _ = time.Parse(time.RFC3339, ts)
     }
-
-    return true, nil
+    return nodeID, attachedAt, nil
 }
 ```
 
-### Scenario 4: Persistent Volume Identification Across Reconnects
+### 5. PV Name from Volume ID
 
-**Problem:** After reconnect, need to find the same volume even if device path changed.
-
-**Solution:**
-- Store NQN in volume context (already doing this)
-- Use udev-generated `/dev/disk/by-id/nvme-eui.*` or `/dev/disk/by-id/wwn-*` symlinks
-- OR look up by NQN via sysfs (most reliable)
+CSI ControllerPublishVolume receives `VolumeId` (the CSI volume handle), not the PV name. However, for this driver:
 
 ```go
-func getStableDevicePath(volumeID string) (string, error) {
-    nqn := volumeIDToNQN(volumeID)
+// The volume ID IS the PV name (e.g., "pvc-abc123")
+// This is set in CreateVolume: volumeID := req.GetName()
+pvName := req.GetVolumeId()
+```
 
-    // Option 1: Lookup by NQN via sysfs (recommended)
-    return getDevicePathByNQN(nqn)
+**Verification:** See `pkg/driver/controller.go` line 90: `volumeID := req.GetName()` - the external-provisioner passes the PV name as the volume name.
 
-    // Option 2: Use udev persistent symlinks (if available)
-    // Note: Requires device to have published EUI-64 or NGUID
-    // symlinks, _ := filepath.Glob("/dev/disk/by-id/nvme-*")
-    // for each symlink, check if target matches our NQN...
+## Concurrency Primitives for In-Memory Attachment State
+
+### Pattern: sync.RWMutex + map (Codebase Standard)
+
+The codebase uses `sync.RWMutex` + `map` consistently (not `sync.Map`). Follow this pattern:
+
+| File | Pattern | Usage |
+|------|---------|-------|
+| `pkg/nvme/resolver.go:27` | `mu sync.RWMutex` | Device path cache |
+| `pkg/nvme/nvme.go:121` | `mu sync.RWMutex` | Connection state |
+| `pkg/rds/pool.go:77` | `mu sync.RWMutex` | SSH connection pool |
+| `pkg/security/metrics.go:11` | `mu sync.RWMutex` | Metrics tracking |
+
+### AttachmentTracker Implementation
+
+```go
+package driver
+
+import (
+    "sync"
+    "time"
+)
+
+// AttachmentInfo tracks volume attachment state
+type AttachmentInfo struct {
+    NodeID     string
+    AttachedAt time.Time
+}
+
+// AttachmentTracker provides thread-safe volume attachment tracking
+type AttachmentTracker struct {
+    mu          sync.RWMutex
+    attachments map[string]AttachmentInfo // key: volumeID
+}
+
+// NewAttachmentTracker creates a new attachment tracker
+func NewAttachmentTracker() *AttachmentTracker {
+    return &AttachmentTracker{
+        attachments: make(map[string]AttachmentInfo),
+    }
+}
+
+// Get returns attachment info for a volume (read lock)
+func (t *AttachmentTracker) Get(volumeID string) (AttachmentInfo, bool) {
+    t.mu.RLock()
+    defer t.mu.RUnlock()
+    info, ok := t.attachments[volumeID]
+    return info, ok
+}
+
+// Set records an attachment (write lock)
+func (t *AttachmentTracker) Set(volumeID, nodeID string) {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+    t.attachments[volumeID] = AttachmentInfo{
+        NodeID:     nodeID,
+        AttachedAt: time.Now(),
+    }
+}
+
+// Delete removes an attachment (write lock)
+func (t *AttachmentTracker) Delete(volumeID string) {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+    delete(t.attachments, volumeID)
+}
+
+// IsAttachedToOtherNode checks if volume is attached to a different node
+func (t *AttachmentTracker) IsAttachedToOtherNode(volumeID, nodeID string) bool {
+    t.mu.RLock()
+    defer t.mu.RUnlock()
+    if info, ok := t.attachments[volumeID]; ok {
+        return info.NodeID != nodeID
+    }
+    return false
 }
 ```
+
+**Why `sync.RWMutex` over `sync.Map`:**
+- Codebase consistency (all 7 existing usages use RWMutex)
+- Better for mixed read/write workloads (CSI has both)
+- Explicit locking makes code easier to understand and debug
+- `sync.Map` optimized for append-only or disjoint key access patterns, not updates
+
+## ControllerPublishVolume/ControllerUnpublishVolume Implementation
+
+### CSI Capability Declaration
+
+Add to `pkg/driver/driver.go` in `addControllerServiceCapabilities()`:
+
+```go
+{
+    Type: &csi.ControllerServiceCapability_Rpc{
+        Rpc: &csi.ControllerServiceCapability_RPC{
+            Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
+        },
+    },
+},
+```
+
+### ControllerPublishVolume Flow
+
+```go
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    // 1. Check in-memory state first (fast path)
+    if cs.attachments.IsAttachedToOtherNode(volumeID, nodeID) {
+        existing, _ := cs.attachments.Get(volumeID)
+        return nil, status.Errorf(codes.FailedPrecondition,
+            "volume %s is already attached to node %s", volumeID, existing.NodeID)
+    }
+
+    // 2. Check PV annotation (authoritative state)
+    pvNodeID, _, err := GetAttachmentState(ctx, cs.k8sClient, volumeID)
+    if err != nil && !errors.IsNotFound(err) {
+        return nil, status.Errorf(codes.Internal, "failed to get PV: %v", err)
+    }
+    if pvNodeID != "" && pvNodeID != nodeID {
+        return nil, status.Errorf(codes.FailedPrecondition,
+            "volume %s is already attached to node %s (from PV annotation)", volumeID, pvNodeID)
+    }
+
+    // 3. Record attachment in both places
+    if err := SetAttachmentAnnotation(ctx, cs.k8sClient, volumeID, nodeID); err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to set attachment annotation: %v", err)
+    }
+    cs.attachments.Set(volumeID, nodeID)
+
+    // 4. Return success (no publish_context needed for NVMe/TCP)
+    return &csi.ControllerPublishVolumeResponse{}, nil
+}
+```
+
+### ControllerUnpublishVolume Flow
+
+```go
+func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    // 1. Verify caller is the attached node (optional safety check)
+    if info, ok := cs.attachments.Get(volumeID); ok {
+        if info.NodeID != nodeID {
+            klog.Warningf("Unpublish request from %s but volume attached to %s", nodeID, info.NodeID)
+            // Still proceed - CO knows best
+        }
+    }
+
+    // 2. Clear attachment from PV annotation
+    if err := ClearAttachmentAnnotation(ctx, cs.k8sClient, volumeID); err != nil {
+        if !errors.IsNotFound(err) {
+            return nil, status.Errorf(codes.Internal, "failed to clear attachment annotation: %v", err)
+        }
+        // PV not found is OK (volume might be deleted)
+    }
+
+    // 3. Clear in-memory state
+    cs.attachments.Delete(volumeID)
+
+    return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+```
+
+## Startup Synchronization
+
+On controller startup, sync in-memory state from PV annotations:
+
+```go
+func (cs *ControllerServer) syncAttachmentState(ctx context.Context) error {
+    pvList, err := cs.k8sClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+    if err != nil {
+        return fmt.Errorf("failed to list PVs: %w", err)
+    }
+
+    for _, pv := range pvList.Items {
+        if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != DriverName {
+            continue
+        }
+        if nodeID := pv.Annotations["rds.csi.srvlab.io/attached-node"]; nodeID != "" {
+            cs.attachments.Set(pv.Spec.CSI.VolumeHandle, nodeID)
+            klog.V(2).Infof("Restored attachment: %s -> %s", pv.Spec.CSI.VolumeHandle, nodeID)
+        }
+    }
+    return nil
+}
+```
+
+## What NOT to Add
+
+| Rejected Option | Why Not |
+|-----------------|---------|
+| ConfigMap for state persistence | PV annotations are more appropriate; ConfigMaps have size limits and would require separate cleanup |
+| External database (etcd, Redis) | Overkill for homelab; adds operational complexity; PV annotations are already highly available |
+| sync.Map for attachments | Codebase uses sync.RWMutex consistently; sync.Map optimized for different access patterns |
+| Custom CRD for attachments | Unnecessary complexity; PV annotations are standard CSI practice |
+| Informer/Watch for PV changes | Not needed; controller handles all attachment changes through direct CSI calls |
+| Leader election | Out of scope for v0.3.0; single controller replica is acceptable for homelab |
+| RDS-side ACLs | PROJECT.md explicitly decided against: "Standard CSI approach (not RDS-side ACLs)" |
 
 ## Version Compatibility
 
-| Package | Minimum Version | Tested With | Notes |
-|---------|-----------------|-------------|-------|
-| Linux Kernel | 4.15 | 5.15, 6.1 | Kernel 4.15+ required for /sys/class/nvme-subsystem. Native multipath default in 5.3+. |
-| nvme-cli | 1.x (legacy), 2.0+ (stable) | 2.3, 2.11, 3.x | Version 2.x in maintenance mode. Version 3.x integrates libnvme. Both support required features. |
-| libnvme | 1.0+ | 1.9 | Only if using CGO approach. Not required for basic CSI operations. |
-| Go | 1.18+ | 1.24 | For generics, improved error handling. Current project uses 1.24. |
+| Package | Current Version | Required Features | Notes |
+|---------|-----------------|-------------------|-------|
+| k8s.io/client-go | v0.28.0 | PersistentVolumes().Update(), retry.RetryOnConflict | Already satisfied |
+| k8s.io/api | v0.28.0 | corev1.PersistentVolume with Annotations | Already satisfied |
+| CSI Spec | v1.10.0 | PUBLISH_UNPUBLISH_VOLUME capability | Already satisfied |
+| Go | 1.24 | sync.RWMutex, context.Context | Already satisfied |
 
-## Implementation Roadmap Implications
+**No version upgrades required.**
 
-Based on this research, the reliability milestone should focus on:
+## Testing Considerations
 
-1. **Phase 1: sysfs-based device path lookup** (HIGH priority)
-   - Replace current `/dev/nvme*n*` path assumptions with NQN-based lookup via `/sys/class/nvme/*/subsysnqn`
-   - Implement `GetDevicePathByNQN()` that scans sysfs
-   - Handles controller renumbering transparently
+### Unit Testing
 
-2. **Phase 2: Connection parameter tuning** (MEDIUM priority)
-   - Add `ctrl_loss_tmo` and `reconnect_delay` parameters to `nvme connect` calls
-   - Make configurable via StorageClass parameters
-   - Default: ctrl_loss_tmo=60, reconnect_delay=2
+```go
+// Use fake clientset for unit tests
+import "k8s.io/client-go/kubernetes/fake"
 
-3. **Phase 3: Orphaned subsystem detection** (MEDIUM priority)
-   - Enhance `IsConnected()` to check device existence, not just subsystem presence
-   - Implement reconnect logic if orphaned subsystem detected
+func TestSetAttachmentAnnotation(t *testing.T) {
+    client := fake.NewSimpleClientset(&corev1.PersistentVolume{
+        ObjectMeta: metav1.ObjectMeta{Name: "pvc-test"},
+    })
 
-4. **Phase 4: Native multipath enablement verification** (LOW priority, informational)
-   - Check `/sys/module/nvme_core/parameters/multipath` at startup
-   - Log warning if disabled, provide guidance to enable
-   - Not critical if doing sysfs lookups, but improves stability
+    err := SetAttachmentAnnotation(context.Background(), client, "pvc-test", "node-1")
+    if err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
 
-5. **Phase 5: Persistent device identification** (OPTIONAL)
-   - Use `/dev/disk/by-id/*` symlinks if available
-   - Fallback to NQN-based lookup via sysfs
+    pv, _ := client.CoreV1().PersistentVolumes().Get(context.Background(), "pvc-test", metav1.GetOptions{})
+    if pv.Annotations["rds.csi.srvlab.io/attached-node"] != "node-1" {
+        t.Errorf("expected annotation node-1, got %s", pv.Annotations["rds.csi.srvlab.io/attached-node"])
+    }
+}
+```
+
+### Concurrency Testing
+
+```go
+func TestAttachmentTrackerConcurrency(t *testing.T) {
+    tracker := NewAttachmentTracker()
+    var wg sync.WaitGroup
+
+    // Concurrent writes
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func(n int) {
+            defer wg.Done()
+            tracker.Set(fmt.Sprintf("vol-%d", n), fmt.Sprintf("node-%d", n%5))
+        }(i)
+    }
+
+    // Concurrent reads while writes happening
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func(n int) {
+            defer wg.Done()
+            tracker.Get(fmt.Sprintf("vol-%d", n))
+        }(i)
+    }
+
+    wg.Wait()
+}
+```
 
 ## Sources
 
-**Kernel Documentation (HIGH confidence):**
-- [Linux NVMe multipath — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/nvme-multipath.html)
+**Kubernetes Documentation (HIGH confidence):**
+- [Persistent Volumes | Kubernetes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
+- [client-go PersistentVolume interface](https://github.com/kubernetes/client-go/blob/master/kubernetes/typed/core/v1/persistentvolume.go)
 
-**Official Red Hat Documentation (HIGH confidence):**
-- [Chapter 4. Enabling multipathing on NVMe devices | RHEL 9](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/configuring_device_mapper_multipath/enabling-multipathing-on-nvme-devices_configuring-device-mapper-multipath)
-- [Chapter 6. Overview of persistent naming attributes | RHEL 9](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_file_systems/assembly_overview-of-persistent-naming-attributes_managing-file-systems)
+**CSI Specification (HIGH confidence):**
+- [CSI Spec - ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+- [Developing a CSI Driver | kubernetes-csi](https://kubernetes-csi.github.io/docs/developing.html)
 
-**nvme-cli Documentation (HIGH confidence):**
-- [nvme-connect man page](https://www.mankier.com/1/nvme-connect)
-- [nvme-list-subsys man page](https://www.mankier.com/1/nvme-list-subsys)
-- [linux-nvme/nvme-cli GitHub](https://github.com/linux-nvme/nvme-cli)
+**Go Concurrency (HIGH confidence):**
+- [sync package | Go Packages](https://pkg.go.dev/sync)
+- [Go sync.Map: The Right Tool for the Right Job | VictoriaMetrics](https://victoriametrics.com/blog/go-sync-map/)
 
-**Kubernetes CSI References (MEDIUM confidence):**
-- [kubernetes-csi/csi-lib-iscsi multipath management](https://pkg.go.dev/github.com/kubernetes-csi/csi-lib-iscsi/iscsi)
-- [Multipath Management | kubernetes-csi/csi-lib-iscsi](https://deepwiki.com/kubernetes-csi/csi-lib-iscsi/2.3-multipath-management)
-
-**Community and Issue Tracking (MEDIUM confidence):**
-- [systemd/systemd #22692: udev by-path device names for NVMe disks are not persistent](https://github.com/systemd/systemd/issues/22692)
-- [linux-nvme/nvme-cli issues and documentation](https://github.com/linux-nvme/nvme-cli/issues)
-- [longhorn/longhorn #3602: Create golang API for mounting NVMeoF targets](https://github.com/longhorn/longhorn/issues/3602)
-
-**Red Hat Solutions (MEDIUM confidence):**
-- [How to configure Native NVME Multipath device names](https://access.redhat.com/solutions/5384031)
-- [How to make block device NVMe assigned names persistent?](https://access.redhat.com/solutions/4763241)
+**Codebase Patterns (HIGH confidence):**
+- `pkg/reconciler/orphan_reconciler.go` - PV listing with client-go
+- `pkg/nvme/resolver.go` - sync.RWMutex + map pattern
+- `pkg/driver/events.go` - K8s API patterns with context
 
 ---
-*Stack research for: NVMe-oF CSI Driver Reliability Milestone*
+*Stack research for: v0.3.0 Volume Fencing Milestone*
 *Researched: 2026-01-30*

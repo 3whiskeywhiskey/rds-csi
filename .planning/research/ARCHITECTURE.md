@@ -1,510 +1,670 @@
-# Architecture Research: NVMe Device Path Stability in CSI Drivers
+# Architecture Research: Volume Fencing via ControllerPublish/Unpublish
 
-**Domain:** Kubernetes CSI Node Driver Reliability
+**Domain:** CSI Controller Service - Volume Attachment Tracking
 **Researched:** 2026-01-30
-**Confidence:** MEDIUM
+**Confidence:** HIGH
 
 ## Problem Context
 
-The RDS CSI driver currently stores device paths (e.g., `/dev/nvme2n1`) during `NodeStageVolume` and assumes they remain valid for the volume's lifetime. However, NVMe-oF devices can reconnect with different device paths after network disruptions or target restarts, causing:
+The RDS CSI driver currently does not implement ControllerPublishVolume/ControllerUnpublishVolume. Without these methods:
 
-- **Stale mounts**: Bind mounts from staging to target path reference non-existent devices
-- **I/O errors**: Running pods lose access to storage without visibility
-- **Orphaned subsystems**: NQN appears connected but no usable device exists
+- **No volume fencing**: A ReadWriteOnce volume can be attached to multiple nodes simultaneously during pod migration or failover
+- **No attachment tracking**: Controller has no visibility into which nodes have volumes attached
+- **Data corruption risk**: Two nodes writing to the same NVMe/TCP target concurrently
 
-Current architecture identifies the subsystem by NQN but doesn't handle device path changes after initial staging.
+Current controller returns `codes.Unimplemented` for both methods (lines 336-343 in controller.go).
+
+## Integration with Existing Architecture
+
+### Current Controller Structure
+
+```
+pkg/driver/
+├── driver.go          # Driver initialization, capability declaration
+├── controller.go      # ControllerServer implementation
+├── node.go            # NodeServer implementation
+├── server.go          # gRPC server setup
+├── events.go          # Kubernetes event posting
+└── params.go          # StorageClass parameter parsing
+
+pkg/rds/
+├── client.go          # RDS SSH client interface
+├── pool.go            # Connection pool with circuit breaker
+├── commands.go        # RouterOS command execution
+└── types.go           # VolumeInfo, CapacityInfo structs
+
+pkg/reconciler/
+└── orphan_reconciler.go  # Orphaned volume cleanup
+```
+
+### Integration Points for AttachmentManager
+
+The new AttachmentManager component integrates at these points:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ControllerServer (controller.go)                                      │
+│                                                                        │
+│  ┌────────────────────┐  ┌────────────────────┐                      │
+│  │ CreateVolume       │  │ DeleteVolume       │                      │
+│  │ - Uses rdsClient   │  │ - Uses rdsClient   │                      │
+│  │ - No attachment    │  │ - No attachment    │                      │
+│  │   awareness        │  │   awareness        │                      │
+│  └────────────────────┘  └────────────────────┘                      │
+│                                                                        │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │ NEW: ControllerPublishVolume / ControllerUnpublishVolume       │  │
+│  │                                                                  │  │
+│  │  ┌──────────────────────────────────────────────────────────┐  │  │
+│  │  │ AttachmentManager (NEW COMPONENT)                        │  │  │
+│  │  │                                                           │  │  │
+│  │  │  - In-memory state: map[volumeID]nodeID                  │  │  │
+│  │  │  - PV annotation persistence: csi.rds.srvlab.io/node-id  │  │  │
+│  │  │  - ReadWriteOnce enforcement                              │  │  │
+│  │  │  - Thread-safe operations (sync.RWMutex)                 │  │  │
+│  │  └──────────────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│  Existing components:                                                  │
+│  ┌────────────────────┐  ┌────────────────────┐                      │
+│  │ rdsClient          │  │ k8sClient          │                      │
+│  │ - SSH pool         │  │ - PV read/update   │                      │
+│  │ - Volume commands  │  │ - Event posting    │                      │
+│  └────────────────────┘  └────────────────────┘                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
 
 ## Recommended Architecture
 
 ### System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ CSI Node Plugin (DaemonSet Pod)                                 │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │ NodeStageVolume / NodePublishVolume (CSI RPC Handlers)   │  │
-│  │ - Validate requests                                       │  │
-│  │ - Trigger connection/mount operations                     │  │
-│  │ - Return success/failure to kubelet                       │  │
-│  └─────────────┬────────────────────────────────────────────┘  │
-│                │                                                 │
-│  ┌─────────────▼────────────────────────────────────────────┐  │
-│  │ Device Path Resolver (NEW)                               │  │
-│  │ - Maintains NQN → current device path mapping            │  │
-│  │ - Detects stale paths (device doesn't exist)             │  │
-│  │ - Re-scans /sys/class/nvme on path resolution failure    │  │
-│  │ - Thread-safe cache with RWMutex                         │  │
-│  └─────────────┬────────────────────────────────────────────┘  │
-│                │                                                 │
-│  ┌─────────────▼────────────────────────────────────────────┐  │
-│  │ NVMe Connector (EXISTING, enhanced)                      │  │
-│  │ - Connect/Disconnect operations                          │  │
-│  │ - GetDevicePath: queries /sys/class/nvme                 │  │
-│  │ - IsConnected: checks subsystem existence                │  │
-│  └─────────────┬────────────────────────────────────────────┘  │
-│                │                                                 │
-│  ┌─────────────▼────────────────────────────────────────────┐  │
-│  │ Mount Handler (EXISTING)                                 │  │
-│  │ - Format/Mount/Unmount operations                        │  │
-│  │ - IsMounted: checks /proc/mounts                         │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  Optional (Future):                                             │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │ Background Reconciler (NEW, deferred)                    │  │
-│  │ - Periodic health check (every 30s)                      │  │
-│  │ - Detects disconnected NVMe targets                      │  │
-│  │ - Triggers reconnection attempts                         │  │
-│  │ - Logs events for monitoring                             │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ CSI Controller Plugin (Deployment)                                    │
+│                                                                        │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │ ControllerServer                                                │  │
+│  │                                                                  │  │
+│  │  CreateVolume()   DeleteVolume()   ControllerExpandVolume()    │  │
+│  │       │                │                     │                  │  │
+│  │       └────────────────┴─────────────────────┘                  │  │
+│  │                        │                                         │  │
+│  │                   rdsClient (existing)                          │  │
+│  │                                                                  │  │
+│  │  ControllerPublishVolume()          ControllerUnpublishVolume() │  │
+│  │       │                                      │                  │  │
+│  │       └──────────────┬───────────────────────┘                  │  │
+│  │                      │                                           │  │
+│  │  ┌───────────────────▼───────────────────────────────────────┐  │  │
+│  │  │ AttachmentManager (NEW)                                    │  │  │
+│  │  │                                                             │  │  │
+│  │  │  ┌─────────────────────┐  ┌─────────────────────────────┐ │  │  │
+│  │  │  │ In-Memory State     │  │ PV Annotation Persistence   │ │  │  │
+│  │  │  │                     │  │                              │ │  │  │
+│  │  │  │ map[volumeID]Attach │  │ k8sClient.CoreV1().PVs()    │ │  │  │
+│  │  │  │  - nodeID           │  │  - Get/Update annotations   │ │  │  │
+│  │  │  │  - attachTime       │  │  - csi.rds.srvlab.io/node  │ │  │  │
+│  │  │  │  - readonly         │  │  - csi.rds.srvlab.io/time  │ │  │  │
+│  │  │  └─────────────────────┘  └─────────────────────────────┘ │  │  │
+│  │  │                                                             │  │  │
+│  │  │  Methods:                                                   │  │  │
+│  │  │  - Attach(volumeID, nodeID, readonly) error                │  │  │
+│  │  │  - Detach(volumeID, nodeID) error                          │  │  │
+│  │  │  - GetAttachment(volumeID) (*Attachment, bool)             │  │  │
+│  │  │  - LoadFromAnnotations(ctx) error  (startup recovery)      │  │  │
+│  │  └───────────────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Responsibilities
 
-| Component | Responsibility | Where It Lives | New or Enhanced |
-|-----------|----------------|----------------|-----------------|
-| **Device Path Resolver** | Maintains NQN → device path mapping; detects stale paths; re-resolves on demand | `pkg/nvme/resolver.go` | NEW |
-| **NodeStageVolume Handler** | Stores NQN (not device path) in metadata; uses resolver for current device | `pkg/driver/node.go` | ENHANCED (change what gets stored) |
-| **NodePublishVolume Handler** | Validates staging path is mounted; resolves current device before bind mount | `pkg/driver/node.go` | ENHANCED (add validation) |
-| **GetDevicePath** | Scans `/sys/class/nvme` for current device path given NQN | `pkg/nvme/nvme.go` | EXISTING (already implements this) |
-| **Mount Handler** | Detects if mount is stale (device no longer exists); remounts if needed | `pkg/mount/mount.go` | ENHANCED (add staleness detection) |
+| Component | Responsibility | Location | New/Modified |
+|-----------|----------------|----------|--------------|
+| **AttachmentManager** | Track volume-to-node attachments; enforce RWO; persist to PV annotations | `pkg/attachment/manager.go` | NEW |
+| **ControllerPublishVolume** | Validate RWO constraints; record attachment; return publish context | `pkg/driver/controller.go` | NEW (replace stub) |
+| **ControllerUnpublishVolume** | Remove attachment record; update PV annotation | `pkg/driver/controller.go` | NEW (replace stub) |
+| **Driver.addControllerServiceCapabilities** | Declare PUBLISH_UNPUBLISH_VOLUME capability | `pkg/driver/driver.go` | MODIFIED |
+| **ControllerServer** | Add attachmentManager field | `pkg/driver/controller.go` | MODIFIED |
 
-## Data Flow for Device Path Resolution
-
-### Initial Volume Stage (Happy Path)
+### New Package: pkg/attachment
 
 ```
-1. kubelet → NodeStageVolume(volumeID, stagingPath, volumeContext)
-2. NodeServer extracts NQN from volumeContext
-3. NodeServer calls Connector.Connect(target) with NQN
-4. Connector executes `nvme connect -t tcp -a <ip> -s <port> -n <nqn>`
-5. Connector calls GetDevicePath(nqn) → scans /sys/class/nvme → returns /dev/nvme2n1
-6. NodeServer formats device (if needed) and mounts to stagingPath
-7. NodeServer stores NQN in staging metadata (NOT device path)
-8. Return success to kubelet
+pkg/attachment/
+├── manager.go        # AttachmentManager implementation
+├── manager_test.go   # Unit tests
+└── types.go          # Attachment struct, AttachmentState enum
 ```
 
-**Key change:** Store NQN instead of device path in staging metadata. Current implementation already extracts NQN from volumeContext; we just need to persist it.
+## Data Flow
 
-### Volume Publish with Stale Device Handling
-
-```
-1. kubelet → NodePublishVolume(volumeID, stagingPath, targetPath)
-2. NodeServer checks if stagingPath is mounted (EXISTING check)
-3. NEW: NodeServer resolves current device path from NQN
-   a. Read NQN from staging metadata
-   b. Call resolver.GetCurrentDevicePath(nqn)
-   c. Resolver checks cache for recent path
-   d. If cache miss or path doesn't exist:
-      - Call Connector.GetDevicePath(nqn)
-      - Validate device exists at /dev/<path>
-      - Update cache
-   e. Return current device path
-4. NEW: Check if staging mount points to current device
-   a. If mismatch detected (mount points to /dev/nvme2n1 but current is /dev/nvme3n1):
-      - Log warning
-      - Unmount staging path
-      - Re-mount using current device path
-5. Bind mount stagingPath to targetPath (EXISTING)
-6. Return success to kubelet
-```
-
-**Key pattern:** Lazy re-resolution on NodePublishVolume. This aligns with Kubernetes CSI lifecycle where NodePublishVolume is idempotent and can be called multiple times.
-
-### Reconnection Detection (On-Demand)
+### ControllerPublishVolume Flow
 
 ```
-NodeExpandVolume or subsequent NodePublishVolume:
-1. NodeServer needs device path for operation
-2. Call resolver.GetCurrentDevicePath(nqn)
-3. Resolver checks if cached path still exists:
-   - If /dev/nvme2n1 exists → return from cache
-   - If not found:
-     a. Call Connector.IsConnected(nqn) - checks subsystem
-     b. If subsystem exists but no device:
-        - Log "orphaned subsystem detected"
-        - Call Connector.Disconnect(nqn)
-        - Return error (allow kubelet to retry)
-     c. If subsystem doesn't exist:
-        - Return error "device not connected"
-     d. If subsystem exists with device:
-        - Update cache with new path
-        - Return new path
+external-attacher sidecar
+         │
+         │ ControllerPublishVolume(volumeID, nodeID, readonly, volumeCapability)
+         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ ControllerServer.ControllerPublishVolume()                          │
+│                                                                      │
+│  1. Validate request (volumeID, nodeID required)                    │
+│         │                                                            │
+│  2. Validate volume exists on RDS                                   │
+│         │  rdsClient.GetVolume(volumeID)                            │
+│         │                                                            │
+│  3. Check attachment state                                          │
+│         │  attachmentManager.GetAttachment(volumeID)                │
+│         │                                                            │
+│         ├─► If attached to SAME node: return success (idempotent)   │
+│         │                                                            │
+│         ├─► If attached to DIFFERENT node AND RWO:                  │
+│         │      return FailedPrecondition error                      │
+│         │      "volume already attached to node X"                  │
+│         │                                                            │
+│         └─► If not attached: proceed                                │
+│                                                                      │
+│  4. Record attachment                                               │
+│         │  attachmentManager.Attach(volumeID, nodeID, readonly)     │
+│         │    ├─► Update in-memory map                               │
+│         │    └─► Update PV annotation (async, best-effort)          │
+│         │                                                            │
+│  5. Return PublishContext                                           │
+│         │  map[string]string{                                       │
+│         │    "nvmeAddress": volume.NVMEAddress,                     │
+│         │    "nvmePort":    volume.NVMETCPPort,                     │
+│         │    "nqn":         volume.NVMETCPNQN,                      │
+│         │  }                                                         │
+│         ▼                                                            │
+│  Return ControllerPublishVolumeResponse                             │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### ControllerUnpublishVolume Flow
+
+```
+external-attacher sidecar
+         │
+         │ ControllerUnpublishVolume(volumeID, nodeID)
+         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ ControllerServer.ControllerUnpublishVolume()                        │
+│                                                                      │
+│  1. Validate request (volumeID required; nodeID optional)           │
+│         │                                                            │
+│  2. Get current attachment                                          │
+│         │  attachmentManager.GetAttachment(volumeID)                │
+│         │                                                            │
+│         ├─► If not attached: return success (idempotent)            │
+│         │                                                            │
+│         ├─► If attached to DIFFERENT node (and nodeID specified):   │
+│         │      Log warning, return success (defensive)              │
+│         │                                                            │
+│         └─► If attached to specified node: proceed                  │
+│                                                                      │
+│  3. Remove attachment record                                        │
+│         │  attachmentManager.Detach(volumeID, nodeID)               │
+│         │    ├─► Remove from in-memory map                          │
+│         │    └─► Remove PV annotation (async, best-effort)          │
+│         │                                                            │
+│  4. Return success                                                  │
+│         ▼                                                            │
+│  Return ControllerUnpublishVolumeResponse{}                         │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Controller Restart Recovery Flow
+
+```
+Controller Pod Starts
+         │
+         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ Driver.Run()                                                        │
+│                                                                      │
+│  1. Initialize AttachmentManager                                    │
+│         │  attachmentManager = NewAttachmentManager(k8sClient)      │
+│         │                                                            │
+│  2. Load state from PV annotations                                  │
+│         │  attachmentManager.LoadFromAnnotations(ctx)               │
+│         │                                                            │
+│         │  For each PV with CSI driver = "rds.csi.srvlab.io":       │
+│         │    ├─► Read annotation: csi.rds.srvlab.io/attached-node   │
+│         │    ├─► Read annotation: csi.rds.srvlab.io/attach-time     │
+│         │    └─► Populate in-memory map if annotations present      │
+│         │                                                            │
+│  3. Start gRPC server                                               │
+│         │  (AttachmentManager now has recovered state)              │
+│         ▼                                                            │
+│  Server ready to handle ControllerPublish/Unpublish requests        │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+## AttachmentManager Design
+
+### Data Structures
+
+```go
+// pkg/attachment/types.go
+
+// Attachment represents a volume's attachment state
+type Attachment struct {
+    VolumeID   string    // CSI volume ID (e.g., pvc-uuid)
+    NodeID     string    // Kubernetes node name
+    Readonly   bool      // Whether attached as read-only
+    AttachTime time.Time // When attachment was recorded
+}
+
+// AttachmentManager tracks volume attachments
+type AttachmentManager struct {
+    attachments map[string]*Attachment // volumeID -> Attachment
+    mu          sync.RWMutex
+    k8sClient   kubernetes.Interface
+    driverName  string // For PV annotation filtering
+}
+```
+
+### PV Annotation Schema
+
+```yaml
+# Annotations added to PersistentVolume objects
+metadata:
+  annotations:
+    # Node where volume is currently attached
+    csi.rds.srvlab.io/attached-node: "worker-1"
+
+    # Timestamp of attachment (RFC3339)
+    csi.rds.srvlab.io/attach-time: "2026-01-30T12:34:56Z"
+
+    # Whether attached read-only
+    csi.rds.srvlab.io/readonly: "false"
+```
+
+### Thread Safety
+
+```go
+// All public methods use RWMutex for thread safety
+
+func (m *AttachmentManager) Attach(volumeID, nodeID string, readonly bool) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    // Check existing attachment
+    if existing, ok := m.attachments[volumeID]; ok {
+        if existing.NodeID != nodeID {
+            return fmt.Errorf("volume %s already attached to node %s",
+                volumeID, existing.NodeID)
+        }
+        // Idempotent: already attached to same node
+        return nil
+    }
+
+    // Record new attachment
+    m.attachments[volumeID] = &Attachment{
+        VolumeID:   volumeID,
+        NodeID:     nodeID,
+        Readonly:   readonly,
+        AttachTime: time.Now(),
+    }
+
+    // Persist to PV annotation (async, best-effort)
+    go m.persistAttachment(volumeID, nodeID, readonly)
+
+    return nil
+}
+
+func (m *AttachmentManager) GetAttachment(volumeID string) (*Attachment, bool) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    attachment, ok := m.attachments[volumeID]
+    if !ok {
+        return nil, false
+    }
+    // Return copy to prevent mutation
+    copy := *attachment
+    return &copy, true
+}
 ```
 
 ## Architectural Patterns
 
-### Pattern 1: Cached Device Path Resolution
+### Pattern 1: In-Memory State with Annotation Persistence
 
-**What:** Cache NQN → device path mappings with validation before use
-
-**When to use:** Every time we need to access the device (mount, unmount, expand, stats)
+**What:** Primary state in memory; PV annotations as durable backup for controller restarts
 
 **Trade-offs:**
-- **Pro:** Avoids expensive `/sys/class/nvme` scan on every operation
-- **Pro:** Detects stale paths immediately when cache validation fails
-- **Con:** Introduces state that must be kept in sync
-- **Con:** Cache invalidation timing is critical
+- **Pro:** Fast attachment lookups (no API calls in hot path)
+- **Pro:** State survives controller restarts via annotation reload
+- **Pro:** No external database dependency
+- **Con:** Brief window where state could diverge if annotation update fails
+- **Con:** Must handle annotation update failures gracefully
+
+**Mitigation for annotation failures:**
+- Log warning but don't fail the Attach operation
+- Retry annotation update on next operation
+- LoadFromAnnotations on startup reconciles state
+
+**CONFIDENCE:** HIGH - This pattern is used by several production CSI drivers (AWS EBS, GCE PD).
+
+### Pattern 2: ReadWriteOnce Enforcement at Controller Level
+
+**What:** Reject ControllerPublishVolume if volume is already attached to a different node
+
+**When to use:** For volumes with `VolumeCapability_AccessMode_SINGLE_NODE_WRITER`
 
 **Implementation:**
 
 ```go
-type DevicePathResolver struct {
-    connector Connector
-    cache     map[string]*cacheEntry  // NQN → device path
-    mu        sync.RWMutex
-    ttl       time.Duration
-}
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context,
+    req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 
-type cacheEntry struct {
-    devicePath string
-    lastCheck  time.Time
-}
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
 
-func (r *DevicePathResolver) GetCurrentDevicePath(nqn string) (string, error) {
-    r.mu.RLock()
-    entry, exists := r.cache[nqn]
-    r.mu.RUnlock()
-
-    // Cache hit and fresh - validate device still exists
-    if exists && time.Since(entry.lastCheck) < r.ttl {
-        if deviceExists(entry.devicePath) {
-            return entry.devicePath, nil
+    // Check existing attachment
+    if existing, ok := cs.attachmentManager.GetAttachment(volumeID); ok {
+        if existing.NodeID == nodeID {
+            // Idempotent: already attached to this node
+            klog.V(4).Infof("Volume %s already attached to node %s", volumeID, nodeID)
+            return &csi.ControllerPublishVolumeResponse{
+                PublishContext: cs.buildPublishContext(volumeID),
+            }, nil
         }
-        // Cache was stale, invalidate
-        klog.Warningf("Cached device path %s for NQN %s no longer exists",
-            entry.devicePath, nqn)
+
+        // Check if access mode allows multi-node
+        accessMode := req.GetVolumeCapability().GetAccessMode().GetMode()
+        if accessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER ||
+           accessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY {
+            return nil, status.Errorf(codes.FailedPrecondition,
+                "volume %s is already attached to node %s, cannot attach to node %s",
+                volumeID, existing.NodeID, nodeID)
+        }
     }
 
-    // Cache miss or stale - re-resolve
-    devicePath, err := r.connector.GetDevicePath(nqn)
-    if err != nil {
-        return "", fmt.Errorf("failed to resolve device path: %w", err)
+    // Record new attachment
+    readonly := req.GetReadonly()
+    if err := cs.attachmentManager.Attach(volumeID, nodeID, readonly); err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to record attachment: %v", err)
     }
 
-    // Update cache
-    r.mu.Lock()
-    r.cache[nqn] = &cacheEntry{
-        devicePath: devicePath,
-        lastCheck:  time.Now(),
-    }
-    r.mu.Unlock()
-
-    return devicePath, nil
+    // ... build and return response
 }
 ```
 
-**CONFIDENCE:** HIGH - This pattern is standard in storage drivers and aligns with CSI idempotency requirements.
+**CONFIDENCE:** HIGH - This is the standard pattern for RWO enforcement.
 
-### Pattern 2: Reactive Reconnection on Demand
+**Sources:**
+- [CSI Spec - ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+- [AWS EBS CSI Driver - ControllerPublishVolume](https://github.com/kubernetes-sigs/aws-ebs-csi-driver)
 
-**What:** Detect and recover from device path changes when CSI operations are called, rather than proactively monitoring
+### Pattern 3: Defensive Unpublish Handling
 
-**When to use:** NodePublishVolume, NodeExpandVolume, NodeGetVolumeStats - any operation needing device access
+**What:** ControllerUnpublishVolume succeeds even if state is inconsistent
 
-**Trade-offs:**
-- **Pro:** No background goroutines or periodic polling overhead
-- **Pro:** Aligns with CSI idempotency model (operations can be retried)
-- **Pro:** Simple - detection and recovery happen in same code path
-- **Con:** Pod may experience I/O errors until next CSI operation triggers recovery
-- **Con:** Relies on kubelet retry behavior for recovery
+**Rationale:**
+- Kubernetes may retry unpublish multiple times
+- Node may have crashed, leaving stale state
+- Blocking unpublish causes volume stuck in terminating state
 
-**Implementation approach:**
+**Implementation:**
 
 ```go
-func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
-    // ... validation ...
+func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context,
+    req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 
-    // Read NQN from staging metadata (stored during NodeStageVolume)
-    nqn, err := ns.readNQNFromStaging(stagingPath)
-    if err != nil {
-        return nil, status.Errorf(codes.Internal, "failed to read NQN: %v", err)
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId() // May be empty in some cases
+
+    existing, ok := cs.attachmentManager.GetAttachment(volumeID)
+    if !ok {
+        // Not attached - idempotent success
+        klog.V(4).Infof("Volume %s not attached, returning success", volumeID)
+        return &csi.ControllerUnpublishVolumeResponse{}, nil
     }
 
-    // Resolve current device path
-    devicePath, err := ns.resolver.GetCurrentDevicePath(nqn)
-    if err != nil {
-        return nil, status.Errorf(codes.Internal, "failed to resolve device: %v", err)
+    // If nodeID specified and doesn't match, log warning but still detach
+    if nodeID != "" && existing.NodeID != nodeID {
+        klog.Warningf("Volume %s attached to node %s, but unpublish requested for node %s; detaching anyway",
+            volumeID, existing.NodeID, nodeID)
     }
 
-    // Check if staging mount points to current device
-    if err := ns.validateStagingMount(stagingPath, devicePath); err != nil {
-        klog.Warningf("Staging mount is stale, remounting: %v", err)
-        if err := ns.remountStaging(stagingPath, devicePath, fsType); err != nil {
-            return nil, status.Errorf(codes.Internal, "failed to remount: %v", err)
-        }
+    if err := cs.attachmentManager.Detach(volumeID, existing.NodeID); err != nil {
+        // Log error but don't fail - state will reconcile eventually
+        klog.Errorf("Failed to remove attachment record for volume %s: %v", volumeID, err)
     }
 
-    // Proceed with bind mount
-    // ... existing bind mount logic ...
+    return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 ```
 
-**CONFIDENCE:** HIGH - Matches CSI spec expectation that operations are idempotent and retriable.
-
-**Sources:**
-- [CSI block: Why is NodePublishVolume called in SetUpDevice?](https://github.com/kubernetes/kubernetes/issues/73773) - Documents idempotency expectations
-- [NodeStageVolume is called before each call to NodePublishVolume](https://github.com/kubernetes-csi/external-provisioner/issues/90) - Confirms retry patterns
-
-### Pattern 3: Background Health Monitoring (DEFERRED)
-
-**What:** Periodic goroutine checks NVMe connection health and preemptively reconnects
-
-**When to use:** Production deployments where I/O errors are unacceptable (deferred to Phase 2)
-
-**Trade-offs:**
-- **Pro:** Detects failures before kubelet operations
-- **Pro:** Can emit metrics and events for monitoring
-- **Con:** Adds complexity and resource usage
-- **Con:** Risk of unnecessary reconnections (thundering herd)
-- **Con:** Must coordinate with CSI operation locks
-
-**Recommendation:** DO NOT implement in initial reliability phase. Focus on reactive recovery first, add proactive monitoring only if reactive approach proves insufficient in production.
-
-**CONFIDENCE:** MEDIUM - This pattern exists in some CSI drivers but adds significant complexity. Document as future enhancement.
-
-**Sources:**
-- [Pods using CSI driver sidecar fail to recover after Node failure](https://github.com/GoogleCloudPlatform/gcs-fuse-csi-driver/issues/113) - Shows recovery challenges
-- [Critical: Node reboot could lead to data loss](https://github.com/kubernetes/kubernetes/issues/120853) - Documents Kubernetes lifecycle issues
+**CONFIDENCE:** HIGH - Defensive handling prevents stuck volumes.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Storing Device Path in Persistent Metadata
+### Anti-Pattern 1: Blocking on Annotation Updates
 
-**What people do:** Store `/dev/nvme2n1` in JSON file at staging path, use it for all subsequent operations
-
-**Why it's wrong:**
-- Device paths are ephemeral and change on reconnection
-- No mechanism to update stored path when device changes
-- Creates stale reference that causes I/O errors
-
-**Do this instead:** Store NQN (persistent identifier) and resolve device path on each use
-
-**CONFIDENCE:** HIGH - This is the root cause of the current issue.
-
-### Anti-Pattern 2: Using `requiresRepublish=true` for Remounting
-
-**What people do:** Set CSIDriver spec `requiresRepublish: true` to trigger periodic NodePublishVolume calls for remounting
+**What people do:** Make ControllerPublishVolume wait for PV annotation update to succeed
 
 **Why it's wrong:**
-- Kubelet calls NodePublishVolume every 100ms when enabled (hardcoded reconcilerLoopSleepPeriod)
-- Any error during republish causes immediate unmount by kubelet
-- Unmount doesn't propagate to running pod mount namespace (pod keeps stale mount)
-- Designed for credential rotation, not device path changes
-- Extremely high overhead for all volumes
+- API server unavailability blocks all publish operations
+- Increases latency for every attach operation
+- In-memory state is authoritative; annotation is backup
 
-**Do this instead:** Use on-demand resolution in NodePublishVolume; rely on natural kubelet retries for recovery
+**Do this instead:** Update annotation asynchronously; log failures but don't block
 
-**CONFIDENCE:** HIGH - Documented Kubernetes issues show this approach is problematic.
+### Anti-Pattern 2: Stateless Controller (No Attachment Tracking)
 
-**Sources:**
-- [Kubelet deletes CSI mount points if requiresRepublish call returns error](https://github.com/kubernetes/kubernetes/issues/121271)
-- [CSIDriver Object - requiresRepublish documentation](https://kubernetes-csi.github.io/docs/csi-driver-object.html)
-
-### Anti-Pattern 3: Reconnecting on Every GetDevicePath Call
-
-**What people do:** Call `nvme disconnect && nvme connect` on every device path lookup to ensure fresh connection
+**What people do:** Rely solely on Kubernetes VolumeAttachment objects
 
 **Why it's wrong:**
-- Causes I/O disruption for running pods
-- Expensive operation (connect takes 2-5 seconds)
-- Unnecessary when device path is still valid
-- Creates thundering herd if multiple pods stage simultaneously
+- VolumeAttachment is managed by external-attacher, not controller
+- Controller has no way to enforce RWO without its own state
+- Race conditions during pod migration
 
-**Do this instead:** Only reconnect when device path resolution fails AND subsystem is orphaned
+**Do this instead:** Maintain attachment state in controller; use as source of truth for RWO enforcement
 
-**CONFIDENCE:** HIGH - Performance and reliability impact is clear.
+### Anti-Pattern 3: Failing Unpublish on State Mismatch
 
-### Anti-Pattern 4: Background Thread Remounting Without Coordination
-
-**What people do:** Background goroutine periodically checks mounts and remounts if stale
+**What people do:** Return error if unpublish nodeID doesn't match recorded nodeID
 
 **Why it's wrong:**
-- Race conditions with CSI operations (NodeUnstageVolume during remount)
-- Can remount while kubelet is trying to unmount (violates CSI state machine)
-- No way to propagate remount errors to kubelet/scheduler
-- Difficult to debug (operations happen outside request context)
+- Causes volume to be stuck if node crashed
+- Kubernetes retries indefinitely, never succeeds
+- Manual intervention required
 
-**Do this instead:** Handle remounting within CSI operation handlers where errors can be returned properly
+**Do this instead:** Log warning but allow unpublish to succeed; state will reconcile
 
-**CONFIDENCE:** HIGH - CSI spec assumes single-threaded operation per volume.
+## Capability Declaration
 
-## Integration Points
+### Current Capabilities (driver.go)
 
-### Kubelet Integration
+```go
+func (d *Driver) addControllerServiceCapabilities() {
+    d.cscaps = []*csi.ControllerServiceCapability{
+        {Type: &csi.ControllerServiceCapability_Rpc{
+            Rpc: &csi.ControllerServiceCapability_RPC{
+                Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+            }}},
+        {Type: &csi.ControllerServiceCapability_Rpc{
+            Rpc: &csi.ControllerServiceCapability_RPC{
+                Type: csi.ControllerServiceCapability_RPC_GET_CAPACITY,
+            }}},
+        {Type: &csi.ControllerServiceCapability_Rpc{
+            Rpc: &csi.ControllerServiceCapability_RPC{
+                Type: csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+            }}},
+    }
+}
+```
 
-| Scenario | Kubelet Behavior | CSI Driver Response |
-|----------|------------------|---------------------|
-| **Pod starts, volume needs mounting** | Calls NodeStageVolume (if not already staged), then NodePublishVolume | Connect NVMe (if needed), mount to staging, bind mount to target |
-| **Mount validation fails (stale device)** | Retries NodePublishVolume with exponential backoff | Detect stale mount, remount with current device, return success |
-| **Device path changed between operations** | Not detected by kubelet; relies on CSI driver | Resolver detects change, updates cache, uses new path transparently |
-| **Node reboot, staging path lost** | Calls NodeStageVolume again to restage | Re-connect NVMe, mount to staging (idempotent operation) |
+### Required Addition
 
-**CONFIDENCE:** HIGH - Tested behavior documented in CSI spec and Kubernetes issues.
+```go
+// ADD this capability to enable ControllerPublish/Unpublish
+{Type: &csi.ControllerServiceCapability_Rpc{
+    Rpc: &csi.ControllerServiceCapability_RPC{
+        Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
+    }}},
+```
 
-**Sources:**
-- [BUG: Missed NodeStageVolume after reboot](https://github.com/longhorn/longhorn/issues/8009)
-- [NodeStageVolume called before NodePublishVolume](https://github.com/kubernetes-csi/external-provisioner/issues/90)
+### CSIDriver Manifest Update
 
-### NVMe Subsystem Integration
+```yaml
+# deploy/kubernetes/csi-driver.yaml
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: rds.csi.srvlab.io
+spec:
+  attachRequired: true  # CHANGE from false to true
+  podInfoOnMount: true
+  volumeLifecycleModes:
+    - Persistent
+```
 
-| State | Detection Method | Recovery Action |
-|-------|------------------|-----------------|
-| **Connected with valid device** | `IsConnected(nqn)` returns true, `GetDevicePath(nqn)` returns path, device exists | Use cached path |
-| **Orphaned subsystem (connected but no device)** | `IsConnected(nqn)` returns true, `GetDevicePath(nqn)` fails | Disconnect subsystem, return error to trigger retry |
-| **Disconnected** | `IsConnected(nqn)` returns false | Return error to kubelet; kubelet will call NodeStageVolume again |
-| **Device path changed** | Old path doesn't exist, new scan finds device under different path | Update cache, use new path |
+When `attachRequired: true`:
+- external-attacher creates VolumeAttachment objects
+- Kubernetes waits for attachment before calling NodeStageVolume
+- ControllerPublishVolume is called before node operations
 
-**CONFIDENCE:** MEDIUM - Based on current implementation's orphaned subsystem handling (lines 495-504 in nvme.go).
+## Suggested Build Order
 
-**Sources:**
-- Codebase analysis: `pkg/nvme/nvme.go` ConnectWithContext implementation
+### Phase 1: AttachmentManager Core (2-3 tasks)
 
-## Implementation Order (Phase Structure)
+1. **Create pkg/attachment/types.go**
+   - Define Attachment struct
+   - Define AttachmentManager interface
 
-### Phase 1: Foundation (Week 1)
-**Goal:** Introduce device path resolver without changing CSI behavior
+2. **Create pkg/attachment/manager.go**
+   - Implement in-memory state with RWMutex
+   - Implement Attach/Detach/GetAttachment methods
+   - Unit tests for concurrent operations
 
-1. **Create DevicePathResolver** (`pkg/nvme/resolver.go`)
-   - Implement cached resolution with TTL (30 seconds)
-   - Add `GetCurrentDevicePath(nqn)` method
-   - Add `InvalidateCache(nqn)` for explicit invalidation
-   - Unit tests for cache hit/miss scenarios
+3. **Add PV annotation persistence**
+   - Implement persistAttachment (async)
+   - Implement LoadFromAnnotations (sync on startup)
+   - Integration test with fake k8s client
 
-2. **Update NodeServer to use resolver** (`pkg/driver/node.go`)
-   - Instantiate resolver in `NewNodeServer`
-   - Replace direct `Connector.GetDevicePath` calls with `resolver.GetCurrentDevicePath`
-   - No behavior changes yet, just refactoring
+### Phase 2: ControllerPublish Implementation (2-3 tasks)
 
-3. **Add NQN persistence** (metadata storage)
-   - Store NQN in JSON file at staging path (e.g., `/var/lib/kubelet/plugins/.../staging/volume-metadata.json`)
-   - Implement `readNQNFromStaging` helper
-   - Keep backward compatibility (if metadata missing, derive from volumeID)
+4. **Wire AttachmentManager into ControllerServer**
+   - Add field to ControllerServer struct
+   - Initialize in NewControllerServer
+   - Call LoadFromAnnotations on startup
 
-**Validation:** Existing tests pass; no behavior changes observed
+5. **Implement ControllerPublishVolume**
+   - Request validation
+   - RWO enforcement logic
+   - Return PublishContext with NVMe connection info
+   - Unit tests with mock AttachmentManager
 
-### Phase 2: Stale Mount Detection (Week 2)
-**Goal:** Detect but don't automatically fix stale mounts
+6. **Implement ControllerUnpublishVolume**
+   - Defensive handling
+   - State cleanup
+   - Unit tests
 
-4. **Add mount validation** (`pkg/mount/mount.go`)
-   - Implement `GetMountDevicePath(mountPath)` - reads /proc/mounts
-   - Implement `IsMountStale(mountPath, expectedDevice)` - compares devices
-   - Unit tests with mock /proc/mounts
+### Phase 3: Capability and Deployment (1-2 tasks)
 
-5. **Add staleness detection to NodePublishVolume**
-   - Before bind mount, check if staging mount points to current device
-   - Log warning if stale detected
-   - Return error with `codes.FailedPrecondition` if stale
-   - Add metric for stale mount detection count
+7. **Update capability declarations**
+   - Add PUBLISH_UNPUBLISH_VOLUME to cscaps
+   - Update CSIDriver manifest (attachRequired: true)
 
-**Validation:** Manually trigger NVMe reconnection, verify error is returned and logged
+8. **E2E testing**
+   - Test pod migration (RWO enforcement)
+   - Test controller restart (state recovery)
+   - Test node failure (unpublish handling)
 
-### Phase 3: Automatic Remounting (Week 3)
-**Goal:** Automatically recover from stale mounts
+## Integration with Existing Components
 
-6. **Implement remounting logic**
-   - Add `remountStaging(stagingPath, newDevicePath, fsType)` method
-   - Unmount staging path
-   - Re-mount with current device path
-   - Log operation with duration metrics
+### ControllerServer Modifications
 
-7. **Integrate remounting into NodePublishVolume**
-   - When stale mount detected, attempt remount
-   - If remount succeeds, continue with bind mount
-   - If remount fails, return error to kubelet
-   - Add retry with exponential backoff (3 attempts)
+```go
+// pkg/driver/controller.go
 
-8. **Add orphaned subsystem handling**
-   - If device path resolution fails but subsystem exists
-   - Disconnect and return error (trigger kubelet retry)
-   - Log event for monitoring
+type ControllerServer struct {
+    csi.UnimplementedControllerServer
+    driver            *Driver
+    attachmentManager *attachment.AttachmentManager // NEW
+}
 
-**Validation:** Integration test with forced reconnection; verify automatic recovery
+func NewControllerServer(driver *Driver) *ControllerServer {
+    return &ControllerServer{
+        driver:            driver,
+        attachmentManager: attachment.NewAttachmentManager(driver.k8sClient, DriverName),
+    }
+}
+```
 
-### Phase 4: Observability (Week 4)
-**Goal:** Add metrics and events for production monitoring
+### Driver Initialization
 
-9. **Add Prometheus metrics** (`pkg/metrics/nvme.go`)
-   - `rds_csi_device_path_resolutions_total{result="success|failure"}`
-   - `rds_csi_stale_mounts_detected_total`
-   - `rds_csi_remount_operations_total{result="success|failure"}`
-   - `rds_csi_orphaned_subsystems_detected_total`
+```go
+// pkg/driver/driver.go - Run() method
 
-10. **Add Kubernetes events**
-    - Emit event when stale mount detected
-    - Emit event when remount succeeds/fails
-    - Emit event when orphaned subsystem cleaned up
+func (d *Driver) Run(endpoint string) error {
+    // ... existing initialization ...
 
-**Validation:** Deploy to test cluster, trigger failures, verify metrics and events appear
+    // Initialize controller service if enabled
+    if d.rdsClient != nil {
+        klog.Info("Controller service enabled")
+        d.cs = NewControllerServer(d)
 
-## Decision: Reactive vs. Proactive Architecture
+        // Load attachment state from PV annotations
+        if d.k8sClient != nil {
+            ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+            defer cancel()
+            if err := d.cs.(*ControllerServer).attachmentManager.LoadFromAnnotations(ctx); err != nil {
+                klog.Warningf("Failed to load attachment state from annotations: %v", err)
+                // Non-fatal: continue with empty state
+            }
+        }
+    }
 
-**CHOSEN APPROACH: Reactive (On-Demand Resolution)**
+    // ... rest of initialization ...
+}
+```
 
-**Rationale:**
-1. **Aligns with CSI lifecycle**: Kubelet already retries failed operations; leverage existing retry mechanism
-2. **Simpler implementation**: No background threads, no coordination complexity
-3. **Lower resource usage**: No periodic scanning or health checks
-4. **Fail-fast**: Errors surface immediately during CSI operations (easier to debug)
-5. **Production-proven**: Other CSI drivers (AWS EBS, Longhorn) use reactive patterns successfully
+### RBAC Updates Required
 
-**DEFERRED: Proactive (Background Monitoring)**
-
-**Reasons to defer:**
-1. Adds complexity without clear benefit over reactive approach
-2. Risk of race conditions with CSI operations
-3. Requires careful coordination with locks
-4. Thundering herd risk (multiple nodes reconnecting simultaneously)
-5. Can be added later if reactive approach proves insufficient
-
-**Decision criteria for adding proactive monitoring:**
-- Metrics show frequent I/O errors between CSI operations
-- Customer demand for zero-downtime reconnection
-- Evidence that kubelet retry delays are unacceptable
-
-**CONFIDENCE:** HIGH - Based on research of existing CSI drivers and Kubernetes issue discussions.
-
-**Sources:**
-- Analysis of Longhorn CSI driver patterns (reactive remounting in NodePublishVolume)
-- Kubernetes CSI spec emphasizes idempotency over proactive monitoring
+```yaml
+# deploy/kubernetes/controller-rbac.yaml
+# ADD to controller ClusterRole:
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "update", "patch"]  # ADD update, patch
+```
 
 ## Scaling Considerations
 
 | Scale Factor | Impact | Mitigation |
 |--------------|--------|------------|
-| **Many volumes per node (100+)** | Resolver cache size grows; memory usage increases | Implement cache eviction based on LRU; limit cache size to 1000 entries |
-| **Frequent reconnections** | Cache thrashing; repeated /sys scans | Increase TTL to 60 seconds; add metric for cache hit rate |
-| **High pod churn** | Many NodePublishVolume calls; resolver pressure | Cache helps here; ensure GetDevicePath is efficient |
-| **Network instability** | Many orphaned subsystems; cleanup overhead | Log but don't block operations; track cleanup latency metric |
+| **Many volumes (1000+)** | In-memory map grows; startup load time increases | Use efficient map; paginate PV list on startup |
+| **Frequent attach/detach** | Annotation update load on API server | Batch annotation updates; rate limit |
+| **Controller restarts** | Brief period with incomplete state | LoadFromAnnotations is fast; external-attacher retries |
+| **Large clusters (100+ nodes)** | More concurrent publish requests | RWMutex handles concurrency well |
 
 ## Sources
 
-### Official Documentation (HIGH Confidence)
-- [CSI Driver Object - requiresRepublish](https://kubernetes-csi.github.io/docs/csi-driver-object.html) - Official Kubernetes CSI documentation
-- [Deploying a CSI Driver on Kubernetes](https://kubernetes-csi.github.io/docs/deploying.html) - Architecture patterns
-- [How the CSI Works](https://sklar.rocks/how-container-storage-interface-works/) - CSI lifecycle explanation
+### CSI Specification (HIGH Confidence)
+- [CSI Spec - ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md) - Official method specification
+- [CSIDriver Object](https://kubernetes-csi.github.io/docs/csi-driver-object.html) - attachRequired field documentation
 
-### Kubernetes Issues (MEDIUM-HIGH Confidence)
-- [Issue #121271: Kubelet deletes CSI mount points if requiresRepublish returns error](https://github.com/kubernetes/kubernetes/issues/121271) - RequiresRepublish pitfalls
-- [Issue #120853: Node reboot data loss due to broken lifecycle](https://github.com/kubernetes/kubernetes/issues/120853) - CSI lifecycle issues
-- [Issue #8009: Missed NodeStageVolume after reboot](https://github.com/longhorn/longhorn/issues/8009) - Real-world reboot handling
-- [Issue #3744: Staging path no longer valid](https://github.com/longhorn/longhorn/issues/3744) - Stale staging path patterns
-- [Issue #73773: CSI block NodePublishVolume in SetUpDevice](https://github.com/kubernetes/kubernetes/issues/73773) - NodePublish idempotency
+### CSI Driver Examples (MEDIUM-HIGH Confidence)
+- [AWS EBS CSI Driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) - Production attachment tracking implementation
+- [DigitalOcean CSI Driver](https://pkg.go.dev/github.com/digitalocean/csi-digitalocean/driver) - ControllerPublishVolume example
+- [CSI Host Path Driver](https://github.com/kubernetes-csi/csi-driver-host-path/pkg/hostpath) - Reference implementation
 
-### NVMe-oF CSI Implementations (MEDIUM Confidence)
-- [kubernetes-csi/csi-driver-nvmf](https://github.com/kubernetes-csi/csi-driver-nvmf) - Reference implementation
-- [spdk/spdk-csi](https://github.com/spdk/spdk-csi) - SPDK architecture patterns
-- [csi-lib-iscsi Multipath Management](https://deepwiki.com/kubernetes-csi/csi-lib-iscsi/2.3-multipath-management) - Device path handling patterns
+### Kubernetes Documentation (HIGH Confidence)
+- [Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/developing.html)
+- [External Attacher](https://github.com/kubernetes-csi/external-attacher) - Sidecar interaction patterns
 
 ### Codebase Analysis (HIGH Confidence)
-- `pkg/nvme/nvme.go` - Current Connector implementation with orphaned subsystem handling
-- `pkg/driver/node.go` - Current NodeStageVolume/NodePublishVolume implementation
-- `.planning/codebase/ARCHITECTURE.md` - Existing architecture documentation
-- `.planning/codebase/CONCERNS.md` - Known issues with NVMe device paths
+- `pkg/driver/controller.go` - Current stub implementation (lines 336-343)
+- `pkg/driver/driver.go` - Capability declaration patterns
+- `pkg/reconciler/orphan_reconciler.go` - PV annotation access patterns
 
 ---
 
-*Architecture research for: NVMe-oF device path stability*
+*Architecture research for: Volume Fencing via ControllerPublish/Unpublish*
 *Researched: 2026-01-30*
+*Confidence: HIGH - Based on CSI spec, production driver examples, and existing codebase patterns*

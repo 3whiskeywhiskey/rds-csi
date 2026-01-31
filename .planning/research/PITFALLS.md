@@ -1,774 +1,885 @@
-# NVMe-oF Reconnection Handling Pitfalls
+# Volume Fencing Pitfalls: ControllerPublishVolume/ControllerUnpublishVolume
 
-**Domain:** Kubernetes CSI drivers for NVMe over Fabrics (NVMe-oF)
+**Domain:** CSI Controller Attachment Tracking for ReadWriteOnce Volumes
 **Researched:** 2026-01-30
 **Confidence:** HIGH
+**Target:** v0.3.0 - Volume Fencing to fix volume ping-pong
 
-This research focuses specifically on pitfalls when implementing NVMe-oF reconnection handling in CSI drivers, based on analysis of the rds-csi codebase, recent bug fixes, and community patterns from NVMe-oF CSI implementations.
+This research focuses on pitfalls when implementing `ControllerPublishVolume` and `ControllerUnpublishVolume` for attachment tracking, specifically for KubeVirt workloads with ReadWriteOnce volumes using in-memory state + PV annotations.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Orphaned Subsystem False Positives
+### Pitfall 1: In-Memory State Loss on Controller Restart
 
 **What goes wrong:**
-NVMe subsystems persist in the kernel after disconnection (orphaned state). `nvme list-subsys` shows the NQN as "connected" even when no controllers are attached and no `/dev/nvmeX` device exists. This causes a race condition:
+Controller maintains attachment tracking in memory (map of volumeID -> nodeID). When controller pod restarts, crashes, or is rescheduled:
 
-1. `IsConnected()` returns true (sees orphaned NQN in subsystem list)
-2. `GetDevicePath()` fails (no actual device exists)
-3. CSI returns "no device found for NQN" error
-4. Volume staging fails despite target being accessible
+1. In-memory state is completely lost
+2. Controller returns to "clean slate" - doesn't know which volumes are attached where
+3. Next `ControllerPublishVolume` call for already-attached volume succeeds (no fencing)
+4. Volume now "published" to two nodes simultaneously
+5. Data corruption if both nodes perform I/O
 
 **Why it happens:**
-The Linux kernel maintains subsystem metadata even after controller disconnection. During network interruptions or abnormal disconnects, the subsystem entry remains in `/sys/class/nvme-subsystem/` while the actual controller under `/sys/class/nvme/nvmeX` is removed. Simple string matching against `nvme list-subsys` output returns false positives.
+Pure in-memory tracking without persistence. Common anti-pattern: relying on "controller will rebuild state from external-attacher calls" - but external-attacher doesn't re-call `ControllerPublishVolume` for already-attached volumes after controller restart.
 
-**How to avoid:**
-After `IsConnected()` returns true, **always verify `GetDevicePath()` succeeds**. If device lookup fails despite appearing connected, treat it as an orphaned subsystem:
+**Consequences:**
+- **Silent data corruption** - worst case, both nodes write to same volume
+- **Multi-attach errors** - Kubernetes eventually detects and blocks new pods
+- **Inconsistent state** - Driver thinks volume is available, but it's in use
+
+**Warning signs:**
+- After controller restart, `kubectl get volumeattachment` shows volumes attached, but controller has empty state
+- Multi-attach errors appear shortly after controller pod restart
+- Logs show "volume not found in publish context" when unpublishing
+
+**Prevention strategy:**
 
 ```go
-if connected {
-    devicePath, err := c.GetDevicePath(target.NQN)
-    if err == nil {
-        return devicePath, nil // Genuine connection
+// Option A: Persist to PV annotations (recommended for your use case)
+func (cs *ControllerServer) persistAttachment(volumeID, nodeID string) error {
+    pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+    if err != nil {
+        return err
     }
-    // Orphaned subsystem - disconnect and reconnect
-    klog.Warningf("NQN %s appears connected but no device found, attempting reconnect", target.NQN)
-    _ = c.DisconnectWithContext(ctx, target.NQN)
-    // Fall through to connect logic
+
+    if pv.Annotations == nil {
+        pv.Annotations = make(map[string]string)
+    }
+    pv.Annotations["rds.csi.srvlab.io/attached-to"] = nodeID
+    pv.Annotations["rds.csi.srvlab.io/attached-at"] = time.Now().Format(time.RFC3339)
+
+    _, err = cs.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+    return err
+}
+
+// Rebuild state on startup
+func (cs *ControllerServer) rebuildStateFromPVs() error {
+    pvs, err := cs.kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+    if err != nil {
+        return err
+    }
+
+    for _, pv := range pvs.Items {
+        if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != cs.driverName {
+            continue
+        }
+        if nodeID, ok := pv.Annotations["rds.csi.srvlab.io/attached-to"]; ok {
+            cs.attachments[pv.Name] = nodeID
+            klog.Infof("Recovered attachment: %s -> %s", pv.Name, nodeID)
+        }
+    }
+    return nil
 }
 ```
 
-**Warning signs:**
-- Logs show "already connected" but device path lookups fail
-- `nvme list-subsys` shows subsystem but `ls /sys/class/nvme/` shows no matching controller
-- Volumes fail to stage intermittently after network issues
-
 **Phase to address:**
-Phase 1: Connection state verification (foundation phase). This is table-stakes reliability - must be included in MVP.
+Phase 1: Core implementation. This is the FIRST thing to implement before any attachment logic.
 
 **Sources:**
-- Fixed in commit bc90a9b: "fix(nvme): handle orphaned subsystems in ConnectWithContext"
-- Community pattern: [Dell CSM Issue #496](https://github.com/dell/csm/issues/496) documents similar "csi_sock: connect: connection refused" after successful attach
-- [Incomplete connections libnvme issue](https://github.com/linux-nvme/libnvme/issues/431)
+- [Azure Disk CSI: CRI Recovery Enhancement](https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/1648) - describes state recovery challenges
+- [vSphere CSI: ControllerPublishVolume called twice](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/580) - shows duplicate attach after upgrade
 
 ---
 
-### Pitfall 2: Controller Renumbering Breaks Device Path Assumptions
+### Pitfall 2: Race Condition Between Concurrent ControllerPublishVolume Calls
 
 **What goes wrong:**
-For NVMe-oF (fabrics), the device naming doesn't match local NVMe conventions. After disconnect/reconnect or controller failover:
+Two pods scheduled simultaneously on different nodes for the same RWO volume:
 
-- Controller `nvme1` might contain namespace `nvme2c1n2` (subsystem 2, controller 1, namespace 2)
-- Block device appears as `/dev/nvme2n2` (subsystem-based) or `/dev/nvme2c1n2` (controller-based)
-- Previous code assumes `/dev/nvme1n1` matches controller `nvme1` - this fails for NVMe-oF
-- Hot-removing and reinserting a device changes both controller number AND namespace number unpredictably
+```
+Timeline:
+T0: Pod A scheduled on Node1, triggers ControllerPublishVolume(vol, node1)
+T1: Pod B scheduled on Node2, triggers ControllerPublishVolume(vol, node2)
+T2: Controller checks attachments[vol] -> empty (neither completed yet)
+T3: Controller allows BOTH publications
+T4: Both nodes connect to same NVMe target
+T5: Data corruption
+```
 
 **Why it happens:**
-NVMe-oF devices use subsystem-based naming for multipath support. The Linux kernel assigns controller numbers dynamically at connection time. The subsystem number may differ from the controller number. After reconnection, both numbers can change based on kernel enumeration order (first-come-first-serve).
+No locking around attachment check-and-set. The check ("is volume attached?") and set ("mark as attached") are not atomic. With concurrent requests, both pass the check before either completes the set.
 
-**How to avoid:**
-1. **Never assume device name from controller name** - always scan namespace subdirectories
-2. **Check both naming schemes** - subsystem-based (`nvme2n2`) and controller-based (`nvme2c1n2`)
-3. **Use NQN as ground truth** - read `/sys/class/nvme/nvmeX/subsysnqn` to match, not device numbers
-4. **Prefer subsystem-based paths** for multipath compatibility
+**Consequences:**
+- RWO volume attached to multiple nodes simultaneously
+- NVMe/TCP allows multiple initiators (no built-in SCSI-like reservation)
+- Filesystem corruption guaranteed
+
+**Warning signs:**
+- Multi-attach detected by kubelet but after initial I/O already occurred
+- Rapid pod scheduling (e.g., deployment scale-up) causes sporadic failures
+- Race window is small (milliseconds) so hard to reproduce reliably
+
+**Prevention strategy:**
 
 ```go
-// Scan namespace directories under controller
-namespaces, err := filepath.Glob(filepath.Join(controller, "nvme*n*"))
-for _, ns := range namespaces {
-    nsName := filepath.Base(ns)
-    // Check if block device exists
-    if _, err := os.Stat("/dev/" + nsName); err == nil {
-        return "/dev/" + nsName, nil
+type ControllerServer struct {
+    // Per-volume lock to serialize ControllerPublishVolume calls
+    volumeLocks sync.Map // map[string]*sync.Mutex
+
+    // Attachment state
+    attachments     map[string]string
+    attachmentsLock sync.RWMutex
+}
+
+func (cs *ControllerServer) getVolumeLock(volumeID string) *sync.Mutex {
+    lock, _ := cs.volumeLocks.LoadOrStore(volumeID, &sync.Mutex{})
+    return lock.(*sync.Mutex)
+}
+
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    // Serialize all publish operations for this volume
+    lock := cs.getVolumeLock(volumeID)
+    lock.Lock()
+    defer lock.Unlock()
+
+    // Now safe to check and set
+    cs.attachmentsLock.RLock()
+    existingNode, exists := cs.attachments[volumeID]
+    cs.attachmentsLock.RUnlock()
+
+    if exists {
+        if existingNode == nodeID {
+            // Idempotent: already attached to same node
+            return &csi.ControllerPublishVolumeResponse{}, nil
+        }
+        // Attached to different node - REJECT
+        return nil, status.Errorf(codes.FailedPrecondition,
+            "volume %s already attached to node %s, cannot attach to %s",
+            volumeID, existingNode, nodeID)
     }
 
-    // For controller-based (nvmeXcYnZ), try subsystem-based (nvmeXnZ)
-    if strings.Contains(nsName, "c") {
-        var subsys, ctrl, namespace int
-        if _, err := fmt.Sscanf(nsName, "nvme%dc%dn%d", &subsys, &ctrl, &namespace); err == nil {
-            subsysDevice := fmt.Sprintf("nvme%dn%d", subsys, namespace)
-            if _, err := os.Stat("/dev/" + subsysDevice); err == nil {
-                return "/dev/" + subsysDevice, nil
+    // Perform actual attachment tracking
+    cs.attachmentsLock.Lock()
+    cs.attachments[volumeID] = nodeID
+    cs.attachmentsLock.Unlock()
+
+    // Persist to PV annotation
+    if err := cs.persistAttachment(volumeID, nodeID); err != nil {
+        // Rollback in-memory state
+        cs.attachmentsLock.Lock()
+        delete(cs.attachments, volumeID)
+        cs.attachmentsLock.Unlock()
+        return nil, status.Errorf(codes.Internal, "failed to persist attachment: %v", err)
+    }
+
+    return &csi.ControllerPublishVolumeResponse{}, nil
+}
+```
+
+**Phase to address:**
+Phase 1: Core implementation. Must be present from day one.
+
+**Sources:**
+- [CSI Spec: ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md) - requires FAILED_PRECONDITION for already-published volumes
+- [Kubernetes optimistic concurrency](https://kyungho.me/en/posts/kubernetes-concurrency-control) - explains why Kubernetes doesn't prevent this at scheduler level
+
+---
+
+### Pitfall 3: Dangling VolumeAttachments After Node Deletion
+
+**What goes wrong:**
+Node is forcefully removed from cluster (hardware failure, `kubectl delete node --force`):
+
+1. VolumeAttachment objects remain in Terminating state
+2. external-attacher cannot call ControllerUnpublishVolume (node is gone)
+3. Controller's attachment state still shows volume -> deleted_node
+4. New pod scheduled on healthy node
+5. ControllerPublishVolume rejects with "already attached to [deleted_node]"
+6. Pod stuck in ContainerCreating forever
+
+**Why it happens:**
+Controller trusts its attachment state without validating node existence. When node is deleted, the attachment state becomes stale but is never cleaned up.
+
+**Consequences:**
+- Volumes become permanently unavailable until manual intervention
+- Operators must manually clear annotations or restart controller
+- Workloads cannot failover after node failures
+
+**Warning signs:**
+- `kubectl get volumeattachment` shows attachments to non-existent nodes
+- Pods stuck in ContainerCreating with "already attached" errors
+- Errors reference nodes that don't appear in `kubectl get nodes`
+
+**Prevention strategy:**
+
+```go
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    lock := cs.getVolumeLock(volumeID)
+    lock.Lock()
+    defer lock.Unlock()
+
+    cs.attachmentsLock.RLock()
+    existingNode, exists := cs.attachments[volumeID]
+    cs.attachmentsLock.RUnlock()
+
+    if exists && existingNode != nodeID {
+        // Before rejecting, verify the existing node still exists
+        _, err := cs.kubeClient.CoreV1().Nodes().Get(ctx, existingNode, metav1.GetOptions{})
+        if err != nil {
+            if errors.IsNotFound(err) {
+                klog.Warningf("Volume %s was attached to deleted node %s, allowing reattachment to %s",
+                    volumeID, existingNode, nodeID)
+                // Clear stale attachment
+                cs.attachmentsLock.Lock()
+                delete(cs.attachments, volumeID)
+                cs.attachmentsLock.Unlock()
+                // Fall through to allow new attachment
+            } else {
+                return nil, status.Errorf(codes.Internal, "failed to verify node existence: %v", err)
+            }
+        } else {
+            // Node exists - genuine conflict
+            return nil, status.Errorf(codes.FailedPrecondition,
+                "volume %s already attached to node %s", volumeID, existingNode)
+        }
+    }
+
+    // Continue with attachment...
+}
+
+// Also: background reconciliation loop
+func (cs *ControllerServer) reconcileStaleAttachments() {
+    ticker := time.NewTicker(5 * time.Minute)
+    for range ticker.C {
+        cs.attachmentsLock.RLock()
+        attachmentsCopy := make(map[string]string)
+        for k, v := range cs.attachments {
+            attachmentsCopy[k] = v
+        }
+        cs.attachmentsLock.RUnlock()
+
+        for volumeID, nodeID := range attachmentsCopy {
+            _, err := cs.kubeClient.CoreV1().Nodes().Get(context.Background(), nodeID, metav1.GetOptions{})
+            if errors.IsNotFound(err) {
+                klog.Warningf("Cleaning up stale attachment: %s -> %s (node deleted)", volumeID, nodeID)
+                cs.attachmentsLock.Lock()
+                delete(cs.attachments, volumeID)
+                cs.attachmentsLock.Unlock()
+                cs.clearPVAnnotation(volumeID)
             }
         }
     }
 }
 ```
 
-**Warning signs:**
-- Device path lookups fail after reconnection despite successful `nvme connect`
-- Error messages like "no device found for NQN" when device is visible in `nvme list`
-- `/dev/nvmeXn1` assumptions fail in logs
-- Device numbers change between connections
-
 **Phase to address:**
-Phase 1: Device discovery logic (foundation phase). Critical for basic reliability.
+Phase 2: Robustness. Can launch without this but must add before production use with node failures.
 
 **Sources:**
-- Fixed in commits 74ce4d9 and 10b237b: "fix(nvme): handle NVMe-oF namespace device naming correctly"
-- [NVMe device naming explanation](https://utcc.utoronto.ca/~cks/space/blog/linux/NVMeDeviceNames)
-- [Red Hat: NVMe controllers and namespace name inconsistency](https://access.redhat.com/solutions/6967589)
-- [Arch Linux forum: nvme0 suddenly becoming nvme1](https://forums.linuxmint.com/viewtopic.php?t=418402)
+- [Kubernetes Issue #67853](https://github.com/kubernetes/kubernetes/issues/67853) - VolumeAttachment not recreated after node deletion
+- [VMware CSI Issue #245](https://github.com/vmware-archive/cloud-director-named-disk-csi-driver/issues/245) - Multi-attach due to dangling attachments
+- [Dell CSI KB](https://www.dell.com/support/kbdoc/en-us/000200778/container-storage-interface-csi-drivers-family-when-a-node-goes-down-due-to-node-crash-node-down-power-off-scenario-pods-cannot-come-up-on-a-new-node-because-storage-volumes-cannot-be-attached) - Node down volume attachment issues
 
 ---
 
-### Pitfall 3: Non-Idempotent NodeStageVolume on Retries
+### Pitfall 4: ControllerUnpublishVolume Called Before NodeUnstageVolume Completes
 
 **What goes wrong:**
-When kubelet retries `NodeStageVolume()` after transient failures, non-idempotent implementations fail with errors like:
+During pod deletion or node drain:
 
-- "device already connected" from `nvme connect`
-- "already mounted" from mount operations
-- "target path is a mountpoint" from staging path checks
-
-CSI spec requires idempotency: calling `NodeStageVolume()` multiple times with same parameters must succeed. But naive implementations treat already-connected/already-mounted as errors, causing permanent pod failures.
+1. kubelet calls `NodeUnpublishVolume` (unmount from pod path)
+2. kubelet calls `NodeUnstageVolume` (unmount staging, NVMe disconnect)
+3. **Before step 2 completes**, external-attacher calls `ControllerUnpublishVolume`
+4. Controller clears attachment state
+5. New pod scheduled immediately on different node
+6. Controller allows new attachment (old attachment cleared)
+7. Two nodes now accessing same volume - one disconnecting, one connecting
 
 **Why it happens:**
-Three common anti-patterns:
+The external-attacher doesn't wait for `NodeUnstageVolume` to complete. It watches VolumeAttachment deletion and immediately calls `ControllerUnpublishVolume`. The CSI spec says drivers MUST handle this, but many don't.
 
-1. **Assuming fresh state** - not checking if device is already connected before calling `nvme connect`
-2. **Treating "already exists" as error** - returning errors for already-mounted filesystems
-3. **Path comparison bugs** - comparing `/dev/xvdcf` (symlink) vs `/dev/nvme1n1` (canonical), failing idempotency check
-
-In Kubernetes 1.20+, kubelet doesn't pre-check if the staging path is mounted, assuming CSI drivers handle idempotency correctly. Failures here leave pods stuck in ContainerCreating state with no automatic recovery.
-
-**How to avoid:**
-1. **Check existing state first** - before any operation, verify current state
-2. **Return success if already correct** - if volume is already staged with matching parameters, return OK
-3. **Use canonical paths for comparison** - resolve symlinks before comparing device paths
-4. **Handle mount errors gracefully** - distinguish "already mounted" from "mount failed"
-
-```go
-// Check if already staged
-mounted, err := ns.mounter.IsLikelyMountPoint(stagingPath)
-if err == nil && mounted {
-    // Verify device matches expected
-    existingDevice, err := ns.mounter.GetDeviceNameFromMount(stagingPath)
-    if err == nil {
-        // Resolve to canonical path
-        expectedDevice, _ := filepath.EvalSymlinks(devicePath)
-        currentDevice, _ := filepath.EvalSymlinks(existingDevice)
-
-        if expectedDevice == currentDevice {
-            klog.V(2).Infof("Volume %s already staged correctly", volumeID)
-            return &csi.NodeStageVolumeResponse{}, nil
-        }
-    }
-}
-
-// Check if device already connected
-connected, err := ns.nvmeConn.IsConnected(nqn)
-if err == nil && connected {
-    // Verify device is accessible
-    devicePath, err := ns.nvmeConn.GetDevicePath(nqn)
-    if err == nil {
-        // Already connected, continue to mount
-        goto mountStep
-    }
-}
-```
+**Consequences:**
+- Brief window where two nodes access volume
+- Less severe than Pitfall 2 (one node is disconnecting), but still dangerous for certain workloads
+- KubeVirt live migration particularly vulnerable
 
 **Warning signs:**
-- Pods stuck in ContainerCreating after kubelet restart
-- "volume already staged" errors in logs
-- Intermittent "device already connected" failures
-- Different device paths in error messages (`/dev/xvdcf` vs `/dev/nvme1n1`)
+- Logs show ControllerUnpublishVolume before NodeUnstageVolume
+- Occasional filesystem corruption during rapid pod rescheduling
+- Works in testing (slow operations) but fails in production (fast operations)
 
-**Phase to address:**
-Phase 1: Core CSI operations (foundation). Non-negotiable for production use.
-
-**Sources:**
-- [AWS EBS CSI: NodeStage might not always be idempotent](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/issues/1076)
-- [AWS EBS CSI: Fix NodeStageVolume returning prematurely](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/176)
-- [IBM PowerVS: NodeStageVolume is called again even after successful response](https://github.com/kubernetes-sigs/ibm-powervs-block-csi-driver/issues/55)
-- [Kubernetes: CSI SetUpAt does not retry when check fails](https://github.com/kubernetes/kubernetes/issues/112969)
-
----
-
-### Pitfall 4: Aggressive Reconnection Without Backoff
-
-**What goes wrong:**
-When NVMe target becomes unreachable (network partition, target reboot, maintenance), naive implementations retry `nvme connect` in tight loops:
-
-- Flood logs with connection failures (thousands of attempts per minute)
-- Exhaust kernel resources creating/destroying controllers
-- Block CSI RPC threads waiting for timeouts
-- Prevent legitimate operations from succeeding
-- Create "thundering herd" if many pods retry simultaneously
-
-Worse: after target recovers, synchronized retries from all nodes can overwhelm the target, causing cascading failures.
-
-**Why it happens:**
-Without explicit backoff logic, each pod's `NodeStageVolume()` call blocks waiting for connection timeout (e.g., 30s), then kubelet immediately retries, creating a constant retry loop. Multiple pods on the same node create parallel retry streams. The kernel's built-in `ctrl_loss_tmo` (default 600s/10 minutes) doesn't help because CSI operations timeout before that.
-
-**How to avoid:**
-1. **Implement exponential backoff** in Connect operations
-2. **Use context timeouts** to prevent indefinite hangs
-3. **Coordinate retries** - use a backoff tracker keyed by NQN to prevent parallel retries to same target
-4. **Respect kernel-level ctrl_loss_tmo** for network partition scenarios
-5. **Return retriable errors** to kubelet with appropriate status codes
+**Prevention strategy:**
 
 ```go
-type reconnectTracker struct {
-    mu            sync.Mutex
-    attempts      map[string]int       // NQN -> attempt count
-    lastAttempt   map[string]time.Time // NQN -> last attempt time
+// Option A: Grace period before allowing re-attachment
+const reattachmentGracePeriod = 30 * time.Second
+
+type attachmentInfo struct {
+    NodeID       string
+    UnpublishAt  time.Time // When ControllerUnpublishVolume was called
 }
 
-func (c *connector) ConnectWithBackoff(ctx context.Context, target Target) (string, error) {
-    c.backoff.mu.Lock()
-    attempts := c.backoff.attempts[target.NQN]
-    lastAttempt := c.backoff.lastAttempt[target.NQN]
-    c.backoff.mu.Unlock()
+func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
 
-    // Exponential backoff: 1s, 2s, 4s, 8s, max 60s
-    backoffDelay := time.Duration(1<<min(attempts, 6)) * time.Second
-    if time.Since(lastAttempt) < backoffDelay {
-        return "", status.Errorf(codes.Unavailable,
-            "target %s in backoff for %v", target.NQN, backoffDelay)
+    lock := cs.getVolumeLock(volumeID)
+    lock.Lock()
+    defer lock.Unlock()
+
+    // Don't immediately clear - mark as "unpublishing" with timestamp
+    cs.attachmentsLock.Lock()
+    cs.attachments[volumeID] = attachmentInfo{
+        NodeID:      req.GetNodeId(),
+        UnpublishAt: time.Now(),
     }
+    cs.attachmentsLock.Unlock()
 
-    c.backoff.mu.Lock()
-    c.backoff.attempts[target.NQN] = attempts + 1
-    c.backoff.lastAttempt[target.NQN] = time.Now()
-    c.backoff.mu.Unlock()
+    // Background cleanup after grace period
+    go func() {
+        time.Sleep(reattachmentGracePeriod)
+        lock := cs.getVolumeLock(volumeID)
+        lock.Lock()
+        defer lock.Unlock()
 
-    // Attempt connection
-    devicePath, err := c.connectInternal(ctx, target)
-    if err == nil {
-        // Success - reset backoff
-        c.backoff.mu.Lock()
-        delete(c.backoff.attempts, target.NQN)
-        delete(c.backoff.lastAttempt, target.NQN)
-        c.backoff.mu.Unlock()
-    }
-    return devicePath, err
-}
-```
-
-**Warning signs:**
-- Hundreds of "nvme connect failed" messages per minute in logs
-- High CPU usage from nvme-cli processes
-- Kernel messages about resource exhaustion
-- Other CSI operations timing out
-- Spikes in API server load from pod status updates
-
-**Phase to address:**
-Phase 2: Reliability improvements. Can defer to post-MVP if operational monitoring shows it's not critical, but recommended for Phase 1 if production workloads expected.
-
-**Sources:**
-- Pattern observed in [simplyblock-csi](https://github.com/simplyblock/simplyblock-csi) - uses SPDK with backoff
-- [Red Hat: NVMe-oF ctrl_loss_tmo configuration](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_storage_devices/configuring-nvme-over-fabrics-using-nvme-tcp_managing-storage-devices)
-- [Dell: PowerStore NVMe disconnects on path loss](https://www.dell.com/support/kbdoc/en-in/000272457/powerstore-nvme-over-tcp-volumes-connect-on-redhat-servers-when-one-or-more-paths-are-lost)
-
----
-
-### Pitfall 5: Stale Mounts After Unclean Disconnection
-
-**What goes wrong:**
-When NVMe connection drops unexpectedly (network failure, target crash, hard node reboot), the mounted filesystem in `/var/lib/kubelet/pods/*/volumes/kubernetes.io~csi/*/mount` becomes stale:
-
-- Filesystem operations hang with "Transport endpoint is not connected"
-- `umount` hangs indefinitely
-- Pod deletion gets stuck waiting for volume cleanup
-- New pods can't use the volume because old mount still exists
-- Manual intervention required to clean up
-
-Even worse: if kubelet restarts before cleanup, it may lose track of the mount entirely, creating a permanent leak.
-
-**Why it happens:**
-When NVMe device disappears without proper unmount (kernel's `ctrl_loss_tmo` expires, device removed from `/dev/`), the filesystem layer still has references to the mount. The VFS layer marks the mount as "dead" but doesn't automatically clean it up. Subsequent unmount attempts block waiting for I/O that will never complete.
-
-**How to avoid:**
-1. **Use lazy unmount for cleanup** - `umount -l` for stale mounts
-2. **Check mount health before operations** - test device accessibility
-3. **Implement force-unmount path** in NodeUnstageVolume
-4. **Handle ENOTCONN gracefully** during unmount
-5. **Clean up orphaned mounts on startup** - scan for stale CSI mounts at node plugin initialization
-
-```go
-func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-    // Check if mount is stale
-    devicePath, err := ns.mounter.GetDeviceNameFromMount(stagingPath)
-    if err == nil {
-        // Device found - check if accessible
-        if _, err := os.Stat(devicePath); os.IsNotExist(err) {
-            klog.Warningf("Mount at %s references non-existent device %s, using force unmount",
-                stagingPath, devicePath)
-            // Force unmount
-            if err := ns.mounter.UnmountWithForce(stagingPath); err != nil {
-                // Fallback to lazy unmount
-                return nil, ns.mounter.LazyUnmount(stagingPath)
+        cs.attachmentsLock.Lock()
+        if info, ok := cs.attachments[volumeID].(attachmentInfo); ok {
+            if time.Since(info.UnpublishAt) >= reattachmentGracePeriod {
+                delete(cs.attachments, volumeID)
             }
         }
-    }
+        cs.attachmentsLock.Unlock()
+    }()
 
-    // Normal unmount path
-    return ns.mounter.Unmount(stagingPath)
+    return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
-// On node plugin startup
-func (ns *NodeServer) CleanupOrphanedMounts() error {
-    // Scan /var/lib/kubelet/plugins/kubernetes.io/csi/*/globalmount
-    staleMounts := ns.mounter.FindStaleMounts(ns.driver.name)
-    for _, mount := range staleMounts {
-        klog.Warningf("Found orphaned mount: %s, attempting cleanup", mount)
-        _ = ns.mounter.LazyUnmount(mount)
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    lock := cs.getVolumeLock(volumeID)
+    lock.Lock()
+    defer lock.Unlock()
+
+    cs.attachmentsLock.RLock()
+    existing := cs.attachments[volumeID]
+    cs.attachmentsLock.RUnlock()
+
+    switch v := existing.(type) {
+    case string:
+        // Attached to a node
+        if v == nodeID {
+            return &csi.ControllerPublishVolumeResponse{}, nil // Idempotent
+        }
+        return nil, status.Errorf(codes.FailedPrecondition, "volume attached to %s", v)
+
+    case attachmentInfo:
+        // In grace period
+        if v.NodeID == nodeID {
+            // Re-attaching to same node - likely kubelet retry, allow it
+            return &csi.ControllerPublishVolumeResponse{}, nil
+        }
+        // Different node - enforce grace period
+        remaining := reattachmentGracePeriod - time.Since(v.UnpublishAt)
+        if remaining > 0 {
+            return nil, status.Errorf(codes.Unavailable,
+                "volume %s in detachment grace period, retry in %v", volumeID, remaining)
+        }
+        // Grace period expired, allow new attachment
     }
+
+    // Continue with attachment...
 }
 ```
 
-**Warning signs:**
-- Pods stuck in Terminating state
-- "Transport endpoint is not connected" errors in kubelet logs
-- `umount` processes in `D` state (uninterruptible sleep)
-- Mount table shows CSI mounts with no corresponding pod
-- Node plugin logs show successful staging but GetDevicePath fails later
-
 **Phase to address:**
-Phase 2: Error recovery. Should be addressed before declaring production-ready.
+Phase 2: KubeVirt support. Critical for live migration scenarios.
 
 **Sources:**
-- [JuiceFS CSI: Transport endpoint not connected](https://juicefs.com/docs/csi/troubleshooting-cases/)
-- [Ceph CSI: NodeStageVolume fails if xfs_repair returns error after reboot](https://github.com/ceph/ceph-csi/issues/859)
-- [Azure Files CSI: Stacked NodeStageVolume mounts prevents unmounting](https://github.com/kubernetes-sigs/azurefile-csi-driver/issues/1137)
-- [Red Hat Bugzilla: Stale mount/stage in different node](https://bugzilla.redhat.com/show_bug.cgi?id=1745776)
+- [CSI Spec](https://github.com/container-storage-interface/spec/blob/master/spec.md) - "This RPC MUST be called after all NodeUnstageVolume and NodeUnpublishVolume"
+- [Longhorn Volume Live Migration](https://github.com/longhorn/longhorn/blob/master/enhancements/20210216-volume-live-migration.md) - Detailed attach/detach flow for migration
+
+---
+
+### Pitfall 5: Incorrect FAILED_PRECONDITION vs ABORTED Error Codes
+
+**What goes wrong:**
+CSI spec requires specific error codes for specific conditions:
+
+- `FAILED_PRECONDITION` (9): Volume attached to different node with incompatible access mode
+- `ABORTED` (10): Operation already in progress for this volume
+- `ALREADY_EXISTS` (6): Volume already attached to same node with same capabilities (should return success, not error)
+
+Wrong error codes cause wrong CO behavior:
+- Returning `ABORTED` when it should be `FAILED_PRECONDITION` causes infinite retries
+- Returning error when it should be success causes stuck pods
+
+**Why it happens:**
+Developers don't read CSI spec carefully. "Already attached" seems like an error, so they return an error.
+
+**Consequences:**
+- Pods stuck in retry loops
+- Unnecessary load on controller
+- Confusing error messages for operators
+
+**Warning signs:**
+- Logs show constant retries for the same volume
+- `ControllerPublishVolume` errors for idempotent calls
+- external-attacher logs show unexpected error handling
+
+**Prevention strategy:**
+
+```go
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    cs.attachmentsLock.RLock()
+    existingNode, exists := cs.attachments[volumeID]
+    cs.attachmentsLock.RUnlock()
+
+    if exists {
+        if existingNode == nodeID {
+            // CSI Spec: "If this RPC failed, or the CO does not know if it failed,
+            // it MAY call this RPC again. The Plugin SHOULD ensure that when this
+            // call is repeated, the result remains the same."
+            // This is IDEMPOTENT - return SUCCESS, not error
+            klog.V(4).Infof("Volume %s already published to node %s (idempotent)", volumeID, nodeID)
+            return &csi.ControllerPublishVolumeResponse{
+                PublishContext: map[string]string{
+                    "attachedNode": nodeID,
+                },
+            }, nil
+        }
+
+        // CSI Spec: "Indicates that a volume corresponding to the specified
+        // volume_id has already been published at the node corresponding to
+        // the specified node_id but is incompatible with the specified
+        // volume_capability or readonly flag."
+        // Use FAILED_PRECONDITION for RWO volume on different node
+        return nil, status.Errorf(codes.FailedPrecondition,
+            "volume %s is already exclusively attached to node %s, cannot attach to %s (ReadWriteOnce access mode)",
+            volumeID, existingNode, nodeID)
+    }
+
+    // Check if operation already in progress
+    if cs.isOperationInProgress(volumeID) {
+        // Use ABORTED for concurrent operation
+        return nil, status.Errorf(codes.Aborted,
+            "operation already in progress for volume %s", volumeID)
+    }
+
+    // Continue with attachment...
+}
+```
+
+**Phase to address:**
+Phase 1: Core implementation. Get it right from the start.
+
+**Sources:**
+- [CSI Spec v1.7.0](https://github.com/container-storage-interface/spec/blob/v1.7.0/spec.md) - Complete error code requirements
+- [Kadalu CSI Sanity Failures](https://github.com/kadalu/kadalu/issues/494) - Spec conformance issues
 
 ---
 
 ## Moderate Pitfalls
 
-### Pitfall 6: Race Condition in Device Discovery
+### Pitfall 6: PV Annotation Update Conflicts
 
 **What goes wrong:**
-After successful `nvme connect`, the device may not appear immediately in `/dev/` or `/sys/class/nvme/`. Polling too quickly causes false negatives. Polling without timeout causes hangs. The race window varies based on system load and udev processing time.
+When using PV annotations for persistence, concurrent updates can conflict:
 
-**How to avoid:**
-Implement polling with exponential backoff and hard timeout. Wait for both sysfs entry AND `/dev/` node to exist. Give udev time to set permissions.
+1. Controller A reads PV (resourceVersion: 100)
+2. Controller B reads PV (resourceVersion: 100)
+3. Controller A updates annotation, write succeeds (resourceVersion: 101)
+4. Controller B updates annotation, write fails with "conflict"
+5. Controller B doesn't retry, attachment state inconsistent
+
+**Why it happens:**
+Kubernetes uses optimistic concurrency. If you read a resource, modify it, and write it back, another writer may have updated it in between. Your write fails with StatusConflict (409).
+
+**Prevention strategy:**
 
 ```go
-func (c *connector) WaitForDevice(nqn string, timeout time.Duration) (string, error) {
-    deadline := time.Now().Add(timeout)
-    backoff := 100 * time.Millisecond
-
-    for time.Now().Before(deadline) {
-        devicePath, err := c.GetDevicePath(nqn)
-        if err == nil {
-            // Found in sysfs - now wait for /dev/ node
-            for i := 0; i < 10; i++ {
-                if _, err := os.Stat(devicePath); err == nil {
-                    return devicePath, nil
-                }
-                time.Sleep(100 * time.Millisecond)
-            }
+func (cs *ControllerServer) persistAttachment(volumeID, nodeID string) error {
+    return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+        pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+        if err != nil {
+            return err
         }
 
-        time.Sleep(backoff)
-        backoff = min(backoff*2, 5*time.Second)
-    }
+        if pv.Annotations == nil {
+            pv.Annotations = make(map[string]string)
+        }
+        pv.Annotations["rds.csi.srvlab.io/attached-to"] = nodeID
 
-    return "", fmt.Errorf("timeout waiting for device with NQN %s", nqn)
+        _, err = cs.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+        return err // If conflict, retry.RetryOnConflict will retry
+    })
 }
 ```
 
 **Phase to address:**
-Phase 1: Core device handling (foundation).
+Phase 1: Core implementation.
 
 **Sources:**
-- Observed in rds-csi commit history
-- [AWS EBS CSI: Race condition/timeout issues when mounting PV](https://github.com/kubernetes/kubernetes/issues/76568)
+- [Kubernetes Operators Best Practices](https://alenkacz.medium.com/kubernetes-operators-best-practices-understanding-conflict-errors-d05353dff421) - Conflict handling
 
 ---
 
-### Pitfall 7: Ignoring nvme-cli Exit Codes
+### Pitfall 7: Missing Publish Context in Response
 
 **What goes wrong:**
-`nvme connect` can return exit code 0 but still fail. Output parsing required to detect partial failures. Some errors appear only in stderr, not exit codes.
+`ControllerPublishVolume` should return `PublishContext` map that is passed to `NodeStageVolume`. If empty or missing:
 
-**How to avoid:**
-Always parse command output, not just exit code. Check for specific error strings:
-- "already connected" - idempotency case, not an error
-- "failed to write to /dev/nvme-fabrics" - real error
-- "Invalid argument" - config problem, not transient
+1. NodeStageVolume doesn't receive controller-provided metadata
+2. Node service must duplicate discovery logic
+3. State desync between controller and node
+
+**Prevention strategy:**
 
 ```go
-output, err := cmd.CombinedOutput()
-if err != nil {
-    // Check for known non-fatal errors
-    if strings.Contains(string(output), "already connected") {
-        klog.V(2).Infof("Target already connected (idempotent)")
-        return c.GetDevicePath(nqn)
-    }
-    return "", fmt.Errorf("nvme connect failed: %w, output: %s", err, string(output))
+func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+    // ... attachment logic ...
+
+    return &csi.ControllerPublishVolumeResponse{
+        PublishContext: map[string]string{
+            // Pass through to NodeStageVolume
+            "nvmeAddress":  cs.config.NVMeAddress,
+            "nvmePort":     cs.config.NVMePort,
+            "attachedNode": nodeID,
+            "attachedAt":   time.Now().Format(time.RFC3339),
+        },
+    }, nil
 }
 ```
 
 **Phase to address:**
-Phase 1: Error handling (foundation).
-
-**Sources:**
-- [nvme connect-all reports "already connected"](https://github.com/linux-nvme/nvme-cli/issues/1505)
-- [nvme disconnect doesn't remove all controllers](https://github.com/linux-nvme/nvme-cli/issues/499)
+Phase 1: Core implementation.
 
 ---
 
-### Pitfall 8: Manual Cleanup Required for Orphaned Controllers
+### Pitfall 8: Kubelet 6-Minute Force Detach Timeout
 
 **What goes wrong:**
-During stress testing or rapid connect/disconnect cycles, partial connections occur. The kernel creates `/dev/nvmeX` but not `/sys/class/nvme-subsystem/nvme-subsysX/nvmeX`. `nvme disconnect` fails with "failed to lookup subsystem for controller". Only manual cleanup via `echo 1 > /sys/class/nvme/nvmeX/delete_controller` works.
+Kubernetes has hardcoded 6-minute `maxWaitForUnmountDuration`. After this:
 
-**How to avoid:**
-Implement fallback cleanup in DisconnectWithContext:
+1. AttachDetach controller force-detaches volume even if still mounted
+2. VolumeAttachment marked as detached
+3. New pod can attach to volume
+4. Old node still has I/O in flight
+
+**Why it happens:**
+This is Kubernetes behavior, not CSI driver behavior. The driver must handle it gracefully.
+
+**Prevention strategy:**
 
 ```go
-func (c *connector) DisconnectWithContext(ctx context.Context, nqn string) error {
-    // Try normal disconnect
-    cmd := exec.CommandContext(ctx, "nvme", "disconnect", "-n", nqn)
-    output, err := cmd.CombinedOutput()
+// In node service - ensure unmount completes quickly
+func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+    // Use shorter timeouts to avoid hitting 6-minute limit
+    unmountCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+    defer cancel()
 
-    if err != nil && strings.Contains(string(output), "failed to lookup subsystem") {
-        // Fallback: manual controller deletion
-        klog.Warningf("Subsystem lookup failed, attempting manual cleanup for NQN %s", nqn)
-        return c.manualDeleteController(nqn)
-    }
-    return err
-}
-
-func (c *connector) manualDeleteController(nqn string) error {
-    controllers, _ := filepath.Glob("/sys/class/nvme/nvme*")
-    for _, controller := range controllers {
-        nqnPath := filepath.Join(controller, "subsysnqn")
-        data, _ := os.ReadFile(nqnPath)
-        if strings.TrimSpace(string(data)) == nqn {
-            deletePath := filepath.Join(controller, "delete_controller")
-            return os.WriteFile(deletePath, []byte("1"), 0644)
+    if err := ns.mounter.UnmountWithContext(unmountCtx, stagingPath); err != nil {
+        // Try lazy unmount as fallback
+        klog.Warningf("Normal unmount failed, trying lazy unmount: %v", err)
+        if err := ns.mounter.LazyUnmount(stagingPath); err != nil {
+            return nil, status.Errorf(codes.Internal, "unmount failed: %v", err)
         }
     }
-    return fmt.Errorf("controller not found for NQN %s", nqn)
+
+    // Ensure NVMe disconnect completes before returning
+    if err := ns.nvmeConn.DisconnectWithContext(unmountCtx, nqn); err != nil {
+        klog.Warningf("NVMe disconnect failed (may be force-detached): %v", err)
+        // Don't fail - volume may already be detached by force
+    }
+
+    return &csi.NodeUnstageVolumeResponse{}, nil
 }
 ```
 
 **Phase to address:**
-Phase 2: Robustness improvements.
+Phase 2: Robustness. Important for production reliability.
 
 **Sources:**
-- [libnvme: Allow disconnect of incomplete connections](https://github.com/linux-nvme/libnvme/issues/431)
-- [nvme-cli: Unable to disconnect from NVMeoF subsystem](https://github.com/linux-nvme/nvme-cli/issues/2603)
+- [Longhorn Issue #3584](https://github.com/longhorn/longhorn/issues/3584) - Configurable detach timeout
+- [Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/5562994/failedattachvolume-kubernetes-pods-not-reattaching) - Force detach behavior
+
+---
+
+### Pitfall 9: VolumeAttachment Finalizer Stuck
+
+**What goes wrong:**
+VolumeAttachment has finalizer `external-attacher/rds.csi.srvlab.io`. If ControllerUnpublishVolume fails repeatedly:
+
+1. VolumeAttachment stuck in Terminating
+2. PV stuck in Terminating (has finalizer referencing VolumeAttachment)
+3. PVC stuck in Terminating
+4. Namespace stuck in Terminating (if PVC has finalizer)
+5. Manual intervention required
+
+**Prevention strategy:**
+
+```go
+func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+    volumeID := req.GetVolumeId()
+    nodeID := req.GetNodeId()
+
+    // ALWAYS return success if volume not attached
+    // This allows finalizer removal even if state is inconsistent
+    cs.attachmentsLock.RLock()
+    existingNode, exists := cs.attachments[volumeID]
+    cs.attachmentsLock.RUnlock()
+
+    if !exists {
+        klog.V(4).Infof("Volume %s not in attachment state, returning success (idempotent)", volumeID)
+        return &csi.ControllerUnpublishVolumeResponse{}, nil
+    }
+
+    if existingNode != nodeID && nodeID != "" {
+        // Volume attached to different node - still return success
+        // The nodeID might be stale, and we need to allow cleanup
+        klog.Warningf("Unpublish request for volume %s from node %s, but attached to %s. Allowing unpublish.",
+            volumeID, nodeID, existingNode)
+    }
+
+    // Clear state
+    cs.attachmentsLock.Lock()
+    delete(cs.attachments, volumeID)
+    cs.attachmentsLock.Unlock()
+
+    // Clear PV annotation (best effort - don't fail on this)
+    if err := cs.clearPVAnnotation(volumeID); err != nil {
+        klog.Warningf("Failed to clear PV annotation for %s: %v (continuing)", volumeID, err)
+    }
+
+    return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+```
+
+**Phase to address:**
+Phase 1: Core implementation. Must be idempotent from the start.
+
+**Sources:**
+- [External-Attacher Issue #66](https://github.com/kubernetes-csi/external-attacher/issues/66) - Failing to delete PV after attach failure
+- [External-Attacher csi_handler.go](https://github.com/kubernetes-csi/external-attacher/blob/master/pkg/controller/csi_handler.go) - Finalizer handling
 
 ---
 
 ## Minor Pitfalls
 
-### Pitfall 9: Noisy Logging Hides Real Errors
+### Pitfall 10: No NVMe-Level Fencing (Storage-Level SCSI-3 PR Equivalent)
 
 **What goes wrong:**
-Logging every retry, every "already connected", every device poll creates log spam. Real errors get buried. Operators waste time investigating non-issues.
+Controller-level fencing (tracking which node has volume) is "soft fencing". It relies on the CSI driver being the only path to the storage. If:
 
-**How to avoid:**
-- Use appropriate log levels (V(2) for normal ops, V(4) for debug)
-- Suppress "already connected" messages at info level
-- Log only first and last retry in a sequence
-- Use structured logging with consistent fields (volumeID, NQN, operation)
+1. Direct NVMe connection made outside CSI (debugging, manual recovery)
+2. Controller state corrupted
+3. Split-brain scenario
 
-**Phase to address:**
-Phase 3: Operational polish (post-MVP).
+Then storage-level protection is bypassed.
 
----
+**Current state:**
+MikroTik RDS NVMe/TCP does not support NVMe Reservations (equivalent to SCSI-3 Persistent Reservations). AWS EBS added NVMe Reservations support in 2023, but this is not available on RDS.
 
-### Pitfall 10: No Metrics for Reconnection Events
-
-**What goes wrong:**
-Without metrics, operators can't distinguish healthy systems from those constantly reconnecting. Silent failures go unnoticed.
-
-**How to avoid:**
-Export Prometheus metrics:
-- `nvme_connect_total{status="success|error"}`
-- `nvme_connect_duration_seconds{quantile}`
-- `nvme_disconnect_total{status="success|error"}`
-- `nvme_orphaned_subsystems_total`
-- `nvme_device_discovery_failures_total`
+**Mitigation:**
+Document this limitation. For mission-critical workloads, consider using SCSI-based storage with fence_scsi support.
 
 **Phase to address:**
-Phase 3: Observability (post-MVP).
-
----
-
-## Testing Strategies for Reconnection Scenarios
-
-Testing NVMe-oF reconnection is notoriously difficult because it requires simulating real network and target failures. Here's how to test each pitfall:
-
-### Test 1: Orphaned Subsystem Injection
-
-**What it tests:** Pitfall 1 (orphaned subsystems)
-
-**Method:**
-1. Connect to NVMe target normally
-2. Manually disconnect controller via sysfs: `echo 1 > /sys/class/nvme/nvmeX/delete_controller`
-3. Don't run `nvme disconnect` - leave subsystem entry intact
-4. Trigger `NodeStageVolume()` - should detect orphan and reconnect
-
-**Expected behavior:**
-- Driver detects orphaned subsystem
-- Logs "appears connected but no device found, attempting reconnect"
-- Successfully reconnects and stages volume
-
-**Failure mode:**
-- Returns "no device found for NQN" error
-- Does not attempt cleanup
-
----
-
-### Test 2: Controller Number Instability
-
-**What it tests:** Pitfall 2 (controller renumbering)
-
-**Method:**
-1. Connect multiple NVMe targets (minimum 3) to force higher controller numbers
-2. Disconnect middle controller
-3. Reconnect - observe new controller number
-4. Verify device discovery still works
-
-**Expected behavior:**
-- Device path found regardless of controller number changes
-- Both `nvme2c1n2` and `nvme2n2` naming handled correctly
-
-**Failure mode:**
-- "no device found" after reconnection
-- Assumes device path based on old controller number
-
----
-
-### Test 3: Rapid Retry Loop
-
-**What it tests:** Pitfall 4 (aggressive reconnection)
-
-**Method:**
-1. Block NVMe target IP via iptables: `iptables -A OUTPUT -d <target-ip> -j DROP`
-2. Create PVC/Pod - trigger NodeStageVolume
-3. Monitor retry rate and log volume
-4. Restore network after 2 minutes
-5. Verify eventual success with reasonable backoff
-
-**Expected behavior:**
-- Retry rate decreases over time (exponential backoff)
-- System remains responsive during retries
-- Successful connection after network restore
-
-**Failure mode:**
-- Constant retry loop at 1/second or faster
-- High CPU usage
-- System instability
-
----
-
-### Test 4: Stale Mount Cleanup
-
-**What it tests:** Pitfall 5 (stale mounts)
-
-**Method:**
-1. Stage volume normally
-2. Expire kernel controller with `echo 0 > /sys/class/nvme/nvmeX/ctrl_loss_tmo`
-3. Wait for device removal
-4. Trigger `NodeUnstageVolume()` - should handle stale mount
-
-**Expected behavior:**
-- Detects stale mount
-- Uses lazy unmount or force unmount
-- Returns success
-
-**Failure mode:**
-- Hangs indefinitely on unmount
-- Returns error requiring manual cleanup
-
----
-
-### Test 5: Idempotency Verification
-
-**What it tests:** Pitfall 3 (non-idempotent operations)
-
-**Method:**
-1. Call `NodeStageVolume()` successfully
-2. Immediately call `NodeStageVolume()` again with same parameters
-3. Repeat 5 times
-4. Verify all return success (no "already connected" errors)
-
-**Expected behavior:**
-- All calls return success
-- No "already mounted" errors
-- No device conflicts
-
-**Failure mode:**
-- Second call returns error
-- Inconsistent behavior across calls
-
----
-
-### Test 6: Linux Kernel Fault Injection
-
-**What it tests:** Multiple pitfalls under system stress
-
-**Method:**
-Linux kernel provides NVMe fault injection via debugfs:
-
-```bash
-# Enable fault injection for NVMe admin commands
-echo 100 > /sys/kernel/debug/nvme0/fault_inject/probability
-echo 1 > /sys/kernel/debug/nvme0/fault_inject/times
-
-# Trigger controller reset
-echo 1 > /sys/class/nvme/nvme0/reset_controller
-
-# Observe CSI driver behavior during reinitialization
-```
-
-**Expected behavior:**
-- Driver handles transient failures gracefully
-- Eventually succeeds after faults clear
-- No permanent state corruption
+Document in Phase 1. Hardware limitation, not software.
 
 **Sources:**
-- [Linux Kernel: NVMe Fault Injection](https://docs.kernel.org/fault-injection/nvme-fault-injection.html)
-- [Testing tools from Quarch Technology](https://quarch.com/solutions/hot-swap-and-fault-injection/)
+- [AWS EBS NVMe Reservations](https://www.infoq.com/news/2023/10/aws-ebs-fencing-nvme/) - Storage-level fencing with NVMe
+- [Red Hat fence_scsi](https://access.redhat.com/articles/530533) - SCSI PR fencing
 
 ---
 
-## Pitfall-to-Phase Mapping
+### Pitfall 11: Not Handling Volume Not Found in Unpublish
 
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| 1. Orphaned subsystems | Phase 1: Foundation | Test 1: Orphaned subsystem injection |
-| 2. Controller renumbering | Phase 1: Foundation | Test 2: Controller number instability |
-| 3. Non-idempotent staging | Phase 1: Foundation | Test 5: Idempotency verification |
-| 4. Aggressive reconnection | Phase 2: Reliability | Test 3: Rapid retry loop + monitoring |
-| 5. Stale mounts | Phase 2: Error recovery | Test 4: Stale mount cleanup |
-| 6. Device discovery races | Phase 1: Foundation | CSI sanity tests + Test 6: Kernel fault injection |
-| 7. nvme-cli exit codes | Phase 1: Foundation | Unit tests with mock command outputs |
-| 8. Manual cleanup needed | Phase 2: Robustness | Stress testing with rapid connect/disconnect |
-| 9. Noisy logging | Phase 3: Polish | Log volume analysis in production |
-| 10. No metrics | Phase 3: Observability | Prometheus metric validation |
+**What goes wrong:**
+`ControllerUnpublishVolume` called for volume that was never created or already deleted:
 
----
-
-## Recovery Strategies
-
-When pitfalls occur despite prevention:
-
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| Orphaned subsystem | LOW | Automatic reconnection in driver (implemented in bc90a9b) |
-| Controller renumbering | LOW | Scan by NQN, not by device number (implemented in 74ce4d9) |
-| Non-idempotent staging | MEDIUM | Kubelet retry eventually succeeds if idempotency fixed |
-| Aggressive reconnection | HIGH | Requires node restart or manual kill of stuck processes |
-| Stale mounts | MEDIUM | Manual `umount -l` or node reboot |
-| Device discovery race | LOW | Automatic retry with backoff |
-| nvme-cli exit codes | LOW | Automatic fallback to alternate cleanup methods |
-| Manual cleanup needed | MEDIUM | Operator intervention via sysfs |
-| Noisy logging | LOW | Filter logs, no system impact |
-| No metrics | N/A | Operational blind spot, no recovery needed |
-
----
-
-## "Looks Done But Isn't" Checklist
-
-Things that appear complete but are missing critical pieces:
-
-- [ ] **Connection handling:** Often missing orphaned subsystem detection - verify `IsConnected() == true` followed by `GetDevicePath()` check
-- [ ] **Device discovery:** Often missing NVMe-oF naming support - verify both `nvmeXnY` and `nvmeXcYnZ` paths handled
-- [ ] **NodeStageVolume:** Often missing idempotency checks - verify second call with same params returns success
-- [ ] **Error handling:** Often missing nvme-cli output parsing - verify not just exit code but output content checked
-- [ ] **Cleanup:** Often missing orphaned mount detection - verify node plugin startup scans for stale mounts
-- [ ] **Backoff:** Often missing exponential backoff - verify connection attempts don't retry immediately in tight loop
-- [ ] **Testing:** Often missing reconnection scenarios - verify at least Tests 1-5 above are automated
-
----
-
-## Architectural Recommendations
-
-Based on pitfalls analysis, recommended architecture patterns:
-
-### 1. Separate Connection State Machine
-Don't mix connection logic with mount logic. Use state machine:
-
-```
-DISCONNECTED -> CONNECTING -> CONNECTED -> STAGED -> PUBLISHED
-                    |            |            |
-                    v            v            v
-                 FAILED       ORPHANED      STALE
+```go
+// Bad
+func (cs *ControllerServer) ControllerUnpublishVolume(...) {
+    pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, ...)
+    if err != nil {
+        return nil, status.Errorf(codes.Internal, "failed to get PV: %v", err)
+    }
+}
 ```
 
-### 2. NQN-Based Resource Tracking
-Never use device numbers as identifiers. Always use NQN as primary key for:
-- Connection tracking
-- Backoff state
-- Metrics labels
-- Cleanup operations
+This causes VolumeAttachment stuck in Terminating.
 
-### 3. Health Check Loop
-Run background goroutine to detect:
-- Orphaned subsystems (subsystem exists, no device)
-- Stale mounts (mount exists, device gone)
-- Stuck operations (operation exceeds 2x timeout)
+**Prevention strategy:**
 
-### 4. Graceful Degradation
-When target unreachable:
-1. Don't fail immediately
-2. Return `codes.Unavailable` to kubelet
-3. Let kubelet's backoff handle retry timing
-4. Eventually fail after reasonable timeout (5-10 minutes)
+```go
+// Good - return success if PV doesn't exist
+func (cs *ControllerServer) ControllerUnpublishVolume(...) {
+    pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, ...)
+    if err != nil {
+        if errors.IsNotFound(err) {
+            // Volume doesn't exist, nothing to unpublish
+            return &csi.ControllerUnpublishVolumeResponse{}, nil
+        }
+        return nil, status.Errorf(codes.Internal, "failed to get PV: %v", err)
+    }
+}
+```
+
+**Phase to address:**
+Phase 1: Core implementation.
+
+---
+
+## KubeVirt-Specific Pitfalls
+
+### Pitfall 12: Live Migration Volume Handoff
+
+**What goes wrong:**
+KubeVirt live migration requires both source and target nodes to access volume simultaneously during memory copy phase. RWO access mode blocks this.
+
+**Why it happens:**
+Live migration is a multi-step process:
+1. Target VM starts on new node
+2. Memory copied from source to target (both VMs running)
+3. Final cutover (source stops, target becomes primary)
+
+During step 2, both nodes need volume access.
+
+**Current limitation:**
+RDS-CSI with RWO volumes does not support live migration. Use RWX volumes or storage migration instead.
+
+**Mitigation:**
+- Document limitation clearly
+- Consider implementing RWX support for live migration use cases
+- Use [volume migration](https://kubevirt.io/user-guide/storage/volume_migration/) instead of live migration
+
+**Phase to address:**
+Future enhancement (post-v0.3.0). Document limitation in v0.3.0.
+
+**Sources:**
+- [KubeVirt Live Migration](https://kubevirt.io/user-guide/compute/live_migration/) - Requires RWX
+- [Longhorn Volume Live Migration](https://github.com/longhorn/longhorn/blob/master/enhancements/20210216-volume-live-migration.md) - Implementation approach
+
+---
+
+## Phase-to-Pitfall Mapping
+
+| Pitfall | Severity | Phase | Verification |
+|---------|----------|-------|--------------|
+| 1. In-memory state loss | CRITICAL | Phase 1 | Controller restart test |
+| 2. Concurrent publish race | CRITICAL | Phase 1 | Parallel pod scheduling test |
+| 3. Dangling attachments | CRITICAL | Phase 2 | Node deletion test |
+| 4. Unpublish before unstage | HIGH | Phase 2 | Rapid reschedule test |
+| 5. Wrong error codes | HIGH | Phase 1 | CSI sanity tests |
+| 6. PV annotation conflicts | MEDIUM | Phase 1 | Concurrent update test |
+| 7. Missing publish context | MEDIUM | Phase 1 | Integration test |
+| 8. 6-minute force detach | MEDIUM | Phase 2 | Slow unmount test |
+| 9. Stuck finalizer | HIGH | Phase 1 | Unpublish failure test |
+| 10. No storage-level fencing | LOW | Document | N/A (hardware limitation) |
+| 11. Volume not found | MEDIUM | Phase 1 | Deleted volume unpublish test |
+| 12. Live migration | LOW | Document | N/A (RWX required) |
+
+---
+
+## Testing Checklist
+
+### Unit Tests
+
+- [ ] `ControllerPublishVolume` with new volume returns success
+- [ ] `ControllerPublishVolume` to same node is idempotent (returns success, not error)
+- [ ] `ControllerPublishVolume` to different node returns `FAILED_PRECONDITION`
+- [ ] `ControllerUnpublishVolume` clears attachment state
+- [ ] `ControllerUnpublishVolume` for non-existent volume returns success
+- [ ] PV annotation persisted on publish
+- [ ] PV annotation cleared on unpublish
+- [ ] State rebuilt from PV annotations on controller init
+
+### Integration Tests
+
+- [ ] Controller restart doesn't lose attachment state
+- [ ] Concurrent `ControllerPublishVolume` calls are serialized
+- [ ] Node deletion allows volume reattachment
+- [ ] Full volume lifecycle with fencing enabled
+
+### E2E Tests
+
+- [ ] Pod rescheduling after node drain works
+- [ ] Pod fails to schedule if volume attached elsewhere
+- [ ] Volume cleanup after PVC deletion
+
+---
+
+## Implementation Order
+
+Based on pitfall severity and dependencies:
+
+1. **Phase 1: Foundation** (must-have for any release)
+   - Per-volume locking (Pitfall 2)
+   - PV annotation persistence (Pitfall 1)
+   - State rebuild on startup (Pitfall 1)
+   - Correct error codes (Pitfall 5)
+   - Idempotent unpublish (Pitfall 9, 11)
+   - Conflict retry for annotations (Pitfall 6)
+   - Publish context (Pitfall 7)
+
+2. **Phase 2: Robustness** (before production use)
+   - Node existence validation (Pitfall 3)
+   - Background stale attachment cleanup (Pitfall 3)
+   - Reattachment grace period (Pitfall 4)
+   - Unmount timeout handling (Pitfall 8)
+
+3. **Documentation** (at release)
+   - No storage-level fencing (Pitfall 10)
+   - Live migration limitation (Pitfall 12)
 
 ---
 
 ## Sources
 
-**Official Documentation:**
-- [Red Hat: Configuring NVMe over fabrics using NVMe/TCP](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_storage_devices/configuring-nvme-over-fabrics-using-nvme-tcp_managing-storage-devices)
-- [Linux Kernel: NVMe Fault Injection](https://docs.kernel.org/fault-injection/nvme-fault-injection.html)
-- [Linux Kernel: NVMe Multipath](https://docs.kernel.org/admin-guide/nvme-multipath.html)
-- [ArchWiki: NVMe over Fabrics](https://wiki.archlinux.org/title/NVMe_over_Fabrics)
+**CSI Specification:**
+- [CSI Spec v1.7.0](https://github.com/container-storage-interface/spec/blob/v1.7.0/spec.md) - ControllerPublishVolume/ControllerUnpublishVolume requirements
+- [CSI Spec v1.3.0](https://github.com/container-storage-interface/spec/blob/v1.3.0/spec.md) - Error code definitions
 
-**CSI Driver Issues (Real Production Bugs):**
-- [AWS EBS CSI: NodeStage might not always be idempotent](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/issues/1076)
-- [AWS EBS CSI: Fix NodeStageVolume returning prematurely](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/176)
-- [AWS EBS CSI: Race condition/timeout issues when mounting PV](https://github.com/kubernetes/kubernetes/issues/76568)
-- [Dell CSM: PowerStore CSI driver NVME TCP connectivity issues](https://github.com/dell/csm/issues/496)
-- [Mayastor: NVMe device mismatch issue](https://github.com/openebs/mayastor/issues/1777)
-- [IBM PowerVS: NodeStageVolume called again after success](https://github.com/kubernetes-sigs/ibm-powervs-block-csi-driver/issues/55)
-- [Ceph CSI: NodeStageVolume fails if xfs_repair returns error](https://github.com/ceph/ceph-csi/issues/859)
-- [Azure Files CSI: Stacked mounts prevents unmounting](https://github.com/kubernetes-sigs/azurefile-csi-driver/issues/1137)
-- [Kubernetes: CSI SetUpAt does not retry when check fails](https://github.com/kubernetes/kubernetes/issues/112969)
-- [Red Hat Bugzilla: Stale mount/stage in different node](https://bugzilla.redhat.com/show_bug.cgi?id=1745776)
+**Kubernetes Issues:**
+- [Issue #67853](https://github.com/kubernetes/kubernetes/issues/67853) - VolumeAttachment not recreated after node deletion
+- [Issue #77324](https://github.com/kubernetes/kubernetes/issues/77324) - Garbage collect VolumeAttachment objects
+- [Issue #106710](https://github.com/kubernetes/kubernetes/issues/106710) - Volumes detached while still mounted
+- [Issue #65392](https://github.com/kubernetes/kubernetes/issues/65392) - Force detach on pod deletion
 
-**NVMe-oF Specific Issues:**
-- [nvme-cli: nvme connect-all reports "already connected"](https://github.com/linux-nvme/nvme-cli/issues/1505)
-- [nvme-cli: disconnect doesn't remove all controllers](https://github.com/linux-nvme/nvme-cli/issues/499)
-- [nvme-cli: nvme naming/association wrong](https://github.com/linux-nvme/nvme-cli/issues/510)
-- [nvme-cli: wrong naming of controllers](https://github.com/linux-nvme/nvme-cli/issues/455)
-- [libnvme: Allow disconnect of incomplete connections](https://github.com/linux-nvme/libnvme/issues/431)
-- [nvme-cli: Unable to disconnect from NVMeoF subsystem](https://github.com/linux-nvme/nvme-cli/issues/2603)
+**CSI Driver Issues:**
+- [Azure Disk CSI #1648](https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/1648) - CRI Recovery Enhancement
+- [vSphere CSI #580](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/580) - ControllerPublishVolume called twice
+- [vSphere CSI #221](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/221) - Volume can't be detached from deleted node
+- [AWS EBS CSI #833](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/issues/833) - VolumeAttachment not deleted for 20+ minutes
+- [Longhorn #3584](https://github.com/longhorn/longhorn/issues/3584) - Configurable detach timeout
+- [Longhorn #7258](https://github.com/longhorn/longhorn/issues/7258) - Volumes stuck on attachment deletion
 
-**Device Naming Issues:**
-- [Red Hat: NVMe controllers and namespace name inconsistency](https://access.redhat.com/solutions/6967589)
-- [Red Hat: How to make block device NVMe assigned names persistent](https://access.redhat.com/solutions/4763241)
-- [Understanding plain Linux NVMe device names](https://utcc.utoronto.ca/~cks/space/blog/linux/NVMeDeviceNames)
-- [Arch Linux: NVME SDD changes name after each reboot](https://bbs.archlinux.org/viewtopic.php?id=300293)
-- [Google Cloud: Best practice for persistent device names](https://cloud.google.com/compute/docs/disks/set-persistent-device-name-in-linux-vm)
+**External-Attacher:**
+- [Issue #66](https://github.com/kubernetes-csi/external-attacher/issues/66) - Failing to delete PV after attach failure
+- [Issue #416](https://github.com/kubernetes-csi/external-attacher/issues/416) - VolumeAttachment status mismatch
+- [PR #184](https://github.com/kubernetes-csi/external-attacher/pull/184) - Reconcile with ListVolumes
 
-**Community Implementations:**
-- [SPDK CSI Driver](https://github.com/spdk/spdk-csi)
-- [Kubernetes CSI NVMf Driver](https://github.com/kubernetes-csi/csi-driver-nvmf)
-- [Simplyblock CSI](https://github.com/simplyblock/simplyblock-csi)
-- [KumoScale CSI](https://github.com/KioxiaAmerica/kumoscale-csi)
+**Multi-Attach Analysis:**
+- [Medium: Multi-Attach Error Explained](https://medium.com/@golusstyle/demystifying-the-multi-attach-error-for-volume-causes-and-solutions-595a19316a0c)
+- [KodeKloud: Multi-Attach Volume Errors](https://notes.kodekloud.com/docs/Kubernetes-Troubleshooting-for-Application-Developers/Troubleshooting-Scenarios/Multi-Attach-Volume-Errors)
+- [Portworx: Volume Exclusively Attached](https://portworx.com/knowledge-hub/volume-is-already-exclusively-attached-to-one-node-and-cant-be-attached-to-another/)
 
-**RDS-CSI Specific:**
-- Commit bc90a9b: "fix(nvme): handle orphaned subsystems in ConnectWithContext"
-- Commit 74ce4d9: "fix(nvme): handle NVMe-oF namespace device naming correctly"
-- Commit 10b237b: "fix(nvme): handle NVMe-oF namespace device naming correctly"
+**KubeVirt:**
+- [KubeVirt Live Migration](https://kubevirt.io/user-guide/compute/live_migration/)
+- [KubeVirt Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/)
+- [Longhorn Volume Live Migration Enhancement](https://github.com/longhorn/longhorn/blob/master/enhancements/20210216-volume-live-migration.md)
+
+**NVMe Reservations/Fencing:**
+- [AWS EBS NVMe Reservations](https://www.infoq.com/news/2023/10/aws-ebs-fencing-nvme/)
+- [Red Hat fence_scsi](https://access.redhat.com/articles/530533)
+- [SCSI SPC-3 Persistent Reservations](https://grimoire.carcano.ch/blog/spc-3-persistent-reservations-and-fencing/)
 
 ---
 
 *Confidence Level: HIGH*
-- Critical pitfalls verified through codebase analysis and recent bug fixes
-- Community patterns cross-referenced across 3+ independent CSI implementations
-- Testing strategies validated against Linux kernel documentation
-- All major pitfalls have documented sources and reproduction scenarios
+- Critical pitfalls derived from CSI specification requirements
+- Race conditions verified against Kubernetes controller behavior
+- Production issues cross-referenced from 5+ CSI driver implementations
+- KubeVirt limitations verified against official documentation

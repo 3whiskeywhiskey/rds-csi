@@ -1,307 +1,345 @@
-# Feature Research: NVMe-oF CSI Driver Reliability
+# Feature Landscape: Volume Fencing (v0.3.0)
 
-**Domain:** Kubernetes CSI Driver - NVMe/TCP Storage Health Monitoring
+**Domain:** CSI ControllerPublish/Unpublish for RWO Volume Fencing
 **Researched:** 2026-01-30
-**Confidence:** MEDIUM
+**Context:** RDS CSI Driver experiencing volume ping-pong (~7 min migration cycles) without attachment tracking
 
-## Feature Landscape
+## Problem Statement
 
-### Table Stakes (Users Expect These)
+Without `ControllerPublishVolume`/`ControllerUnpublishVolume`:
+- Kubernetes cannot enforce single-node attachment for RWO volumes
+- Volumes migrate between nodes every ~7 minutes (ping-pong behavior)
+- KubeVirt VMs experience I/O errors and pause from concurrent access
+- No fencing guarantees exist to prevent data corruption
 
-Features production CSI drivers implement for reliability. Missing these = production readiness concerns.
+---
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **Basic Liveness Probe** | Standard Kubernetes pattern for CSI drivers | LOW | Already implemented (v2.12.0 sidecar). Uses `/healthz` endpoint on port 9808 with configurable probe intervals. |
-| **NodeStageVolume Idempotency** | Required by CSI spec v1.5.0+ | MEDIUM | CSI drivers MUST check if volume already staged, verify mount validity themselves (kubelet no longer does this). Return success if already staged with matching capability. |
-| **NodeGetVolumeStats** | Kubelet requires for volume health monitoring | LOW | Returns filesystem usage (bytes/inodes). Required for PVC usage metrics and health checks. Already implemented in current codebase. |
-| **Mount Point Validation** | Detect corrupted/stale mounts before use | MEDIUM | CSI drivers must validate mount paths exist and are valid before reusing. Check `/proc/mounts` and compare source device. Critical after node restarts or NVMe reconnections. |
-| **Connection Timeout Configuration** | Prevent indefinite hangs during NVMe operations | LOW | NVMe connect operations should have explicit timeouts (30s is common). Current codebase has 30s device discovery timeout. |
-| **Graceful Cleanup on Errors** | Prevent orphaned NVMe connections | MEDIUM | On format/mount failures, must disconnect NVMe target. Current code has this in NodeStageVolume. |
-| **Structured Logging** | Debugging in production requires correlation | LOW | Use klog with volume ID, operation type, node ID fields. Already present in current implementation. |
+## Table Stakes
 
-### Differentiators (Competitive Advantage)
+Features users expect. Missing = fencing does not work.
 
-Features that set production-grade CSI drivers apart. Not required, but valuable for reliability.
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **PUBLISH_UNPUBLISH_VOLUME capability** | External-attacher requires this to call Publish/Unpublish RPCs | Low | Capability declaration in ControllerGetCapabilities |
+| **ControllerPublishVolume implementation** | Makes volume available on target node before NodeStage | Medium | Attachment state tracking |
+| **ControllerUnpublishVolume implementation** | Revokes volume availability from node after NodeUnstage | Medium | Attachment state tracking |
+| **Attachment state tracking** | Must track which node has volume attached to detect conflicts | Medium | In-memory or persistent state store |
+| **Idempotent Publish (same node)** | Retries with same volume+node must succeed immediately | Low | State lookup |
+| **Idempotent Unpublish** | Unpublish of already-unpublished volume returns success | Low | State lookup |
+| **FAILED_PRECONDITION on multi-attach attempt** | Return gRPC code 9 when RWO volume already attached elsewhere | Low | State lookup |
+| **NOT_FOUND for missing volume** | Return gRPC code 5 when volume_id doesn't exist | Low | RDS volume lookup |
+| **NOT_FOUND for missing node** | Return gRPC code 5 when node_id doesn't exist | Low | Node validation |
+| **Volume capability validation** | Reject publish if capabilities incompatible | Low | Capability checking |
+| **publish_context return** | Return metadata for NodeStage (NVMe connection info) | Low | VolumeContext assembly |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Volume Health Monitoring (external-health-monitor)** | Proactive detection of abnormal volume conditions | MEDIUM | Deploy external-health-monitor-controller sidecar. Implements ListVolumes or ControllerGetVolume RPC to check health (5min interval for ListVolumes, 1min for ControllerGetVolume). Reports events on PVC when abnormal. Kubernetes 1.21+ Alpha feature. |
-| **Volume Condition in NodeGetVolumeStats** | Node-side mount health detection | MEDIUM | Extend NodeGetVolumeStats to return volume condition (VOLUME_CONDITION node capability). Kubelet checks this (CSIVolumeHealth feature gate) and logs events on Pods when abnormal. Requires implementing `VolumeCondition` field in response. |
-| **Automatic NVMe Reconnection** | Handles transient network issues without manual intervention | HIGH | Configure nvme-cli connection parameters: `--reconnect-delay=2 --ctrl-loss-tmo=60 --keep-alive-tmo=5`. Native multipath enabled by default on Linux 5.0+. Simplyblock and similar CSI drivers handle this automatically. |
-| **NVMe Multipath Support** | Redundant paths for high availability | HIGH | Native NVMe multipath (`nvme_core multipath=y`) recommended over device-mapper multipath for NVMe. Requires multiple NVMe controllers/IPs. ANA (Asymmetric Namespace Access) protocol for path failover. Lower overhead than DM-MPIO. |
-| **Stale Mount Recovery** | Auto-recover from CSI plugin crashes | HIGH | Persist mount cache entries to node local directory. On CSI plugin startup, load cache, verify volume IDs exist in cluster, check staging paths exist, remount if needed. Enables auto-recovery when pods restart without needing pod deletion. |
-| **Prometheus Metrics Endpoint** | Observability for operations teams | MEDIUM | Expose `/metrics` endpoint (typically port 8095). Metrics: volume provision duration, attach/detach errors, connection counts, NVMe connection failures. Create ServiceMonitor for Prometheus Operator or configure scrape job. |
-| **Kubernetes Events for Storage Issues** | User-visible feedback on volume problems | LOW | Post events to PVC/Pod on: connection failures, mount failures, health check failures, orphan detection. Current orphan reconciler has this pattern. |
-| **NVMe Connection Status Checking** | Detect existing connections before reconnecting | MEDIUM | Check `/sys/class/nvme-subsystem/*/subsysnqn` to find existing connections by NQN. Return early if already connected (idempotency). Already present in current nvme.go implementation. |
-| **Configurable Retry Parameters** | Tune resilience for different environments | LOW | Make retry counts, backoff intervals, timeouts configurable via flags or StorageClass parameters. Current SSH client has hardcoded 3 retries with exponential backoff. |
-| **Volume Attachment Fencing** | Prevent split-brain scenarios | HIGH | Track which node has volume attached. Refuse attachment if already attached elsewhere (unless multi-attach supported). Use PV.Status.Phase and annotations. Critical for ReadWriteOnce volumes. |
+### CSI Specification Requirements (HIGH Confidence)
 
-### Anti-Features (Commonly Requested, Often Problematic)
+Per the [CSI Specification v1.7.0](https://github.com/container-storage-interface/spec/blob/v1.7.0/spec.md):
 
-Features that seem good but create problems in CSI driver reliability implementations.
+**ControllerPublishVolume:**
+- MUST be idempotent - if already published at node with compatible capabilities, return OK
+- MUST return `FAILED_PRECONDITION` if volume published at different node without MULTI_NODE capability
+- SHOULD specify node_id of current attachment in error message when returning FAILED_PRECONDITION
+- MUST return `NOT_FOUND` if volume_id or node_id doesn't exist
+- Called BEFORE `NodeStageVolume` - establishes attachment at controller level
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| **Automatic Mount Repair Without Validation** | "Just fix it automatically" | Remounting without validating data integrity can cause corruption. Silent failures mask underlying issues (bad NVMe connection, network problems). | Detect stale mounts, post Kubernetes event, require explicit pod restart. Log detailed diagnostic info for troubleshooting. |
-| **Aggressive Automatic Reconnection** | Minimize downtime | Reconnecting too frequently during maintenance can cause I/O storms. May mask persistent issues (bad NIC, misconfigured network). Can trigger Kubernetes pod restarts if health checks fail. | Use exponential backoff. Set `ctrl-loss-tmo` to reasonable value (60-300s). Let kernel's native reconnect handle transient issues. Post events for persistent failures. |
-| **Health Monitor Deleting Pods** | "Self-healing" | CSI drivers should never delete pods - that's a policy decision. Could cause cascading failures. Violates separation of concerns. | Report abnormal conditions via events/metrics. Let cluster admin or policy controller (like Descheduler) make deletion decisions. |
-| **Synchronous Health Checks in Data Path** | "Real-time validation" | Adding health checks to NodePublishVolume/NodeStageVolume slows critical path. Can cause timeouts during volume provisioning. | Use asynchronous periodic health monitoring (external-health-monitor). Health checks in NodeGetVolumeStats are ok (called periodically by kubelet). |
-| **Complex State Machines for Recovery** | Handle every edge case | Increases code complexity and bug surface area. Hard to test all state transitions. May still miss edge cases. | Keep operations idempotent and stateless. Rely on Kubernetes reconciliation loop. Clear error messages for manual intervention. |
-| **Custom Mount Retry Logic in CSI Driver** | "Be resilient" | Kubernetes already retries failed mounts. CSI driver retrying adds unpredictable delays. Kubelet has timeout enforcement - driver retries fight with this. | Let individual operations fail fast with clear errors. Kubernetes volume attach/mount loop handles retries at pod level. |
+**ControllerUnpublishVolume:**
+- MUST be idempotent - if already unpublished, return OK
+- Called AFTER all `NodeUnstageVolume` and `NodeUnpublishVolume` complete
+- MUST complete before `DeleteVolume` can be called
+
+---
+
+## Differentiators
+
+Features that improve robustness beyond minimum spec compliance.
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **publish_context with NVMe parameters** | Pass ctrl_loss_tmo, reconnect_delay to NodeStage for resilient connections | Low | Existing NVMe param parsing |
+| **Graceful concurrent request handling** | Return ABORTED (code 10) for in-flight operations on same volume | Medium | Request tracking/locking |
+| **Attachment reconciliation with LIST_VOLUMES** | Periodically sync attachments with external-attacher for self-healing | High | LIST_VOLUMES_PUBLISHED_NODES capability |
+| **Persistent attachment state** | Survive controller restarts without losing attachment knowledge | Medium | ConfigMap or CRD storage |
+| **Prometheus metrics for attachments** | Expose attachment counts, durations, failure rates | Low | Existing metrics infrastructure |
+| **Kubernetes Events on attach/detach** | Post events for visibility into attachment lifecycle | Low | Existing event posting |
+| **Force-detach with timeout** | Allow forced attachment override after configurable timeout | Medium | Timestamp tracking, safety checks |
+| **Node health integration** | Consider node Ready status before allowing attachment | Medium | Kubernetes API client |
+
+### Recommended Differentiators for v0.3.0
+
+1. **publish_context with NVMe parameters** - Low effort, high value for NVMe resilience
+2. **Kubernetes Events** - Already have event infrastructure, adds visibility
+3. **Prometheus metrics** - Already have metrics infrastructure, adds observability
+
+Defer to later versions:
+- Persistent state (adds complexity, in-memory sufficient for single-replica controller)
+- Attachment reconciliation (requires additional capability, adds complexity)
+- Force-detach (safety concerns, requires careful design)
+
+---
+
+## Anti-Features
+
+Features to explicitly NOT build. Common mistakes in this domain.
+
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **Storage-level locking** | NVMe/TCP has no native reservation mechanism; would require RDS firmware changes | Rely on Kubernetes VolumeAttachment tracking |
+| **Automatic force-detach on node failure** | Can cause data corruption if node is actually still running (split-brain) | Wait for Kubernetes non-graceful shutdown taint, then allow reattachment |
+| **Multi-attach for RWO volumes** | Violates CSI spec, causes data corruption | Return FAILED_PRECONDITION, never allow |
+| **Blocking on NVMe disconnect in Unpublish** | Node may be unreachable; cannot guarantee disconnect | Track attachment state only; let NodeUnstage handle NVMe disconnect |
+| **Distributed state for attachments** | Overkill for single-controller deployment; adds failure modes | Use controller-local state (in-memory or single ConfigMap) |
+| **Custom fencing protocols** | Reinventing wheel; Kubernetes already handles this via VolumeAttachment | Implement standard CSI Publish/Unpublish, let external-attacher manage |
+| **Skipping ControllerUnpublish on node failure** | Creates orphaned attachments that block future attachments | Always require Unpublish before re-Publish to different node |
+
+### Critical Anti-Pattern: Node-Level Fencing
+
+**Do NOT implement:**
+- SCSI reservations (not applicable to NVMe/TCP)
+- Storage-side I/O fencing (RDS doesn't support)
+- Network-level fencing (out of scope for CSI driver)
+
+**Why:** The [CSI-Addons fencing specification](https://github.com/csi-addons/spec/blob/main/fence/README.md) defines storage-level fencing for specialized storage systems. RDS (file-backed NVMe/TCP) doesn't have these capabilities. Kubernetes VolumeAttachment tracking provides sufficient fencing for single-writer semantics.
+
+---
+
+## Edge Cases in Attachment Tracking
+
+### Case 1: Timeout During ControllerPublishVolume
+
+**Scenario:** RPC times out while attachment is in progress.
+
+**Expected Behavior:**
+- External-attacher retries with exponential backoff (1s default start, 5m max)
+- Driver must check if attachment already completed
+- Return success if volume already attached to target node
+
+**Implementation:**
+```go
+// Check existing attachment before performing new attach
+if currentNode := getAttachedNode(volumeID); currentNode == targetNode {
+    return &ControllerPublishVolumeResponse{PublishContext: ...}, nil
+}
+```
+
+**Source:** [AWS EBS CSI Driver Design](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/master/docs/design.md)
+
+### Case 2: Concurrent Publish to Different Nodes
+
+**Scenario:** Two ControllerPublishVolume calls arrive nearly simultaneously for same volume but different nodes.
+
+**Expected Behavior:**
+- First request acquires lock, proceeds with attachment
+- Second request must wait or return ABORTED
+- Once first completes, second returns FAILED_PRECONDITION (volume now attached elsewhere)
+
+**Implementation:**
+```go
+// Use per-volume mutex
+volumeLock := getVolumeLock(volumeID)
+if !volumeLock.TryLock() {
+    return nil, status.Error(codes.Aborted, "operation in progress")
+}
+defer volumeLock.Unlock()
+```
+
+**Source:** [CSI Spec - Concurrency](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+
+### Case 3: Node Deleted While Volume Attached
+
+**Scenario:** Kubernetes node object deleted while volume still shows attached.
+
+**Expected Behavior:**
+- ControllerUnpublishVolume called for deleted node
+- Driver should allow unpublish even if node doesn't exist (idempotent)
+- Clear attachment state to allow reattachment elsewhere
+
+**Common Mistake:** Returning NOT_FOUND for deleted node blocks volume migration.
+
+**Implementation:**
+```go
+// Don't fail if node is gone - just clear attachment
+if !nodeExists(nodeID) {
+    klog.Warningf("Node %s no longer exists, clearing attachment for volume %s", nodeID, volumeID)
+}
+clearAttachment(volumeID)
+return &ControllerUnpublishVolumeResponse{}, nil
+```
+
+**Source:** [Dell CSI Drivers Knowledge Base](https://www.dell.com/support/kbdoc/en-us/000200778/container-storage-interface-csi-drivers-family-when-a-node-goes-down-due-to-node-crash-node-down-power-off-scenario-pods-cannot-come-up-on-a-new-node-because-storage-volumes-cannot-be-attached)
+
+### Case 4: Controller Restart with In-Memory State
+
+**Scenario:** Controller pod restarts, losing attachment state.
+
+**Expected Behavior:**
+- External-attacher has authoritative state in VolumeAttachment objects
+- On startup, driver can rebuild state from LIST_VOLUMES if supported
+- Or, driver can treat all volumes as "unknown attachment state"
+
+**Trade-off:**
+- **Conservative (recommended for v0.3.0):** Require Unpublish before Publish after restart
+- **Aggressive:** Allow Publish to any node, risk brief dual-attachment during transition
+
+**Implementation for Conservative Approach:**
+```go
+// After restart, attachment state is unknown
+// Return FAILED_PRECONDITION if we don't know current state
+// External-attacher will call Unpublish first if needed
+```
+
+### Case 5: ControllerUnpublish Before NodeUnstage Completes
+
+**Scenario:** Pod deleted, ControllerUnpublish called while NVMe still connected.
+
+**Expected Behavior (per CSI spec):**
+- ControllerUnpublishVolume MUST be called after NodeUnstageVolume
+- Kubernetes orchestrates this ordering via kubelet -> external-attacher
+
+**Reality:**
+- Non-graceful shutdown may violate this ordering
+- Driver should NOT block on NVMe disconnect status
+- Clear attachment state; let NodeUnstage handle NVMe cleanup separately
+
+**Source:** [CSI Spec - RPC Ordering](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+
+### Case 6: VolumeAttachment Finalizer Stuck
+
+**Scenario:** VolumeAttachment object has finalizer but ControllerUnpublish keeps failing.
+
+**Expected Behavior:**
+- External-attacher retries with backoff
+- If node is gone, ControllerUnpublish should succeed (idempotent)
+- Manual intervention: remove finalizer to unblock
+
+**Prevention:**
+- Ensure Unpublish is always idempotent
+- Don't require node to be reachable for Unpublish
+- Log clearly when clearing attachment for missing node
+
+**Source:** [Kubernetes External-Attacher](https://github.com/kubernetes-csi/external-attacher)
+
+### Case 7: Publish After Non-Graceful Node Shutdown
+
+**Scenario:** Node powered off unexpectedly, pods rescheduled, new Publish arrives.
+
+**Expected Behavior:**
+- Old VolumeAttachment may still exist (node not responding to Unpublish)
+- Manual taint `node.kubernetes.io/out-of-service` signals safe to proceed
+- Driver should check for out-of-service taint before forcing reattachment
+
+**Kubernetes Feature:** Non-Graceful Node Shutdown (GA in v1.28)
+
+**Source:** [Kubernetes Non-Graceful Node Shutdown](https://kubernetes.io/blog/2023/08/16/kubernetes-1-28-non-graceful-node-shutdown-ga/)
+
+---
 
 ## Feature Dependencies
 
 ```
-[NVMe Connection Status Checking]
-    ├──requires──> [Mount Point Validation]
-    └──requires──> [NodeStageVolume Idempotency]
-
-[Stale Mount Recovery]
-    ├──requires──> [Mount Point Validation]
-    └──requires──> [Connection Status Checking]
-
-[Volume Health Monitoring]
-    ├──requires──> [NodeGetVolumeStats]
-    └──enhances──> [Prometheus Metrics Endpoint]
-
-[Volume Condition in NodeGetVolumeStats]
-    └──requires──> [Mount Point Validation]
-
-[Automatic NVMe Reconnection]
-    └──requires──> [Connection Timeout Configuration]
-
-[NVMe Multipath Support]
-    ├──requires──> [Automatic NVMe Reconnection]
-    └──conflicts──> [Single IP Architecture]
-
-[Volume Attachment Fencing]
-    └──requires──> [Controller tracks attachment state]
-
-[Prometheus Metrics]
-    └──enhances──> [Kubernetes Events for Storage Issues]
+                    ┌─────────────────────────┐
+                    │ PUBLISH_UNPUBLISH_VOLUME│
+                    │     Capability          │
+                    └───────────┬─────────────┘
+                                │
+              ┌─────────────────┼─────────────────┐
+              ▼                 ▼                 ▼
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │ControllerPublish│ │ControllerUnpub- │ │   Attachment    │
+    │    Volume       │ │   lishVolume    │ │   State Store   │
+    └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
+             │                   │                   │
+             └─────────────┬─────┴───────────────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+    ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+    │ Idempotency  │ │ FAILED_PRE-  │ │ publish_     │
+    │   Checks     │ │  CONDITION   │ │   context    │
+    └──────────────┘ └──────────────┘ └──────────────┘
 ```
 
-### Dependency Notes
+### Existing Features to Leverage
 
-- **Mount Point Validation requires Connection Status Checking:** Can't determine if mount is stale without knowing if NVMe connection is alive
-- **Stale Mount Recovery requires both:** Must validate mounts AND check connection status before attempting recovery
-- **Volume Health Monitoring enhances Metrics:** Health monitor data should feed into Prometheus metrics for unified observability
-- **Multipath conflicts with Single IP:** Current RDS CSI uses single IP per volume. Multipath requires multiple controller IPs/paths.
-- **Volume Condition requires Mount Validation:** Can't report accurate condition without validating mount point first
+| Existing Feature | How It Helps |
+|-----------------|--------------|
+| `GetVolume` in RDS client | Volume existence check for NOT_FOUND |
+| `VolumeContext` in CreateVolume | Template for publish_context structure |
+| NVMe connection params parsing | Reuse for publish_context NVMe settings |
+| Prometheus metrics | Add attachment metrics |
+| Kubernetes event posting | Add attach/detach events |
+| Security audit logging | Log attach/detach operations |
 
-## MVP Definition
+---
 
-### Launch With (Reliability Milestone)
+## MVP Recommendation
 
-Minimum viable reliability features for brownfield bug fix.
+For v0.3.0 MVP, prioritize:
 
-- [x] **Basic Liveness Probe** — Already implemented (v2.12.0 sidecar)
-- [x] **NodeGetVolumeStats** — Already implemented in node.go
-- [ ] **NodeStageVolume Idempotency Enhancement** — Add explicit mount validation (check `/proc/mounts`)
-- [ ] **Mount Point Validation** — Verify staging path is valid mount before NodePublishVolume
-- [ ] **NVMe Connection Status Checking** — Verify connection alive before declaring success (enhance existing IsConnected())
-- [ ] **Connection Timeout Configuration** — Make device discovery timeout configurable (currently hardcoded 30s)
-- [ ] **Kubernetes Events for Mount Failures** — Post events to Pod when mount validation fails
+### Must Have (Table Stakes)
+1. **PUBLISH_UNPUBLISH_VOLUME capability declaration**
+2. **ControllerPublishVolume with in-memory state tracking**
+3. **ControllerUnpublishVolume with idempotent cleanup**
+4. **FAILED_PRECONDITION for RWO multi-attach attempts**
+5. **Idempotent behavior for same-node publish**
 
-### Add After Core Validation (v0.2)
+### Should Have (High-Value Differentiators)
+6. **publish_context with NVMe connection parameters**
+7. **Prometheus metrics for attachment operations**
+8. **Kubernetes Events for attach/detach**
 
-Features to add once mount validation is working.
+### Defer to v0.4.0+
+- Persistent attachment state (ConfigMap/CRD)
+- LIST_VOLUMES_PUBLISHED_NODES capability
+- Attachment reconciliation
+- Force-detach with timeout
+- Node health integration
 
-- [ ] **Volume Condition in NodeGetVolumeStats** — Report ABNORMAL when mount is stale
-- [ ] **Automatic NVMe Reconnection Configuration** — Expose `ctrl-loss-tmo`, `reconnect-delay` as StorageClass params
-- [ ] **Prometheus Metrics Endpoint** — Basic metrics: connection failures, mount failures, operation durations
-- [ ] **Configurable Retry Parameters** — Make SSH retry count/backoff configurable via flags
-- [ ] **Stale Mount Recovery** — Persist mount cache, reload on plugin restart (HIGH complexity - defer if not needed)
+---
 
-### Future Consideration (v1.0+)
+## Complexity Estimates
 
-Features to defer until production usage patterns are clear.
+| Feature | Complexity | Effort | Risk |
+|---------|-----------|--------|------|
+| Capability declaration | Low | 1 hour | None |
+| ControllerPublishVolume (basic) | Medium | 4 hours | Low |
+| ControllerUnpublishVolume (basic) | Medium | 2 hours | Low |
+| In-memory attachment state | Medium | 2 hours | Medium (lost on restart) |
+| FAILED_PRECONDITION logic | Low | 1 hour | Low |
+| publish_context assembly | Low | 1 hour | None |
+| Metrics integration | Low | 2 hours | None |
+| Event posting | Low | 1 hour | None |
+| Unit tests | Medium | 4 hours | None |
+| Integration testing | High | 8 hours | Medium |
 
-- [ ] **Volume Health Monitoring (external-health-monitor)** — Deploy sidecar controller after validating basic health works
-- [ ] **NVMe Multipath Support** — Requires RDS dual-controller architecture (hardware limitation)
-- [ ] **Volume Attachment Fencing** — Low priority (single-node workloads don't need this)
-- [ ] **Advanced Metrics** — Detailed latency histograms, per-volume metrics (once basic metrics prove useful)
+**Total Estimate:** 25-30 hours for MVP
 
-## Feature Prioritization Matrix
-
-| Feature | User Value | Implementation Cost | Priority | Phase |
-|---------|------------|---------------------|----------|-------|
-| Mount Point Validation | HIGH | MEDIUM | P1 | MVP |
-| NodeStageVolume Idempotency | HIGH | MEDIUM | P1 | MVP |
-| Connection Status Checking | HIGH | LOW | P1 | MVP |
-| Kubernetes Events | HIGH | LOW | P1 | MVP |
-| Volume Condition in Stats | MEDIUM | MEDIUM | P2 | v0.2 |
-| Prometheus Metrics | MEDIUM | MEDIUM | P2 | v0.2 |
-| Reconnection Config | MEDIUM | LOW | P2 | v0.2 |
-| Stale Mount Recovery | MEDIUM | HIGH | P2 | v0.2 (conditional) |
-| external-health-monitor | LOW | MEDIUM | P3 | v1.0+ |
-| NVMe Multipath | LOW | HIGH | P3 | v1.0+ (hardware dependent) |
-| Volume Attachment Fencing | LOW | MEDIUM | P3 | v1.0+ |
-
-**Priority key:**
-- P1: Must have for bug fix (NVMe reconnection stale mount issue)
-- P2: Should have for production readiness
-- P3: Nice to have, future consideration
-
-## Implementation Patterns from Production CSI Drivers
-
-### AWS EBS CSI Driver Pattern
-- NodeStageVolume checks if volume already staged by comparing device with source
-- Returns success if already staged (idempotent)
-- Uses device statistics for NodeGetVolumeStats
-- Exposes Prometheus metrics at `/metrics` endpoint (v1.37.0+)
-
-### SPDK CSI Driver Pattern
-- Conforms to CSI Spec v1.7.0
-- Provisions SPDK volumes via NVMe-oF or iSCSI
-- Uses liveness probe sidecar for health checks
-- Multi-node support with xPU connections
-
-### iSCSI CSI Driver Pattern (csi-lib-iscsi)
-- Multipath device management (flush/resize operations)
-- Connection management with authentication handling
-- Device discovery and error handling in connection lifecycle
-- Handles stale paths via multipath layer
-
-### Ceph CSI Driver Pattern
-- Implements mount cache loading on CSI plugin restart
-- Checks if volume IDs exist in cluster before remounting
-- Verifies staging paths exist, remounts if needed
-- Enables auto-recovery when pods exit and restart without deletion
-
-### Common Patterns Across Drivers
-1. **Idempotent Operations**: All CSI drivers validate operation already done before proceeding
-2. **Liveness Probe Sidecar**: Standard pattern using port 9808 for `/healthz` endpoint
-3. **Structured Logging**: klog with volume ID, operation, node ID fields
-4. **Separate Health Monitor**: external-health-monitor as sidecar, not in main driver
-5. **Mount Validation**: Driver responsibility (kubelet no longer validates)
-6. **Graceful Cleanup**: Disconnect/cleanup on errors to prevent orphans
-
-## Specific Configuration Values from Research
-
-### NVMe Connection Parameters (from nvme-cli manpages)
-```bash
-nvme connect \
-  --transport=tcp \
-  --traddr=<IP> \
-  --trsvcid=<PORT> \
-  --nqn=<NQN> \
-  --reconnect-delay=2      # Delay before reconnect attempt (seconds)
-  --ctrl-loss-tmo=60       # Max time kernel will retry connection (seconds, 0=infinite)
-  --keep-alive-tmo=5       # Keep-alive timeout (seconds)
-  --nr-io-queues=6         # Number of I/O queues (optional)
-```
-
-### Kernel Parameters for Production (from community sources)
-```bash
-# /etc/default/grub additions for NVMe reliability:
-nvme_core.io_timeout=255           # I/O timeout (seconds, max 4294967295 on kernel 4.15+)
-nvme_core.max_retries=10           # I/O retry count (default 5, kernel 4.14+)
-nvme_core.default_ps_max_latency_us=0  # Disable power state transitions
-nvme_core.shutdown_timeout=10      # Shutdown timeout (seconds)
-
-# Performance optimizations (may help prevent disconnects):
-pcie_aspm.policy=performance       # PCIe power management
-pcie_aspm=off                      # Disable ASPM
-pcie_port_pm=off                   # Disable PCIe port power management
-iommu=pt                           # Reduce DMA mapping latency
-```
-
-### Health Monitor Configuration (from Kubernetes CSI docs)
-```yaml
-# external-health-monitor-controller sidecar
-args:
-  - "--v=5"
-  - "--csi-address=/csi/csi.sock"
-  - "--leader-election"
-  - "--http-endpoint=:8080"
-  - "--enable-node-watcher=false"      # Optional: monitor node failures
-  - "--monitor-interval=5m"             # ListVolumes check interval
-# OR
-  - "--monitor-interval=1m"             # ControllerGetVolume check interval
-```
-
-### Prometheus Metrics Configuration
-```yaml
-# Metrics endpoint in CSI driver (common pattern)
-ports:
-  - name: metrics
-    containerPort: 8095
-    protocol: TCP
-
-# ServiceMonitor for Prometheus Operator
-spec:
-  endpoints:
-    - port: metrics
-      interval: 30s
-      path: /metrics
-```
-
-## Current RDS CSI Driver State
-
-### Already Implemented (from codebase review)
-- ✅ Liveness probe sidecar (v2.12.0) in both controller and node DaemonSet
-- ✅ NodeGetVolumeStats (returns filesystem statistics in node.go)
-- ✅ NVMe Connection Status Checking (IsConnected() in pkg/nvme/nvme.go)
-- ✅ Device discovery timeout (30s hardcoded in NodeStageVolume)
-- ✅ Graceful cleanup on errors (disconnects NVMe on format/mount failures)
-- ✅ Structured logging (klog with volume IDs throughout)
-- ✅ Orphan reconciler (detection and cleanup of orphaned volumes)
-
-### Gaps to Address (from bug report)
-- ❌ Mount point validation (doesn't check if staging path is stale after reconnection)
-- ❌ NodeStageVolume idempotency (doesn't validate existing mounts thoroughly)
-- ❌ Volume condition reporting (NodeGetVolumeStats doesn't return health condition)
-- ❌ Kubernetes events for mount failures (no events posted to Pods on stale mounts)
-- ❌ Configurable NVMe connection parameters (reconnect-delay, ctrl-loss-tmo hardcoded in kernel)
-- ❌ Prometheus metrics endpoint (no observability beyond logs)
-
-### Architecture Constraints
-- Single NVMe IP per volume (10.42.68.1 data plane, 10.42.241.3 control plane)
-- No native multipath support (RDS has single controller)
-- NixOS worker nodes (diskless, network boot)
-- Production cluster: 5 nodes, mix of x86 and ARM
+---
 
 ## Sources
 
-**Official Kubernetes CSI Documentation:**
-- [Volume Health Monitoring - Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/volume-health-monitor.html)
-- [Volume Health Monitoring | Kubernetes](https://kubernetes.io/docs/concepts/storage/volume-health-monitoring/)
-- [external-health-monitor-controller - Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/external-health-monitor-controller.html)
-- [Deploying a CSI Driver on Kubernetes - Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/deploying.html)
+### CSI Specification (HIGH Confidence)
+- [CSI Spec v1.7.0](https://github.com/container-storage-interface/spec/blob/v1.7.0/spec.md)
+- [CSI Spec Master](https://github.com/container-storage-interface/spec/blob/master/spec.md)
 
-**CSI Driver Implementations:**
-- [GitHub - kubernetes-csi/external-health-monitor](https://github.com/kubernetes-csi/external-health-monitor)
-- [GitHub - spdk/spdk-csi: CSI driver for SPDK NVMe-oF](https://github.com/spdk/spdk-csi)
-- [GitHub - kubernetes-csi/csi-driver-iscsi](https://github.com/kubernetes-csi/csi-driver-iscsi)
-- [GitHub - kubernetes-sigs/aws-ebs-csi-driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver)
-- [aws-ebs-csi-driver/pkg/driver/node.go](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/master/pkg/driver/node.go)
+### Kubernetes CSI Documentation (HIGH Confidence)
+- [External-Attacher Sidecar](https://kubernetes-csi.github.io/docs/external-attacher.html)
+- [CSI Driver Object](https://kubernetes-csi.github.io/docs/csi-driver-object.html)
+- [Developing a CSI Driver](https://kubernetes-csi.github.io/docs/developing.html)
 
-**NVMe-oF Configuration:**
-- [Reconnecting Logical Volume - Simplyblock Documentation](https://docs.simplyblock.io/25.7.1/maintenance-operations/reconnect-nvme-device/)
-- [nvme-connect(1) — nvme-cli — Debian Manpages](https://manpages.debian.org/testing/nvme-cli/nvme-connect.1.en.html)
-- [Linux NVMe multipath — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/nvme-multipath.html)
-- [SPDK: NVMe Multipath](https://spdk.io/doc/nvme_multipath.html)
+### Production Driver Implementations (MEDIUM Confidence)
+- [AWS EBS CSI Driver Design](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/master/docs/design.md)
+- [vSphere CSI Driver](https://docs.okd.io/latest/storage/container_storage_interface/persistent-storage-csi-vsphere.html)
 
-**Production Configuration:**
-- [NVMe health monitoring | VMware vSphere](https://community.broadcom.com/vmware-cloud-foundation/discussion/nvme-health-monitoring)
-- [Linux kernel optimizations for NVMe · GitHub](https://gist.github.com/v-fox/b7adbc2414da46e2c49e571929057429)
-- [AWS I/O operation timeout setting on NVMe VMs · Issue #5694 · kubernetes/kops](https://github.com/kubernetes/kops/issues/5694)
+### Kubernetes Features (HIGH Confidence)
+- [Non-Graceful Node Shutdown GA](https://kubernetes.io/blog/2023/08/16/kubernetes-1-28-non-graceful-node-shutdown-ga/)
+- [Node Shutdowns Documentation](https://kubernetes.io/docs/concepts/cluster-administration/node-shutdown/)
 
-**Monitoring and Metrics:**
-- [Metrics - Secrets Store CSI Driver](https://secrets-store-csi-driver.sigs.k8s.io/topics/metrics)
-- [HPE CSI Info Metrics Provider for Prometheus](https://scod.hpedev.io/csi_driver/metrics.html)
-- [Announcing vSphere CSI driver v2.5 metrics for Prometheus monitoring](https://cormachogan.com/2022/03/10/announcing-vsphere-csi-driver-v2-5-metrics-for-prometheus-monitoring/)
-- [Amazon EBS detailed performance statistics](https://docs.aws.amazon.com/ebs/latest/userguide/nvme-detailed-performance-stats.html)
+### Edge Cases and Troubleshooting (MEDIUM Confidence)
+- [Dell CSI Drivers - Node Down Scenarios](https://www.dell.com/support/kbdoc/en-us/000200778/container-storage-interface-csi-drivers-family-when-a-node-goes-down-due-to-node-crash-node-down-power-off-scenario-pods-cannot-come-up-on-a-new-node-because-storage-volumes-cannot-be-attached)
+- [Kubernetes PR #96617 - Dangling Attachments](https://github.com/kubernetes/kubernetes/pull/96617)
+- [Portworx Multi-Attach Troubleshooting](https://portworx.com/knowledge-hub/volume-is-already-exclusively-attached-to-one-node-and-cant-be-attached-to-another/)
 
-**Stale Mount Recovery:**
-- [remount old mount point when csi plugin unexpect exit · Pull Request #282 · ceph/ceph-csi](https://github.com/ceph/ceph-csi/pull/282)
-- [fix: corrupted mount point in csi driver node stage/publish · Pull Request #88569 · kubernetes/kubernetes](https://github.com/kubernetes/kubernetes/pull/88569)
-- [When mount dies, it is not remounted · Issue #164 · kubernetes-csi/csi-driver-smb](https://github.com/kubernetes-csi/csi-driver-smb/issues/164)
-
-**Confidence Note:** MEDIUM confidence overall. Most findings verified across multiple official Kubernetes CSI documentation sources and production CSI driver implementations (AWS EBS, SPDK, Ceph). NVMe-oF specific configuration sourced from official nvme-cli documentation and kernel docs. Some implementation complexity estimates based on CSI spec requirements rather than hands-on implementation.
-
----
-*Feature research for: RDS CSI Driver NVMe-oF Reliability Enhancement*
-*Researched: 2026-01-30*
+### KubeVirt Integration (MEDIUM Confidence)
+- [KubeVirt Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/)
+- [KubeVirt Disks and Volumes](https://kubevirt.io/user-guide/storage/disks_and_volumes/)
