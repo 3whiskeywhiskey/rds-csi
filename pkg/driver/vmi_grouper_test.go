@@ -499,11 +499,8 @@ func TestVMIGrouper_DifferentVMIsNotSerialized(t *testing.T) {
 			t.Errorf("Expected test-ns/vm2, got %s", vmiKey)
 		}
 
-		// Check that vm1 hasn't completed yet - they should run in parallel
-		if atomic.LoadInt32(&vm1Done) == 1 {
-			// This is fine - vm1 might have finished first if scheduler is unfair
-			// The important thing is they CAN run concurrently
-		}
+		// Note: We don't assert vm1 hasn't finished - scheduler timing is unpredictable.
+		// The key validation is that both complete (below) and use different VMI keys.
 		atomic.StoreInt32(&vm2Done, 1)
 	}()
 
