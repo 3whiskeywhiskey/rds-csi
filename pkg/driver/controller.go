@@ -463,6 +463,21 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Acquire per-VMI lock if serialization is enabled
+	// This prevents concurrent volume operations on the same VMI from racing
+	if vmiGrouper := cs.driver.GetVMIGrouper(); vmiGrouper != nil {
+		volCtx := req.GetVolumeContext()
+		pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+		pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+		if pvcNamespace != "" && pvcName != "" {
+			vmiKey, unlock := vmiGrouper.LockVMI(ctx, pvcNamespace, pvcName)
+			if vmiKey != "" {
+				defer unlock()
+				klog.V(3).Infof("VMI serialization active for volume %s (VMI: %s)", volumeID, vmiKey)
+			}
+		}
+	}
+
 	// Verify volume exists on RDS
 	volume, err := cs.driver.rdsClient.GetVolume(volumeID)
 	if err != nil {
