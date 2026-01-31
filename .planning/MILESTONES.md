@@ -25,3 +25,49 @@
 **What's next:** Production testing on hardware, then consider v2 features (background health monitoring, external-health-monitor sidecar integration)
 
 ---
+
+## v0.3.0 Volume Fencing (Shipped: 2026-01-31)
+
+**Delivered:** ControllerPublish/Unpublish implementation — prevents multi-node attachment conflicts
+
+**Phases completed:** 5-7 (12 plans total)
+
+**Key accomplishments:**
+- AttachmentManager with persistent state via PV annotations
+- ControllerPublishVolume enforces RWO semantics with FAILED_PRECONDITION on conflicts
+- Background reconciler cleans stale attachments from deleted nodes
+- Grace period (30s) prevents false conflicts during KubeVirt live migrations
+- Prometheus metrics for attachment operations
+- VMI serialization option to mitigate upstream kubevirt concurrency issues
+
+**Git range:** v0.3.0 → v0.4.0
+
+---
+
+## v0.5.0 KubeVirt Hotplug Fix (In Progress)
+
+**Goal:** Fix upstream KubeVirt bug where concurrent volume hotplug causes VM pauses
+
+**Status:** Phase 9 complete, Phase 10 (upstream contribution) pending
+
+**Phases:** 8-10
+
+**Phase 9 Accomplishments (Implement and Test Fix):**
+- Fork created: github.com/whiskey-works/kubevirt with GitHub Actions CI
+- Fix implemented: `allHotplugVolumesReady()` check in cleanupAttachmentPods
+- Unit tests: 5 tests covering bug reproduction and regression scenarios
+- Manual validation: Multi-volume hotplug on metal cluster - PASSED
+  - VM stays Running during concurrent hotplug (no pause)
+  - Volume removal works correctly
+  - No I/O errors observed
+- Images: ghcr.io/whiskey-works/kubevirt/*:hotplug-fix-v1-708d58b902
+
+**Related issues:**
+- kubevirt/kubevirt#6564, #9708, #16520
+- rds-csi#12
+
+**Next:** Create PR to kubevirt/kubevirt with fix + tests
+
+**See:** `.planning/milestones/v0.5-ROADMAP.md`
+
+---
