@@ -94,6 +94,9 @@ func (r *AttachmentReconciler) Stop() {
 	}
 	close(r.stopCh)
 	doneCh := r.doneCh
+	// Clear channels so subsequent Stop() calls are no-op
+	r.stopCh = nil
+	r.doneCh = nil
 	r.mu.Unlock()
 
 	// Wait for run() to exit
