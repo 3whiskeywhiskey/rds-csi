@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 
 ## Current Position
 
-Phase: 9 of 9 (Implement and Test Fix)
-Plan: 3 of 3 complete
-Status: Phase complete
-Last activity: 2026-01-31 — Completed 09-03-PLAN.md (manual validation on metal cluster)
+Phase: 10 of 10 (Upstream Contribution)
+Plan: 1 of 2 in progress
+Status: In progress
+Last activity: 2026-01-31 — Completed 10-01-PLAN.md (prepared commits for upstream PR)
 
-Progress: [█████████░] 90% (prior milestones) + v0.5 implementation complete
+Progress: [█████████░] 90% (prior milestones) + v0.5 implementation complete, upstream prep done
 
 ## Milestone History
 
@@ -73,6 +73,9 @@ Progress: [█████████░] 90% (prior milestones) + v0.5 impleme
 | CI-01      | Use GitHub Actions CI for KubeVirt builds | 09-03 | macOS incompatible with Bazel/Linux syscalls |
 | GHCR-01    | Made GHCR packages public for cluster access | 09-03 | Simpler than imagePullSecret |
 | TEST-06    | Test on nested K3s worker for realistic workload | 09-03 | Production-like validation scenario |
+| PREP-01    | Cherry-pick commits to exclude CI workflow files | 10-01 | Upstream doesn't need fork-specific CI |
+| PREP-02    | Use --signoff flag during cherry-pick for DCO | 10-01 | Simpler than interactive rebase |
+| PREP-03    | Base upstream-pr on upstream/main | 10-01 | Ensures PR applies cleanly to upstream |
 
 ### Pending Todos
 
@@ -94,7 +97,7 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 09-03-PLAN.md (Phase 9 complete)
+Stopped at: Completed 10-01-PLAN.md (prepared commits for upstream PR)
 Resume file: None
 
 ### Current Work State
@@ -132,10 +135,16 @@ Resume file: None
 - Test location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/vmi_test.go
 - Validated on: metal cluster with nested K3s worker (homelab-node-1)
 
-**Next phase:**
-- Phase 10: Upstream Contribution (create PR to kubevirt/kubevirt)
-- PR will include: fix (cc1b700), tests (6546421), validation results
-- References: kubevirt/kubevirt#6564, #9708, #16520
+**Phase 10 (Upstream Contribution):** ⏳ IN PROGRESS
+- ✓ 10-01: Prepare commits for upstream PR (wave 1)
+  - Created upstream-pr branch from upstream/main
+  - Cherry-picked fix commits with DCO sign-off
+  - Commits: dde549140a (fix), d9622dd922 (tests)
+  - Branch pushed to whiskey-works/kubevirt
+- ○ 10-02: Submit PR to kubevirt/kubevirt (wave 2)
+  - Open PR from upstream-pr branch
+  - Include validation results from 09-03
+  - Reference issues: #6564, #9708, #16520
 
 ## Developer Notes
 
@@ -147,4 +156,4 @@ Use this when pushing to `whiskey-works/*` repos to avoid SSH key mismatch with 
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 9 complete, fix validated on metal cluster*
+*Last updated: 2026-01-31 — Phase 10-01 complete, commits prepared for upstream PR*
