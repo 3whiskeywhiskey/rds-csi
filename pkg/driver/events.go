@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +33,11 @@ const (
 
 	// Attachment conflict events
 	EventReasonAttachmentConflict = "AttachmentConflict"
+
+	// Attachment lifecycle events
+	EventReasonVolumeAttached         = "VolumeAttached"
+	EventReasonVolumeDetached         = "VolumeDetached"
+	EventReasonStaleAttachmentCleared = "StaleAttachmentCleared"
 )
 
 // EventPoster posts Kubernetes events for mount operations
@@ -260,5 +266,65 @@ func (ep *EventPoster) PostAttachmentConflict(ctx context.Context, pvcNamespace,
 	}
 
 	klog.V(2).Infof("Posted attachment conflict event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostVolumeAttached posts a Normal event when a volume is attached to a node.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, nodeID, duration
+func (ep *EventPoster) PostVolumeAttached(ctx context.Context, pvcNamespace, pvcName, volumeID, nodeID string, duration time.Duration) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to get PVC %s/%s for volume attached event: %v", pvcNamespace, pvcName, err)
+		return nil // Don't fail the operation
+	}
+
+	eventMessage := fmt.Sprintf("[%s]: Attached to node %s (duration: %s)", volumeID, nodeID, duration.Round(time.Millisecond))
+	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonVolumeAttached, eventMessage)
+
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonVolumeAttached)
+	}
+
+	klog.V(2).Infof("Posted volume attached event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostVolumeDetached posts a Normal event when a volume is detached from a node.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, nodeID
+func (ep *EventPoster) PostVolumeDetached(ctx context.Context, pvcNamespace, pvcName, volumeID, nodeID string) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to get PVC %s/%s for volume detached event: %v", pvcNamespace, pvcName, err)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s]: Detached from node %s", volumeID, nodeID)
+	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonVolumeDetached, eventMessage)
+
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonVolumeDetached)
+	}
+
+	klog.V(2).Infof("Posted volume detached event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostStaleAttachmentCleared posts a Normal event when a stale attachment is cleared by reconciler.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, staleNodeID
+func (ep *EventPoster) PostStaleAttachmentCleared(ctx context.Context, pvcNamespace, pvcName, volumeID, staleNodeID string) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to get PVC %s/%s for stale attachment cleared event: %v", pvcNamespace, pvcName, err)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s]: Cleared stale attachment from deleted node %s", volumeID, staleNodeID)
+	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonStaleAttachmentCleared, eventMessage)
+
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonStaleAttachmentCleared)
+	}
+
+	klog.V(2).Infof("Posted stale attachment cleared event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 	return nil
 }
