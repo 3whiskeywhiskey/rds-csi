@@ -21,9 +21,9 @@ Requirements for production stability release. Each maps to roadmap phases.
 
 ### Connection Resilience
 
-- [ ] **CONN-01**: Driver sets kernel reconnection parameters (ctrl_loss_tmo, reconnect_delay) on connect
-- [ ] **CONN-02**: Driver uses exponential backoff with jitter for retry operations
-- [ ] **CONN-03**: User can configure timeouts via StorageClass parameters
+- [x] **CONN-01**: Driver sets kernel reconnection parameters (ctrl_loss_tmo, reconnect_delay) on connect
+- [x] **CONN-02**: Driver uses exponential backoff with jitter for retry operations
+- [x] **CONN-03**: User can configure timeouts via StorageClass parameters
 
 ### Observability
 
@@ -70,9 +70,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MOUNT-01 | Phase 2 | Complete |
 | MOUNT-02 | Phase 2 | Complete |
 | MOUNT-03 | Phase 2 | Complete |
-| CONN-01 | Phase 3 | Pending |
-| CONN-02 | Phase 3 | Pending |
-| CONN-03 | Phase 3 | Pending |
+| CONN-01 | Phase 3 | Complete |
+| CONN-02 | Phase 3 | Complete |
+| CONN-03 | Phase 3 | Complete |
 | OBS-01 | Phase 4 | Pending |
 | OBS-02 | Phase 4 | Pending |
 | OBS-03 | Phase 4 | Pending |
@@ -84,4 +84,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-30*
-*Last updated: 2026-01-30 — Phase 2 requirements complete*
+*Last updated: 2026-01-30 — Phase 3 requirements complete*
