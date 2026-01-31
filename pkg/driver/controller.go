@@ -395,6 +395,7 @@ func (cs *ControllerServer) postAttachmentConflictEvent(ctx context.Context, req
 // ControllerPublishVolume tracks volume attachment to a node and enforces RWO semantics.
 // Returns publish_context with NVMe connection parameters for NodeStageVolume.
 func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	startTime := time.Now()
 	volumeID := req.GetVolumeId()
 	nodeID := req.GetNodeId()
 
@@ -440,33 +441,52 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			}, nil
 		}
 
-		// CSI-06: Before rejecting, verify blocking node still exists
-		nodeExists, err := cs.validateBlockingNodeExists(ctx, existing.NodeID)
-		if err != nil {
-			// API error - fail closed to prevent data corruption
-			klog.Errorf("Failed to verify node %s existence: %v", existing.NodeID, err)
-			return nil, status.Errorf(codes.Internal, "failed to verify node %s: %v", existing.NodeID, err)
-		}
+		// Different node - check grace period FIRST
+		gracePeriod := cs.driver.GetAttachmentGracePeriod()
+		if gracePeriod > 0 && am.IsWithinGracePeriod(volumeID, gracePeriod) {
+			klog.V(2).Infof("Volume %s within grace period, allowing attachment handoff from %s to %s",
+				volumeID, existing.NodeID, nodeID)
 
-		if !nodeExists {
-			// Node deleted - auto-clear stale attachment (self-healing)
-			klog.Warningf("Volume %s attached to deleted node %s, clearing stale attachment", volumeID, existing.NodeID)
-			if err := am.UntrackAttachment(ctx, volumeID); err != nil {
-				klog.Warningf("Failed to clear stale attachment for volume %s: %v", volumeID, err)
-				// Continue anyway - in-memory state may be stale
+			// Record grace period usage metric
+			if cs.driver.metrics != nil {
+				cs.driver.metrics.RecordGracePeriodUsed()
 			}
-			// Fall through to allow new attachment
+
+			// Clear the old attachment and detach timestamp before new attach
+			if err := am.UntrackAttachment(ctx, volumeID); err != nil {
+				klog.Warningf("Failed to clear old attachment for volume %s during grace period handoff: %v", volumeID, err)
+			}
+			am.ClearDetachTimestamp(volumeID)
+			// Fall through to track new attachment
 		} else {
-			// CSI-02: Node exists - genuine RWO conflict
-			klog.Warningf("Volume %s already attached to node %s, rejecting attachment to node %s",
-				volumeID, existing.NodeID, nodeID)
+			// CSI-06: Before rejecting, verify blocking node still exists
+			nodeExists, err := cs.validateBlockingNodeExists(ctx, existing.NodeID)
+			if err != nil {
+				// API error - fail closed to prevent data corruption
+				klog.Errorf("Failed to verify node %s existence: %v", existing.NodeID, err)
+				return nil, status.Errorf(codes.Internal, "failed to verify node %s: %v", existing.NodeID, err)
+			}
 
-			// Post event for operator visibility (best effort)
-			cs.postAttachmentConflictEvent(ctx, req, existing.NodeID)
+			if !nodeExists {
+				// Node deleted - auto-clear stale attachment (self-healing)
+				klog.Warningf("Volume %s attached to deleted node %s, clearing stale attachment", volumeID, existing.NodeID)
+				if err := am.UntrackAttachment(ctx, volumeID); err != nil {
+					klog.Warningf("Failed to clear stale attachment for volume %s: %v", volumeID, err)
+					// Continue anyway - in-memory state may be stale
+				}
+				// Fall through to allow new attachment
+			} else {
+				// CSI-02: Node exists - genuine RWO conflict
+				klog.Warningf("Volume %s already attached to node %s, rejecting attachment to node %s",
+					volumeID, existing.NodeID, nodeID)
 
-			return nil, status.Errorf(codes.FailedPrecondition,
-				"volume %s already attached to node %s, cannot attach to %s",
-				volumeID, existing.NodeID, nodeID)
+				// Post event for operator visibility (best effort)
+				cs.postAttachmentConflictEvent(ctx, req, existing.NodeID)
+
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"volume %s already attached to node %s, cannot attach to %s",
+					volumeID, existing.NodeID, nodeID)
+			}
 		}
 	}
 
@@ -481,6 +501,11 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 		return nil, status.Errorf(codes.Internal, "failed to track attachment: %v", err)
 	}
 
+	// Record attachment success metric
+	if cs.driver.metrics != nil {
+		cs.driver.metrics.RecordAttachmentOp("attach", nil, time.Since(startTime))
+	}
+
 	klog.V(2).Infof("Successfully published volume %s to node %s", volumeID, nodeID)
 
 	return &csi.ControllerPublishVolumeResponse{
@@ -491,6 +516,7 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 // ControllerUnpublishVolume removes volume attachment tracking for a node.
 // This method is idempotent - returns success even if volume not currently attached.
 func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	startTime := time.Now()
 	volumeID := req.GetVolumeId()
 	nodeID := req.GetNodeId()
 
@@ -519,6 +545,11 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	if err := am.UntrackAttachment(ctx, volumeID); err != nil {
 		// Log but don't fail - unpublish must be idempotent (CONTEXT.md decision)
 		klog.Warningf("Error untracking attachment for volume %s: %v (returning success)", volumeID, err)
+	}
+
+	// Record detachment metric
+	if cs.driver.metrics != nil {
+		cs.driver.metrics.RecordAttachmentOp("detach", nil, time.Since(startTime))
 	}
 
 	klog.V(2).Infof("Successfully unpublished volume %s", volumeID)
