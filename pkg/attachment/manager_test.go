@@ -166,9 +166,9 @@ func TestAttachmentManager_ListAttachments(t *testing.T) {
 	ctx := context.Background()
 
 	// Track multiple volumes
-	am.TrackAttachment(ctx, "vol-1", "node-1")
-	am.TrackAttachment(ctx, "vol-2", "node-2")
-	am.TrackAttachment(ctx, "vol-3", "node-1")
+	_ = am.TrackAttachment(ctx, "vol-1", "node-1")
+	_ = am.TrackAttachment(ctx, "vol-2", "node-2")
+	_ = am.TrackAttachment(ctx, "vol-3", "node-1")
 
 	// List attachments
 	attachments := am.ListAttachments()
@@ -319,7 +319,7 @@ func TestAttachmentManager_ClearAttachment(t *testing.T) {
 	ctx := context.Background()
 
 	// Track then untrack
-	am.TrackAttachment(ctx, volumeID, nodeID)
+	_ = am.TrackAttachment(ctx, volumeID, nodeID)
 	err := am.UntrackAttachment(ctx, volumeID)
 	if err != nil {
 		t.Fatalf("UntrackAttachment failed: %v", err)
