@@ -11,11 +11,11 @@ import (
 
 // MockConnector implements the Connector interface for testing
 type MockConnector struct {
-	disconnectCalls   []string          // Track NQNs passed to DisconnectWithContext
-	disconnectError   error             // Error to return from DisconnectWithContext
-	resolver          *DeviceResolver   // The resolver to return
-	isConnectedResult map[string]bool   // Results for IsConnected calls
-	isConnectedError  error             // Error for IsConnected
+	disconnectCalls   []string        // Track NQNs passed to DisconnectWithContext
+	disconnectError   error           // Error to return from DisconnectWithContext
+	resolver          *DeviceResolver // The resolver to return
+	isConnectedResult map[string]bool // Results for IsConnected calls
+	isConnectedError  error           // Error for IsConnected
 }
 
 func NewMockConnector() *MockConnector {
@@ -85,46 +85,13 @@ func (m *MockConnector) SetPromMetrics(metrics *observability.Metrics) {
 	// No-op for mock
 }
 
-// MockResolver is a test helper to control resolver behavior
-type MockResolver struct {
-	connectedNQNs   []string          // NQNs returned by ListConnectedSubsystems
-	orphanedNQNs    map[string]bool   // Which NQNs are orphaned
-	listError       error             // Error from ListConnectedSubsystems
-	orphanCheckErr  map[string]error  // Errors from IsOrphanedSubsystem per NQN
-}
-
-// Helper to setup a mock resolver in a DeviceResolver
-func setupMockResolver(t *testing.T, connectedNQNs []string, orphanedNQNs map[string]bool) *DeviceResolver {
-	t.Helper()
-
-	// Create a resolver with a temporary sysfs root
-	tmpDir := t.TempDir()
-	cfg := ResolverConfig{
-		SysfsRoot: tmpDir,
-		TTL:       10 * time.Second,
-	}
-	resolver := NewDeviceResolverWithConfig(cfg)
-
-	// We need to mock ListConnectedSubsystems and IsOrphanedSubsystem
-	// Since these use the SysfsScanner and isConnectedFn, we'll set up a custom
-	// isConnectedFn that controls the orphan detection behavior
-
-	// For ListConnectedSubsystems, we need to create fake sysfs entries
-	// This is complex, so for testing OrphanCleaner we'll test differently
-
-	return resolver
-}
-
-// TestOrphanCleaner tests use a simpler approach - we test the OrphanCleaner
-// with a mock that controls the resolver behavior directly
-
 // testableOrphanCleaner wraps OrphanCleaner with controlled behavior
 type testableOrphanCleaner struct {
-	connector       *MockConnector
-	connectedNQNs   []string
-	orphanedNQNs    map[string]bool
-	listError       error
-	orphanCheckErr  map[string]error
+	connector      *MockConnector
+	connectedNQNs  []string
+	orphanedNQNs   map[string]bool
+	listError      error
+	orphanCheckErr map[string]error
 }
 
 func (oc *testableOrphanCleaner) CleanupOrphanedConnections(ctx context.Context) error {
@@ -159,7 +126,7 @@ func TestCleanupOrphanedConnections_NoOrphans(t *testing.T) {
 	mockConnector := NewMockConnector()
 
 	cleaner := &testableOrphanCleaner{
-		connector:     mockConnector,
+		connector: mockConnector,
 		connectedNQNs: []string{
 			"nqn.2000-02.com.mikrotik:pvc-test-1",
 			"nqn.2000-02.com.mikrotik:pvc-test-2",

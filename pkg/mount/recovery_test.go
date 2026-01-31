@@ -11,10 +11,10 @@ import (
 
 // mockMounter implements Mounter interface for testing
 type mockMounter struct {
-	forceUnmountErr   error
-	forceUnmountCalls int
-	mountErr          error
-	mountCalls        int
+	forceUnmountErr    error
+	forceUnmountCalls  int
+	mountErr           error
+	mountCalls         int
 	isMountInUseResult bool
 	isMountInUsePids   []int
 	isMountInUseErr    error
@@ -228,10 +228,10 @@ func (m *mockMounterWithRetry) IsMountInUse(path string) (bool, []int, error) {
 	return false, nil, nil
 }
 
-func (m *mockMounterWithRetry) Unmount(target string) error              { return nil }
-func (m *mockMounterWithRetry) IsLikelyMountPoint(path string) (bool, error) { return false, nil }
-func (m *mockMounterWithRetry) Format(device, fsType string) error       { return nil }
-func (m *mockMounterWithRetry) IsFormatted(device string) (bool, error) { return true, nil }
+func (m *mockMounterWithRetry) Unmount(target string) error                      { return nil }
+func (m *mockMounterWithRetry) IsLikelyMountPoint(path string) (bool, error)     { return false, nil }
+func (m *mockMounterWithRetry) Format(device, fsType string) error               { return nil }
+func (m *mockMounterWithRetry) IsFormatted(device string) (bool, error)          { return true, nil }
 func (m *mockMounterWithRetry) ResizeFilesystem(device, volumePath string) error { return nil }
 func (m *mockMounterWithRetry) GetDeviceStats(path string) (*DeviceStats, error) { return nil, nil }
 

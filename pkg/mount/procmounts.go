@@ -102,10 +102,10 @@ func parseMountInfoLine(line string) (MountInfo, error) {
 func unescapePath(path string) string {
 	// Common escape sequences in /proc/self/mountinfo
 	replacer := strings.NewReplacer(
-		`\040`, " ",  // space
+		`\040`, " ", // space
 		`\011`, "\t", // tab
 		`\012`, "\n", // newline
-		`\134`, `\`,  // backslash
+		`\134`, `\`, // backslash
 	)
 	return replacer.Replace(path)
 }

@@ -230,8 +230,8 @@ func TestRetryWithBackoff_ExhaustsRetries(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error but got nil")
 	}
-	if err != wait.ErrWaitTimeout {
-		t.Errorf("Expected ErrWaitTimeout, got: %v", err)
+	if !wait.Interrupted(err) {
+		t.Errorf("Expected interrupted/timeout error, got: %v", err)
 	}
 	if attemptCount != 3 {
 		t.Errorf("Expected 3 attempts (all retries exhausted), got %d", attemptCount)

@@ -65,14 +65,14 @@ func (r *MountRecoverer) SetMetrics(metrics *observability.Metrics) {
 // Returns a RecoveryResult with details about the recovery attempt
 //
 // Recovery process:
-// 1. Resolve current device from NQN
-// 2. For each attempt (up to MaxAttempts):
-//    a. Try ForceUnmount with NormalUnmountWait timeout
-//    b. If unmount fails with "in use" error: return error (don't retry)
-//    c. If unmount succeeds: resolve new device path and mount
-//    d. If mount succeeds: return success
-//    e. If mount fails: log warning, sleep with exponential backoff, continue
-// 3. If all attempts fail: return result with FinalError
+//  1. Resolve current device from NQN
+//  2. For each attempt (up to MaxAttempts):
+//     a. Try ForceUnmount with NormalUnmountWait timeout
+//     b. If unmount fails with "in use" error: return error (don't retry)
+//     c. If unmount succeeds: resolve new device path and mount
+//     d. If mount succeeds: return success
+//     e. If mount fails: log warning, sleep with exponential backoff, continue
+//  3. If all attempts fail: return result with FinalError
 func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn string, fsType string, mountOptions []string) (*RecoveryResult, error) {
 	klog.V(2).Infof("Starting mount recovery for %s (NQN: %s)", mountPath, nqn)
 

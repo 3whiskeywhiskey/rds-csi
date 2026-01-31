@@ -23,8 +23,8 @@ type Metrics struct {
 	volumeOpsDuration *prometheus.HistogramVec
 
 	// NVMe connection metrics
-	nvmeConnectsTotal    *prometheus.CounterVec
-	nvmeConnectDuration  prometheus.Histogram
+	nvmeConnectsTotal     *prometheus.CounterVec
+	nvmeConnectDuration   prometheus.Histogram
 	nvmeConnectionsActive prometheus.Gauge
 
 	// Mount operation metrics

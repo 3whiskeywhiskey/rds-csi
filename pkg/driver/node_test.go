@@ -107,12 +107,12 @@ func createNodeServerWithStaleBehavior(mounter mount.Mounter, behavior staleChec
 
 	// Create controller directory with NQN
 	ctrlDir := filepath.Join(tmpDir, "class", "nvme", controllerName)
-	os.MkdirAll(ctrlDir, 0755)
-	os.WriteFile(filepath.Join(ctrlDir, "subsysnqn"), []byte(nqn+"\n"), 0644)
+	_ = os.MkdirAll(ctrlDir, 0755)
+	_ = os.WriteFile(filepath.Join(ctrlDir, "subsysnqn"), []byte(nqn+"\n"), 0644)
 
 	// Create block device entry
 	bdDir := filepath.Join(tmpDir, "class", "block", deviceName)
-	os.MkdirAll(bdDir, 0755)
+	_ = os.MkdirAll(bdDir, 0755)
 
 	// Create the resolver with mock sysfs
 	resolver := nvme.NewDeviceResolverWithConfig(nvme.ResolverConfig{
@@ -143,7 +143,7 @@ func createNodeServerWithStaleBehavior(mounter mount.Mounter, behavior staleChec
 		// For device mismatch, we need a second device that differs from resolved
 		// Create a mock device file that exists but differs from resolved path
 		mockDevice := filepath.Join(tmpDir, "nvme_old")
-		os.WriteFile(mockDevice, []byte{}, 0644)
+		_ = os.WriteFile(mockDevice, []byte{}, 0644)
 		checker.SetMountDeviceFunc(func(path string) (string, error) {
 			return mockDevice, nil
 		})
@@ -151,7 +151,7 @@ func createNodeServerWithStaleBehavior(mounter mount.Mounter, behavior staleChec
 		// Healthy - mount device exists and matches resolver
 		// Create a mock device file that we can use
 		mockDevice := filepath.Join(tmpDir, "class", "block", deviceName, "device")
-		os.WriteFile(mockDevice, []byte{}, 0644)
+		_ = os.WriteFile(mockDevice, []byte{}, 0644)
 
 		// The resolver returns /dev/nvmeXnY format, but EvalSymlinks on /dev/... will fail
 		// on macOS. So for healthy case, we need both paths to resolve to same thing.

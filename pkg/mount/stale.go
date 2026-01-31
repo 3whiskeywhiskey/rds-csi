@@ -21,12 +21,12 @@ const (
 
 // StaleInfo contains detailed information about a stale mount check
 type StaleInfo struct {
-	MountDevice      string // Device path from /proc/mountinfo
-	ResolvedMount    string // Resolved symlinks for mount device
-	CurrentDevice    string // Device path from NQN resolution
-	ResolvedCurrent  string // Resolved symlinks for current device
-	IsStale          bool
-	Reason           StaleReason
+	MountDevice     string // Device path from /proc/mountinfo
+	ResolvedMount   string // Resolved symlinks for mount device
+	CurrentDevice   string // Device path from NQN resolution
+	ResolvedCurrent string // Resolved symlinks for current device
+	IsStale         bool
+	Reason          StaleReason
 }
 
 // StaleMountChecker detects stale mounts by comparing mount device with NQN resolution

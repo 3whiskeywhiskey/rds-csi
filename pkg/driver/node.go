@@ -40,9 +40,9 @@ type NodeServer struct {
 	nvmeConn     nvme.Connector
 	mounter      mount.Mounter
 	nodeID       string
-	eventPoster  *EventPoster              // for posting K8s events
-	staleChecker *mount.StaleMountChecker  // for detecting stale mounts
-	recoverer    *mount.MountRecoverer     // for recovering stale mounts
+	eventPoster  *EventPoster             // for posting K8s events
+	staleChecker *mount.StaleMountChecker // for detecting stale mounts
+	recoverer    *mount.MountRecoverer    // for recovering stale mounts
 }
 
 // NewNodeServer creates a new Node service
@@ -646,17 +646,17 @@ func (ns *NodeServer) checkAndRecoverMount(ctx context.Context, stagingPath, nqn
 
 	klog.Warningf("Stale mount detected at %s (reason: %s), attempting recovery", stagingPath, staleInfo.Reason)
 
-	// Post stale mount detection event
+	// Post stale mount detection event (ignore error - event posting is best effort)
 	if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-		ns.eventPoster.PostStaleMountDetected(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, staleInfo.MountDevice, staleInfo.CurrentDevice)
+		_ = ns.eventPoster.PostStaleMountDetected(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, staleInfo.MountDevice, staleInfo.CurrentDevice)
 	}
 
 	// Attempt recovery
 	result, err := ns.recoverer.Recover(ctx, stagingPath, nqn, fsType, mountOptions)
 	if err != nil {
-		// Recovery failed - post event and return error
+		// Recovery failed - post event and return error (ignore event error - best effort)
 		if ns.eventPoster != nil {
-			ns.eventPoster.PostRecoveryFailed(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, result.Attempts, err)
+			_ = ns.eventPoster.PostRecoveryFailed(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, result.Attempts, err)
 		}
 		return fmt.Errorf("mount recovery failed: %w", err)
 	}
@@ -665,16 +665,6 @@ func (ns *NodeServer) checkAndRecoverMount(ctx context.Context, stagingPath, nqn
 		stagingPath, result.Attempts, result.OldDevice, result.NewDevice)
 
 	return nil
-}
-
-// postEvent posts an event if eventPoster is configured
-// Silently does nothing if eventPoster is nil (events disabled)
-func (ns *NodeServer) postEvent(ctx context.Context, pvcNamespace, pvcName, volumeID, reason, message string) {
-	if ns.eventPoster == nil {
-		return
-	}
-	// Actual posting handled by EventPoster methods in Plan 04
-	// This is a placeholder for future integration
 }
 
 // volumeIDToNQN converts a volume ID to an NVMe Qualified Name

@@ -9,9 +9,6 @@ import (
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 )
 
-// mockGetMountDev allows injecting custom getMountDev behavior for testing
-type mockGetMountDev func(path string) (string, error)
-
 // createMockResolver creates a mock DeviceResolver for testing
 func createMockResolver(t *testing.T, nqn string, devicePath string, shouldError bool) *nvme.DeviceResolver {
 	t.Helper()

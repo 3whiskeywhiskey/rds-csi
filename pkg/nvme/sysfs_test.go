@@ -228,8 +228,8 @@ func TestSysfsScanner_FindBlockDevice(t *testing.T) {
 			{
 				name:         "nvme0",
 				nqn:          "nqn.2000-02.com.mikrotik:pvc-test-123",
-				namespaces:   []string{},                // No namespace dirs under controller
-				blockDevices: []string{"nvme0n1"},       // Block device exists in /sys/class/block
+				namespaces:   []string{},          // No namespace dirs under controller
+				blockDevices: []string{"nvme0n1"}, // Block device exists in /sys/class/block
 			},
 		})
 

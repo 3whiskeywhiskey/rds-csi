@@ -60,8 +60,8 @@ func RetryWithBackoff(ctx context.Context, backoff wait.Backoff, fn func() error
 	})
 
 	// If wait.ExponentialBackoffWithContext returned due to exhaustion,
-	// err will be wait.ErrWaitTimeout and we should include the last error
-	if err == wait.ErrWaitTimeout && lastErr != nil {
+	// err will be an interrupted error and we should log the last error
+	if wait.Interrupted(err) && lastErr != nil {
 		klog.V(2).Infof("All %d retry attempts exhausted, last error: %v", attempt, lastErr)
 	}
 
