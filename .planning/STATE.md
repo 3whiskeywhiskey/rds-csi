@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 5 of 7 (Attachment Manager Foundation)
-Plan: Not yet planned
-Status: Ready to plan
-Last activity: 2026-01-31 — Roadmap created for v0.3.0
+Plan: 1 of 3
+Status: In progress
+Last activity: 2026-01-31 — Completed 05-01-PLAN.md
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 10%
 
 ## Milestone History
 
@@ -30,9 +30,14 @@ Progress: [░░░░░░░░░░] 0%
 
 ### Decisions
 
-- Use ControllerPublish/Unpublish for fencing (standard CSI approach)
-- Store attachment state in-memory + PV annotations (survives restarts)
-- Start from Phase 5 (continues from v1 Phase 4)
+| ID        | Decision                                   | Phase | Context                      |
+| --------- | ------------------------------------------ | ----- | ---------------------------- |
+| ROADMAP-1 | Use ControllerPublish/Unpublish for fencing | 05    | Standard CSI approach        |
+| ROADMAP-2 | Store state in-memory + PV annotations      | 05    | Survives controller restarts |
+| ROADMAP-3 | Start from Phase 5 (continues from v1)      | 05    | v1 shipped Phase 4           |
+| ATTACH-01 | In-memory map with RWMutex for tracking     | 05-01 | Simple, fast, single controller |
+| ATTACH-02 | Per-volume locking with VolumeLockManager   | 05-01 | Prevents deadlocks, allows concurrency |
+| ATTACH-03 | Lock order: release manager before per-volume | 05-01 | Critical deadlock prevention |
 
 ### Pending Todos
 
@@ -48,9 +53,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: v0.3.0 roadmap created with 3 phases (5-7)
+Stopped at: Completed 05-01-PLAN.md (Attachment Manager Foundation)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — v0.3.0 roadmap created*
+*Last updated: 2026-01-31 — Completed plan 05-01*
