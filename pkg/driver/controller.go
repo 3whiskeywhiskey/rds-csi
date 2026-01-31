@@ -104,16 +104,25 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// Get parameters from StorageClass for response context
 		params := req.GetParameters()
 
+		// Parse NVMe connection parameters from StorageClass
+		nvmeParams, err := ParseNVMEConnectionParams(params)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
+		}
+
 		return &csi.CreateVolumeResponse{
 			Volume: &csi.Volume{
 				VolumeId:      volumeID,
 				CapacityBytes: existingVolume.FileSizeBytes,
 				VolumeContext: map[string]string{
-					"rdsAddress":  cs.getRDSAddress(params),
-					"nvmeAddress": cs.getNVMEAddress(params),
-					"nvmePort":    fmt.Sprintf("%d", existingVolume.NVMETCPPort),
-					"nqn":         existingVolume.NVMETCPNQN,
-					"volumePath":  existingVolume.FilePath,
+					"rdsAddress":     cs.getRDSAddress(params),
+					"nvmeAddress":    cs.getNVMEAddress(params),
+					"nvmePort":       fmt.Sprintf("%d", existingVolume.NVMETCPPort),
+					"nqn":            existingVolume.NVMETCPNQN,
+					"volumePath":     existingVolume.FilePath,
+					"ctrlLossTmo":    fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+					"reconnectDelay": fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+					"keepAliveTmo":   fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
 				},
 			},
 		}, nil
@@ -134,6 +143,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil {
 			nvmePort = port
 		}
+	}
+
+	// Parse NVMe connection parameters from StorageClass
+	nvmeParams, err := ParseNVMEConnectionParams(params)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
 	}
 
 	// Generate NQN
@@ -186,11 +201,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			VolumeId:      volumeID,
 			CapacityBytes: requiredBytes,
 			VolumeContext: map[string]string{
-				"rdsAddress":  cs.getRDSAddress(params),
-				"nvmeAddress": cs.getNVMEAddress(params),
-				"nvmePort":    fmt.Sprintf("%d", nvmePort),
-				"nqn":         nqn,
-				"volumePath":  filePath,
+				"rdsAddress":     cs.getRDSAddress(params),
+				"nvmeAddress":    cs.getNVMEAddress(params),
+				"nvmePort":       fmt.Sprintf("%d", nvmePort),
+				"nqn":            nqn,
+				"volumePath":     filePath,
+				"ctrlLossTmo":    fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+				"reconnectDelay": fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+				"keepAliveTmo":   fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
 			},
 		},
 	}, nil

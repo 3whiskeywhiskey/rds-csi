@@ -23,6 +23,12 @@ type Connector interface {
 	// ConnectWithContext establishes connection with context for timeout/cancellation
 	ConnectWithContext(ctx context.Context, target Target) (string, error)
 
+	// ConnectWithConfig establishes connection with custom connection config
+	ConnectWithConfig(ctx context.Context, target Target, config ConnectionConfig) (string, error)
+
+	// ConnectWithRetry connects with exponential backoff retry on transient failures
+	ConnectWithRetry(ctx context.Context, target Target, config ConnectionConfig) (string, error)
+
 	// Disconnect terminates connection to NVMe/TCP target
 	Disconnect(nqn string) error
 
@@ -469,7 +475,13 @@ func NewConnectorWithConfig(config Config) Connector {
 }
 
 // ConnectWithContext establishes NVMe/TCP connection with context
+// Uses default connection configuration for backward compatibility
 func (c *connector) ConnectWithContext(ctx context.Context, target Target) (string, error) {
+	return c.ConnectWithConfig(ctx, target, DefaultConnectionConfig())
+}
+
+// ConnectWithConfig establishes NVMe/TCP connection with custom connection config
+func (c *connector) ConnectWithConfig(ctx context.Context, target Target, config ConnectionConfig) (string, error) {
 	// SECURITY: Validate NQN format before using in commands
 	if err := utils.ValidateNQN(target.NQN); err != nil {
 		return "", fmt.Errorf("invalid target NQN: %w", err)
@@ -528,18 +540,8 @@ func (c *connector) ConnectWithContext(ctx context.Context, target Target) (stri
 		}
 	}
 
-	// Build nvme connect command
-	args := []string{
-		"connect",
-		"-t", target.Transport,
-		"-a", target.TargetAddress,
-		"-s", fmt.Sprintf("%d", target.TargetPort),
-		"-n", target.NQN,
-	}
-
-	if target.HostNQN != "" {
-		args = append(args, "-q", target.HostNQN)
-	}
+	// Build nvme connect command with connection parameters
+	args := BuildConnectArgs(target, config)
 
 	// Execute with context
 	// Use execCommand for test mocking if set, otherwise use exec.CommandContext
@@ -576,6 +578,34 @@ func (c *connector) ConnectWithContext(ctx context.Context, target Target) (stri
 	}
 
 	klog.V(2).Infof("Successfully connected to NVMe target, device: %s", devicePath)
+	return devicePath, nil
+}
+
+// ConnectWithRetry connects with exponential backoff retry on transient failures
+func (c *connector) ConnectWithRetry(ctx context.Context, target Target, config ConnectionConfig) (string, error) {
+	var devicePath string
+	var lastErr error
+
+	backoff := utils.DefaultBackoffConfig()
+
+	err := utils.RetryWithBackoff(ctx, backoff, func() error {
+		path, connectErr := c.ConnectWithConfig(ctx, target, config)
+		if connectErr != nil {
+			lastErr = connectErr
+			klog.V(2).Infof("Connection attempt failed for NQN %s: %v (will retry if transient)", target.NQN, connectErr)
+			return connectErr
+		}
+		devicePath = path
+		return nil
+	})
+
+	if err != nil {
+		if lastErr != nil {
+			return "", fmt.Errorf("connection failed after retries: %w", lastErr)
+		}
+		return "", err
+	}
+
 	return devicePath, nil
 }
 
