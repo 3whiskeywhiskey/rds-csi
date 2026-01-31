@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 
 ## Current Position
 
-Phase: 7 of 7 (Robustness and Observability)
-Plan: 4 of 4 complete
-Status: Phase complete
-Last activity: 2026-01-31 — Phase 7 complete, all goals verified
+Phase: 9 of 9 (Implement and Test Fix)
+Plan: 1 of 3 complete
+Status: In progress
+Last activity: 2026-01-31 — Completed 09-01-PLAN.md (document code path and implement fix)
 
-Progress: [██████████] 100%
+Progress: [████████░░] 80% (prior milestones) + 09-01 of v0.5
 
 ## Milestone History
 
@@ -25,6 +25,10 @@ Progress: [██████████] 100%
 - **v0.3.0 Volume Fencing** — in progress (all phases complete, pending audit)
   - Phases 5-7, 12 plans
   - ControllerPublish/Unpublish implementation
+
+- **v0.5.0 KubeVirt Hotplug Fix** — in progress
+  - Phases 8-10 (collapsed 9+10 into single implementation phase)
+  - Fix upstream KubeVirt concurrent hotplug bug
 
 ## Accumulated Context
 
@@ -62,6 +66,8 @@ Progress: [██████████] 100%
 | EVENTS-02 | EventPoster interface in attachment package | 07-04 | Avoid circular dependency with driver |
 | EVENTS-03 | Best-effort event posting pattern | 07-04 | Never fail operations for observability |
 | EVENTS-04 | PV lookup for PVC info in unpublish | 07-04 | volumeContext not available in unpublish |
+| HOTPLUG-01 | Check ALL hotplug volumes for VolumeReady | 09-01 | Simpler than tracking "new" volumes |
+| HOTPLUG-02 | Early return from cleanupAttachmentPods | 09-01 | Cleaner than per-pod skip logic |
 
 ### Pending Todos
 
@@ -74,12 +80,46 @@ Production issue motivating this milestone:
 - `CONFLICT: PVC is in use by VMI` errors
 - No ControllerPublish/Unpublish = no fencing
 
+### Roadmap Evolution
+
+- v0.5 milestone added: KubeVirt hotplug fix (phases 8-11)
+  - Motivation: GitHub issue #12, kubevirt/kubevirt#9708
+  - Approach: Fork KubeVirt, fix virt-controller, contribute upstream
+
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Phase 7 complete, milestone ready for audit
+Stopped at: Completed 09-01-PLAN.md
 Resume file: None
+
+### Current Work State
+
+**v0.5 KubeVirt Hotplug Fix Progress:**
+
+**Phase 8 (Fork and CI/CD Setup):**
+- ✓ Fork created: https://github.com/whiskey-works/kubevirt
+- ✓ CI workflow added: `.github/workflows/build-images.yaml`
+- ✓ PR #1 build passed
+- ○ Merge PR #1, test deployment with custom images
+
+**Phase 9 (Implement and Test Fix):**
+- ✓ 09-01: Document code path and implement fix (wave 1) - COMPLETE
+  - Code path documented in 09-01-CODEPATH.md
+  - Fix committed to hotplug-fix-v1 branch (cc1b700)
+  - allHotplugVolumesReady() checks VolumeReady phase before pod deletion
+- ○ 09-02: Unit tests for fix (wave 2)
+- ○ 09-03: Manual validation on metal cluster (wave 3, has checkpoint)
+
+**Fix summary:**
+- Added allHotplugVolumesReady() helper function
+- Modified cleanupAttachmentPods() to check all volumes ready before deleting old pods
+- Fix location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/volume-hotplug.go
+
+**Next steps:**
+1. Execute 09-02-PLAN.md (unit tests)
+2. Execute 09-03-PLAN.md (manual validation)
+3. Push hotplug-fix-v1 branch, create PR to trigger CI
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 7 complete, milestone ready for audit*
+*Last updated: 2026-01-31 — 09-01 complete, fix implemented*
