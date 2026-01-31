@@ -469,3 +469,165 @@ func TestAttachmentManager_PersistRollback(t *testing.T) {
 		t.Errorf("Expected nodeID %s, got %s", nodeID, state.NodeID)
 	}
 }
+
+func TestIsWithinGracePeriod_NoDetachTimestamp(t *testing.T) {
+	am := NewAttachmentManager(nil)
+
+	// Volume never tracked/detached should not be within grace period
+	result := am.IsWithinGracePeriod("pvc-never-existed", 30*time.Second)
+	if result {
+		t.Error("Expected IsWithinGracePeriod to return false for non-existent volume")
+	}
+}
+
+func TestIsWithinGracePeriod_WithinPeriod(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-test-grace-within"
+	nodeID := "node-1"
+
+	// Track and then untrack to create detach timestamp
+	err := am.TrackAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		t.Fatalf("TrackAttachment failed: %v", err)
+	}
+
+	err = am.UntrackAttachment(ctx, volumeID)
+	if err != nil {
+		t.Fatalf("UntrackAttachment failed: %v", err)
+	}
+
+	// Check immediately after detach (should be within grace period)
+	result := am.IsWithinGracePeriod(volumeID, 30*time.Second)
+	if !result {
+		t.Error("Expected IsWithinGracePeriod to return true immediately after detach")
+	}
+}
+
+func TestIsWithinGracePeriod_OutsidePeriod(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-test-grace-outside"
+	nodeID := "node-1"
+
+	// Track and then untrack
+	err := am.TrackAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		t.Fatalf("TrackAttachment failed: %v", err)
+	}
+
+	err = am.UntrackAttachment(ctx, volumeID)
+	if err != nil {
+		t.Fatalf("UntrackAttachment failed: %v", err)
+	}
+
+	// Use a very short grace period that we've already exceeded
+	result := am.IsWithinGracePeriod(volumeID, 1*time.Nanosecond)
+	// Sleep a tiny bit to ensure we're past the grace period
+	time.Sleep(1 * time.Millisecond)
+
+	result = am.IsWithinGracePeriod(volumeID, 1*time.Nanosecond)
+	if result {
+		t.Error("Expected IsWithinGracePeriod to return false after grace period expired")
+	}
+}
+
+func TestGetDetachTimestamp(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-test-detach-time"
+	nodeID := "node-1"
+
+	// Before any tracking, should return zero time
+	ts := am.GetDetachTimestamp(volumeID)
+	if !ts.IsZero() {
+		t.Error("Expected zero timestamp for never-tracked volume")
+	}
+
+	// Track and untrack
+	_ = am.TrackAttachment(ctx, volumeID, nodeID)
+	_ = am.UntrackAttachment(ctx, volumeID)
+
+	// Should have a non-zero timestamp now
+	ts = am.GetDetachTimestamp(volumeID)
+	if ts.IsZero() {
+		t.Error("Expected non-zero timestamp after untrack")
+	}
+
+	// Timestamp should be recent
+	if time.Since(ts) > 5*time.Second {
+		t.Error("Detach timestamp is too old")
+	}
+}
+
+func TestClearDetachTimestamp(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-test-clear-time"
+	nodeID := "node-1"
+
+	// Track and untrack to create timestamp
+	_ = am.TrackAttachment(ctx, volumeID, nodeID)
+	_ = am.UntrackAttachment(ctx, volumeID)
+
+	// Verify timestamp exists
+	ts := am.GetDetachTimestamp(volumeID)
+	if ts.IsZero() {
+		t.Fatal("Expected timestamp to exist before clear")
+	}
+
+	// Clear it
+	am.ClearDetachTimestamp(volumeID)
+
+	// Should no longer be within grace period
+	result := am.IsWithinGracePeriod(volumeID, 30*time.Second)
+	if result {
+		t.Error("Expected IsWithinGracePeriod to return false after clearing timestamp")
+	}
+}
+
+func TestGracePeriod_LiveMigrationScenario(t *testing.T) {
+	// Simulates KubeVirt live migration: detach from node-1, attach to node-2
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-kubevirt-vm-disk"
+	node1 := "worker-node-1"
+	node2 := "worker-node-2"
+	gracePeriod := 30 * time.Second
+
+	// Initial attachment to node-1
+	err := am.TrackAttachment(ctx, volumeID, node1)
+	if err != nil {
+		t.Fatalf("Initial track failed: %v", err)
+	}
+
+	// Detach from node-1 (VM migrating)
+	err = am.UntrackAttachment(ctx, volumeID)
+	if err != nil {
+		t.Fatalf("Untrack failed: %v", err)
+	}
+
+	// Immediately try to attach to node-2 (migration target)
+	// Should be within grace period
+	if !am.IsWithinGracePeriod(volumeID, gracePeriod) {
+		t.Error("Expected to be within grace period immediately after detach")
+	}
+
+	// Clear timestamp as handoff completes
+	am.ClearDetachTimestamp(volumeID)
+
+	// Track to new node
+	err = am.TrackAttachment(ctx, volumeID, node2)
+	if err != nil {
+		t.Fatalf("Reattachment failed: %v", err)
+	}
+
+	// Verify attached to new node
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist")
+	}
+	if state.NodeID != node2 {
+		t.Errorf("Expected attachment to node %s, got %s", node2, state.NodeID)
+	}
+}
