@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-30)
 ## Current Position
 
 Phase: 4 of 4 (Observability)
-Plan: 3 of 5 complete (04-01, 04-02, 04-04)
+Plan: 4 of 5 complete (04-01, 04-02, 04-03, 04-04)
 Status: Phase 4 in progress
-Last activity: 2026-01-31 - Completed 04-02-PLAN.md
+Last activity: 2026-01-31 - Completed 04-03-PLAN.md
 
-Progress: [████████░░] 88% (15/17 plans complete)
+Progress: [█████████░] 94% (16/17 plans complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
-- Average duration: 2.3 min
-- Total execution time: 0.58 hours
+- Total plans completed: 16
+- Average duration: 2.4 min
+- Total execution time: 0.63 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [████████░░] 88% (15/17 plans complete)
 | 01-foundation | 3 | 9 min | 3 min |
 | 02-stale-mount-detection | 5 | 14 min | 2.8 min |
 | 03-reconnection-resilience | 4 | 11 min | 2.75 min |
-| 04-observability | 3 | 5 min | 1.7 min |
+| 04-observability | 4 | 10 min | 2.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-04 (5 min), 04-01 (1 min), 04-04 (1 min), 04-02 (3 min)
-- Trend: Phase 4 in progress - Prometheus metrics package created
+- Last 5 plans: 04-01 (1 min), 04-04 (1 min), 04-02 (3 min), 04-03 (5 min)
+- Trend: Phase 4 nearing completion - HTTP metrics server instrumented
 
 *Updated after each plan completion*
 
@@ -93,6 +93,9 @@ Recent decisions affecting current work:
 - Use custom prometheus.Registry instead of DefaultRegistry to avoid restart panics
 - All Prometheus metrics use rds_csi_ namespace prefix
 - Labels are low-cardinality (operation, status) to avoid metric explosion
+- Port 9809 for metrics server (common storage controller port)
+- Named return values for defer-based metrics recording
+- Setter injection (SetPromMetrics, SetMetrics) for optional metrics support
 
 ### Pending Todos
 
@@ -105,9 +108,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 04-02-PLAN.md - Prometheus metrics package
+Stopped at: Completed 04-03-PLAN.md - HTTP metrics server and instrumentation
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 - Phase 4 Plan 2 complete, Prometheus metrics package created*
+*Last updated: 2026-01-31 - Phase 4 Plan 3 complete, HTTP metrics server and CSI instrumentation*
