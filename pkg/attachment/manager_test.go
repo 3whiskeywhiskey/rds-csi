@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestAttachmentManager_TrackAttachment(t *testing.T) {
@@ -239,4 +243,229 @@ func TestAttachmentManager_ConcurrentTrack(t *testing.T) {
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && indexOf(s, substr) >= 0
+}
+
+// Helper to create test PV
+func createTestPV(volumeID, nodeID string) *corev1.PersistentVolume {
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: volumeID,
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       "rds.csi.srvlab.io",
+					VolumeHandle: volumeID,
+				},
+			},
+		},
+	}
+	if nodeID != "" {
+		pv.Annotations = map[string]string{
+			AnnotationAttachedNode: nodeID,
+			AnnotationAttachedAt:   metav1.Now().Format(metav1.RFC3339Micro),
+		}
+	}
+	return pv
+}
+
+func TestAttachmentManager_PersistAttachment(t *testing.T) {
+	volumeID := "pv-vol-1"
+	nodeID := "node-1"
+
+	// Create fake clientset with a PV
+	pv := createTestPV(volumeID, "")
+	fakeClient := fake.NewSimpleClientset(pv)
+
+	// Create AttachmentManager with fake client
+	am := NewAttachmentManager(fakeClient)
+	ctx := context.Background()
+
+	// Track attachment
+	err := am.TrackAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		t.Fatalf("TrackAttachment failed: %v", err)
+	}
+
+	// Get PV from fake client and verify annotation
+	updatedPV, err := fakeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Failed to get PV: %v", err)
+	}
+
+	if updatedPV.Annotations == nil {
+		t.Fatal("Expected PV to have annotations, but it's nil")
+	}
+
+	if updatedPV.Annotations[AnnotationAttachedNode] != nodeID {
+		t.Errorf("Expected annotation %s=%s, got %s", AnnotationAttachedNode, nodeID, updatedPV.Annotations[AnnotationAttachedNode])
+	}
+
+	if updatedPV.Annotations[AnnotationAttachedAt] == "" {
+		t.Errorf("Expected annotation %s to be set", AnnotationAttachedAt)
+	}
+}
+
+func TestAttachmentManager_ClearAttachment(t *testing.T) {
+	volumeID := "pv-vol-1"
+	nodeID := "node-1"
+
+	// Create PV with attachment annotations
+	pv := createTestPV(volumeID, nodeID)
+	fakeClient := fake.NewSimpleClientset(pv)
+
+	// Create AttachmentManager
+	am := NewAttachmentManager(fakeClient)
+	ctx := context.Background()
+
+	// Track then untrack
+	am.TrackAttachment(ctx, volumeID, nodeID)
+	err := am.UntrackAttachment(ctx, volumeID)
+	if err != nil {
+		t.Fatalf("UntrackAttachment failed: %v", err)
+	}
+
+	// Verify annotations removed from PV
+	updatedPV, err := fakeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Failed to get PV: %v", err)
+	}
+
+	if updatedPV.Annotations != nil {
+		if _, hasNode := updatedPV.Annotations[AnnotationAttachedNode]; hasNode {
+			t.Errorf("Expected %s annotation to be removed, but it's still present", AnnotationAttachedNode)
+		}
+		if _, hasAt := updatedPV.Annotations[AnnotationAttachedAt]; hasAt {
+			t.Errorf("Expected %s annotation to be removed, but it's still present", AnnotationAttachedAt)
+		}
+	}
+}
+
+func TestAttachmentManager_RebuildState(t *testing.T) {
+	ctx := context.Background()
+
+	// Create fake clientset with 3 PVs
+	pv1 := createTestPV("pv-1", "node-a")
+	pv2 := createTestPV("pv-2", "node-b")
+	pv3 := createTestPV("pv-3", "") // No annotations (not attached)
+
+	fakeClient := fake.NewSimpleClientset(pv1, pv2, pv3)
+
+	// Create AttachmentManager
+	am := NewAttachmentManager(fakeClient)
+
+	// Call Initialize (which calls RebuildState)
+	err := am.Initialize(ctx)
+	if err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	// Verify ListAttachments returns 2 entries (pv-1 and pv-2)
+	attachments := am.ListAttachments()
+	if len(attachments) != 2 {
+		t.Errorf("Expected 2 attachments after rebuild, got %d", len(attachments))
+	}
+
+	// Verify correct volume-to-node mappings
+	if state, exists := attachments["pv-1"]; exists {
+		if state.NodeID != "node-a" {
+			t.Errorf("Expected pv-1 on node-a, got %s", state.NodeID)
+		}
+	} else {
+		t.Error("Expected pv-1 to be in attachments")
+	}
+
+	if state, exists := attachments["pv-2"]; exists {
+		if state.NodeID != "node-b" {
+			t.Errorf("Expected pv-2 on node-b, got %s", state.NodeID)
+		}
+	} else {
+		t.Error("Expected pv-2 to be in attachments")
+	}
+
+	// Verify pv-3 is not in attachments (no annotations)
+	if _, exists := attachments["pv-3"]; exists {
+		t.Error("Expected pv-3 to not be in attachments (no annotations)")
+	}
+}
+
+func TestAttachmentManager_RebuildState_IgnoresOtherDrivers(t *testing.T) {
+	ctx := context.Background()
+
+	// Create PV with different driver
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pv-other",
+			Annotations: map[string]string{
+				AnnotationAttachedNode: "node-1",
+				AnnotationAttachedAt:   metav1.Now().Format(metav1.RFC3339Micro),
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       "other.csi.io",
+					VolumeHandle: "pv-other",
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewSimpleClientset(pv)
+	am := NewAttachmentManager(fakeClient)
+
+	// RebuildState should not include it
+	err := am.RebuildState(ctx)
+	if err != nil {
+		t.Fatalf("RebuildState failed: %v", err)
+	}
+
+	attachments := am.ListAttachments()
+	if len(attachments) != 0 {
+		t.Errorf("Expected 0 attachments (different driver), got %d", len(attachments))
+	}
+}
+
+func TestAttachmentManager_RebuildState_NoClient(t *testing.T) {
+	// Create AttachmentManager with nil k8sClient
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+
+	// RebuildState should return nil (not error)
+	err := am.RebuildState(ctx)
+	if err != nil {
+		t.Fatalf("RebuildState with nil client should not error, got: %v", err)
+	}
+
+	// Attachments should be empty
+	attachments := am.ListAttachments()
+	if len(attachments) != 0 {
+		t.Errorf("Expected 0 attachments (nil client), got %d", len(attachments))
+	}
+}
+
+func TestAttachmentManager_PersistRollback(t *testing.T) {
+	volumeID := "pv-nonexistent"
+	nodeID := "node-1"
+
+	// Create fake client WITHOUT the PV (simulate PV not existing)
+	fakeClient := fake.NewSimpleClientset()
+
+	am := NewAttachmentManager(fakeClient)
+	ctx := context.Background()
+
+	// Track attachment - should succeed (persistence failure is non-fatal for missing PV)
+	err := am.TrackAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		t.Fatalf("TrackAttachment should succeed even if PV doesn't exist yet, got: %v", err)
+	}
+
+	// Verify in-memory state is still set (persistence failure for missing PV is logged but not fatal)
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Error("Expected attachment to exist in memory even if PV doesn't exist")
+	}
+	if state != nil && state.NodeID != nodeID {
+		t.Errorf("Expected nodeID %s, got %s", nodeID, state.NodeID)
+	}
 }
