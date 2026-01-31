@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 6 of 7 (CSI Publish/Unpublish)
-Plan: 2 of 3 complete
-Status: In progress
-Last activity: 2026-01-31 — Completed 06-02-PLAN.md
+Plan: 3 of 3 complete
+Status: Phase complete
+Last activity: 2026-01-31 — Completed 06-03-PLAN.md
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 60%
 
 ## Milestone History
 
@@ -48,6 +48,8 @@ Progress: [█████░░░░░] 50%
 | CSI-05    | snake_case keys in publish_context          | 06-02 | Matches volumeContext conventions |
 | CSI-06    | Validate blocking node exists, auto-clear if deleted | 06-02 | Self-healing for stale state |
 | CSI-07    | Fail-closed on K8s API errors              | 06-02 | Safety over availability      |
+| TEST-01   | Test volume IDs use valid UUID format      | 06-03 | Required by validation        |
+| TEST-02   | MockClient implements full RDSClient       | 06-03 | Test isolation                |
 
 ### Pending Todos
 
@@ -63,9 +65,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 06-02-PLAN.md
+Stopped at: Completed 06-03-PLAN.md (Phase 6 complete)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Completed 06-02-PLAN.md*
+*Last updated: 2026-01-31 — Completed 06-03-PLAN.md*
