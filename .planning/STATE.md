@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 6 of 7 (CSI Publish/Unpublish)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In progress
-Last activity: 2026-01-31 — Completed 06-01-PLAN.md
+Last activity: 2026-01-31 — Completed 06-02-PLAN.md
 
-Progress: [████░░░░░░] 40%
+Progress: [█████░░░░░] 50%
 
 ## Milestone History
 
@@ -43,6 +43,11 @@ Progress: [████░░░░░░] 40%
 | ATTACH-06 | Initialize before orphan reconciler         | 05-02 | State ready before operations |
 | CSI-01    | Warning event type for attachment conflicts | 06-01 | Blocks pod scheduling         |
 | CSI-02    | Actionable message format with both nodes   | 06-01 | Operator visibility           |
+| CSI-03    | Idempotent same-node publish returns success | 06-02 | CSI spec compliance           |
+| CSI-04    | FAILED_PRECONDITION (code 9) for RWO conflicts | 06-02 | Standard CSI error code       |
+| CSI-05    | snake_case keys in publish_context          | 06-02 | Matches volumeContext conventions |
+| CSI-06    | Validate blocking node exists, auto-clear if deleted | 06-02 | Self-healing for stale state |
+| CSI-07    | Fail-closed on K8s API errors              | 06-02 | Safety over availability      |
 
 ### Pending Todos
 
@@ -58,9 +63,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 06-01-PLAN.md
+Stopped at: Completed 06-02-PLAN.md
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Completed 06-01-PLAN.md*
+*Last updated: 2026-01-31 — Completed 06-02-PLAN.md*
