@@ -2,11 +2,19 @@ package driver
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 )
 
 func TestValidateVolumeCapabilities(t *testing.T) {
@@ -282,27 +290,8 @@ func TestUnimplementedMethods(t *testing.T) {
 	}
 
 	// Test all unimplemented methods return Unimplemented error
-	t.Run("ControllerPublishVolume", func(t *testing.T) {
-		_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{})
-		if err == nil {
-			t.Error("Expected unimplemented error")
-		}
-		st, _ := status.FromError(err)
-		if st.Code() != codes.Unimplemented {
-			t.Errorf("Expected Unimplemented code, got %v", st.Code())
-		}
-	})
-
-	t.Run("ControllerUnpublishVolume", func(t *testing.T) {
-		_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{})
-		if err == nil {
-			t.Error("Expected unimplemented error")
-		}
-		st, _ := status.FromError(err)
-		if st.Code() != codes.Unimplemented {
-			t.Errorf("Expected Unimplemented code, got %v", st.Code())
-		}
-	})
+	// Note: ControllerPublishVolume and ControllerUnpublishVolume are now implemented
+	// Note: ControllerExpandVolume is now implemented, so it's not in this test
 
 	t.Run("CreateSnapshot", func(t *testing.T) {
 		_, err := cs.CreateSnapshot(context.Background(), &csi.CreateSnapshotRequest{})
@@ -314,8 +303,6 @@ func TestUnimplementedMethods(t *testing.T) {
 			t.Errorf("Expected Unimplemented code, got %v", st.Code())
 		}
 	})
-
-	// Note: ControllerExpandVolume is now implemented, so it's not in this test
 }
 
 func TestParseEndpoint(t *testing.T) {
@@ -373,5 +360,435 @@ func TestParseEndpoint(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// testControllerServer creates a ControllerServer with mock RDS client and fake k8s client
+func testControllerServer(t *testing.T, nodes ...*corev1.Node) (*ControllerServer, *rds.MockClient) {
+	t.Helper()
+
+	// Create fake k8s client with provided nodes
+	var objects []runtime.Object
+	for _, n := range nodes {
+		objects = append(objects, n)
+	}
+	k8sClient := fake.NewSimpleClientset(objects...)
+
+	// Create mock RDS client
+	mockRDS := rds.NewMockClient()
+	mockRDS.SetAddress("10.0.0.1")
+
+	// Create driver with attachment manager
+	driver := &Driver{
+		name:              DriverName,
+		version:           "test",
+		rdsClient:         mockRDS,
+		k8sClient:         k8sClient,
+		attachmentManager: attachment.NewAttachmentManager(k8sClient),
+	}
+	driver.addVolumeCapabilities()
+	driver.addControllerServiceCapabilities()
+
+	return NewControllerServer(driver), mockRDS
+}
+
+// testNode creates a test Node object
+func testNode(name string) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+}
+
+// ========================================
+// ControllerPublishVolume Tests
+// ========================================
+
+// Test volume IDs must be valid UUIDs (pvc-<uuid> format)
+const (
+	testVolumeID1    = "pvc-11111111-1111-1111-1111-111111111111"
+	testVolumeID2    = "pvc-22222222-2222-2222-2222-222222222222"
+	testVolumeID3    = "pvc-33333333-3333-3333-3333-333333333333"
+	testVolumeID4    = "pvc-44444444-4444-4444-4444-444444444444"
+	testVolumeID5    = "pvc-55555555-5555-5555-5555-555555555555"
+	testVolumeID6    = "pvc-66666666-6666-6666-6666-666666666666"
+	testVolumeID7    = "pvc-77777777-7777-7777-7777-777777777777"
+	testVolumeID8    = "pvc-88888888-8888-8888-8888-888888888888"
+	testVolumeIDStale = "pvc-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+)
+
+func TestControllerPublishVolume_Success(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, mockRDS := testControllerServer(t, node1)
+
+	// Add test volume to mock
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:          testVolumeID1,
+		FilePath:      "/storage-pool/metal-csi/" + testVolumeID1 + ".img",
+		FileSizeBytes: 1073741824,
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID1,
+	})
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: testVolumeID1,
+		NodeId:   "node-1",
+		VolumeContext: map[string]string{
+			"nvmeAddress": "10.0.0.1",
+		},
+	}
+
+	resp, err := cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("ControllerPublishVolume failed: %v", err)
+	}
+
+	// CSI-05: Verify publish_context
+	if resp.PublishContext == nil {
+		t.Fatal("PublishContext is nil")
+	}
+	if resp.PublishContext["nvme_address"] == "" {
+		t.Error("nvme_address missing from PublishContext")
+	}
+	if resp.PublishContext["nvme_port"] != "4420" {
+		t.Errorf("nvme_port = %s, want 4420", resp.PublishContext["nvme_port"])
+	}
+	expectedNQN := "nqn.2000-02.com.mikrotik:" + testVolumeID1
+	if resp.PublishContext["nvme_nqn"] != expectedNQN {
+		t.Errorf("nvme_nqn = %s, want %s", resp.PublishContext["nvme_nqn"], expectedNQN)
+	}
+	if resp.PublishContext["fs_type"] == "" {
+		t.Error("fs_type missing from PublishContext")
+	}
+}
+
+func TestControllerPublishVolume_Idempotent(t *testing.T) {
+	// CSI-01: Same volume, same node = success
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, mockRDS := testControllerServer(t, node1)
+
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        testVolumeID2,
+		NVMETCPPort: 4420,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + testVolumeID2,
+	})
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: testVolumeID2,
+		NodeId:   "node-1",
+	}
+
+	// First publish
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("First publish failed: %v", err)
+	}
+
+	// Second publish (same node) - should succeed
+	resp, err := cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Second publish (idempotent) failed: %v", err)
+	}
+	if resp.PublishContext == nil {
+		t.Error("Idempotent publish should return PublishContext")
+	}
+}
+
+func TestControllerPublishVolume_RWOConflict(t *testing.T) {
+	// CSI-02: Same volume, different node = FAILED_PRECONDITION
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	node2 := testNode("node-2")
+	cs, mockRDS := testControllerServer(t, node1, node2)
+
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        testVolumeID3,
+		NVMETCPPort: 4420,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + testVolumeID3,
+	})
+
+	// Attach to node-1
+	req1 := &csi.ControllerPublishVolumeRequest{
+		VolumeId: testVolumeID3,
+		NodeId:   "node-1",
+	}
+	_, err := cs.ControllerPublishVolume(ctx, req1)
+	if err != nil {
+		t.Fatalf("First publish failed: %v", err)
+	}
+
+	// Try to attach to node-2 - should fail
+	req2 := &csi.ControllerPublishVolumeRequest{
+		VolumeId: testVolumeID3,
+		NodeId:   "node-2",
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req2)
+	if err == nil {
+		t.Fatal("Expected FAILED_PRECONDITION error for RWO conflict")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("Expected gRPC status error, got: %v", err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("Expected code FailedPrecondition (9), got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "node-1") {
+		t.Errorf("Error message should mention blocking node, got: %s", st.Message())
+	}
+}
+
+func TestControllerPublishVolume_StaleAttachmentSelfHealing(t *testing.T) {
+	// CSI-06: Volume attached to deleted node = auto-clear and allow new attach
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	// "deleted-node" does NOT exist in k8s (simulates deleted node)
+	cs, mockRDS := testControllerServer(t, node1)
+
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        testVolumeIDStale,
+		NVMETCPPort: 4420,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + testVolumeIDStale,
+	})
+
+	// Manually track attachment to non-existent node (simulates stale state after node deletion)
+	am := cs.driver.GetAttachmentManager()
+	// Use TrackAttachment directly on the manager to bypass validation
+	// (in reality, this could happen if controller restarts and loads stale state)
+	am.TrackAttachment(ctx, testVolumeIDStale, "deleted-node")
+
+	// Try to attach to node-1 - should succeed (self-healing)
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: testVolumeIDStale,
+		NodeId:   "node-1",
+	}
+	resp, err := cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Expected self-healing success, got error: %v", err)
+	}
+	if resp.PublishContext == nil {
+		t.Error("Expected PublishContext after self-healing")
+	}
+
+	// Verify attachment is now to node-1
+	state, exists := am.GetAttachment(testVolumeIDStale)
+	if !exists {
+		t.Fatal("Attachment should exist after self-healing")
+	}
+	if state.NodeID != "node-1" {
+		t.Errorf("Attachment should be to node-1, got %s", state.NodeID)
+	}
+}
+
+func TestControllerPublishVolume_VolumeNotFound(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, _ := testControllerServer(t, node1)
+
+	// Don't add volume to mock - it won't exist
+	// Use a valid UUID format but non-existent volume
+	nonExistentVolumeID := "pvc-99999999-9999-9999-9999-999999999999"
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: nonExistentVolumeID,
+		NodeId:   "node-1",
+	}
+
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected NOT_FOUND error")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("Expected gRPC status error, got: %v", err)
+	}
+	if st.Code() != codes.NotFound {
+		t.Errorf("Expected code NotFound (5), got %v", st.Code())
+	}
+}
+
+func TestControllerPublishVolume_InvalidVolumeID(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: "", // Invalid
+		NodeId:   "node-1",
+	}
+
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected INVALID_ARGUMENT error")
+	}
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Expected code InvalidArgument (3), got %v", st.Code())
+	}
+}
+
+func TestControllerPublishVolume_InvalidNodeID(t *testing.T) {
+	ctx := context.Background()
+	cs, mockRDS := testControllerServer(t)
+
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        testVolumeID4,
+		NVMETCPPort: 4420,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + testVolumeID4,
+	})
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: testVolumeID4,
+		NodeId:   "", // Invalid
+	}
+
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected INVALID_ARGUMENT error")
+	}
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Expected code InvalidArgument (3), got %v", st.Code())
+	}
+}
+
+func TestControllerPublishVolume_InvalidVolumeIDFormat(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, _ := testControllerServer(t, node1)
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId: "invalid-format; rm -rf /", // Injection attempt
+		NodeId:   "node-1",
+	}
+
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected INVALID_ARGUMENT error for invalid volume ID format")
+	}
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Expected code InvalidArgument (3), got %v", st.Code())
+	}
+}
+
+// ========================================
+// ControllerUnpublishVolume Tests
+// ========================================
+
+func TestControllerUnpublishVolume_Success(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, mockRDS := testControllerServer(t, node1)
+
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot: testVolumeID5,
+	})
+
+	// First publish
+	am := cs.driver.GetAttachmentManager()
+	am.TrackAttachment(ctx, testVolumeID5, "node-1")
+
+	// Unpublish
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: testVolumeID5,
+		NodeId:   "node-1",
+	}
+
+	_, err := cs.ControllerUnpublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("ControllerUnpublishVolume failed: %v", err)
+	}
+
+	// Verify attachment removed
+	_, exists := am.GetAttachment(testVolumeID5)
+	if exists {
+		t.Error("Attachment should be removed after unpublish")
+	}
+}
+
+func TestControllerUnpublishVolume_Idempotent(t *testing.T) {
+	// CSI-03: Unpublish on non-attached volume = success
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	// Don't attach first - just try to unpublish
+	// Use a valid UUID format
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: testVolumeID6,
+		NodeId:   "node-1",
+	}
+
+	// Should succeed (idempotent)
+	_, err := cs.ControllerUnpublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Idempotent unpublish should succeed, got: %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_InvalidVolumeID(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "", // Invalid
+	}
+
+	_, err := cs.ControllerUnpublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected INVALID_ARGUMENT error")
+	}
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Expected code InvalidArgument (3), got %v", st.Code())
+	}
+}
+
+func TestControllerUnpublishVolume_InvalidVolumeIDFormat(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "injection; drop table", // Injection attempt
+		NodeId:   "node-1",
+	}
+
+	_, err := cs.ControllerUnpublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected INVALID_ARGUMENT error for invalid volume ID format")
+	}
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Expected code InvalidArgument (3), got %v", st.Code())
+	}
+}
+
+func TestControllerUnpublishVolume_EmptyNodeID(t *testing.T) {
+	// CSI spec allows empty nodeID for force-detach scenarios
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	// Track an attachment first
+	am := cs.driver.GetAttachmentManager()
+	am.TrackAttachment(ctx, testVolumeID7, "some-node")
+
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: testVolumeID7,
+		NodeId:   "", // Empty - force detach
+	}
+
+	// Should succeed - empty nodeID is allowed per CSI spec
+	_, err := cs.ControllerUnpublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Unpublish with empty nodeID should succeed, got: %v", err)
 	}
 }
