@@ -43,6 +43,11 @@ func NewStaleMountChecker(resolver *nvme.DeviceResolver) *StaleMountChecker {
 	}
 }
 
+// SetMountDeviceFunc allows overriding the mount device lookup function for testing
+func (c *StaleMountChecker) SetMountDeviceFunc(fn func(path string) (string, error)) {
+	c.getMountDev = fn
+}
+
 // IsMountStale checks if a mount is stale by comparing the mount device with the current NQN-resolved device
 // Returns (stale bool, reason StaleReason, err error)
 //
