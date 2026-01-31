@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 7 of 7 (Robustness and Observability)
-Plan: 3 of TBD complete
+Plan: 4 of TBD complete
 Status: In progress
-Last activity: 2026-01-31 — Completed 07-03-PLAN.md (comprehensive attachment tests and race fixes)
+Last activity: 2026-01-31 — Completed 07-04-PLAN.md (event posting integration)
 
-Progress: [████████░░] 80%
+Progress: [████████░░] 85%
 
 ## Milestone History
 
@@ -59,6 +59,9 @@ Progress: [████████░░] 80%
 | TEST-03   | Use fake.NewSimpleClientset for reconciler tests | 07-03 | Standard Kubernetes testing approach |
 | BUG-01    | Fix double-stop panic by clearing channels | 07-03 | Subsequent Stop() calls are no-op |
 | BUG-02    | Fix race condition with local channel capture | 07-03 | Eliminate concurrent read/write on channels |
+| EVENTS-02 | EventPoster interface in attachment package | 07-04 | Avoid circular dependency with driver |
+| EVENTS-03 | Best-effort event posting pattern | 07-04 | Never fail operations for observability |
+| EVENTS-04 | PV lookup for PVC info in unpublish | 07-04 | volumeContext not available in unpublish |
 
 ### Pending Todos
 
@@ -74,9 +77,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 07-03-PLAN.md (comprehensive attachment tests and race fixes)
+Stopped at: Completed 07-04-PLAN.md (event posting integration)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 7 Plan 3 complete (comprehensive attachment tests and race fixes)*
+*Last updated: 2026-01-31 — Phase 7 Plan 4 complete (event posting integration)*
