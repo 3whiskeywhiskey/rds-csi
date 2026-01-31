@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-30)
 ## Current Position
 
 Phase: 4 of 4 (Observability)
-Plan: 1 of 1 complete
-Status: Phase 4 Plan 1 complete
-Last activity: 2026-01-30 - Completed 04-01-PLAN.md
+Plan: 2 of 5 complete (04-01, 04-04)
+Status: Phase 4 in progress
+Last activity: 2026-01-30 - Completed 04-04-PLAN.md
 
-Progress: [██████████] 100% (4/4 phases complete)
+Progress: [████████░░] 82% (14/17 plans complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 13
-- Average duration: 2.4 min
-- Total execution time: 0.52 hours
+- Total plans completed: 14
+- Average duration: 2.3 min
+- Total execution time: 0.53 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [██████████] 100% (4/4 phases complete)
 | 01-foundation | 3 | 9 min | 3 min |
 | 02-stale-mount-detection | 5 | 14 min | 2.8 min |
 | 03-reconnection-resilience | 4 | 11 min | 2.75 min |
-| 04-observability | 1 | 1 min | 1 min |
+| 04-observability | 2 | 2 min | 1 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (2 min), 03-03 (3 min), 03-04 (5 min), 04-01 (1 min)
-- Trend: Phase 4 complete - all phases finished
+- Last 5 plans: 03-03 (3 min), 03-04 (5 min), 04-01 (1 min), 04-04 (1 min)
+- Trend: Phase 4 in progress - event types expanded
 
 *Updated after each plan completion*
 
@@ -87,6 +87,9 @@ Recent decisions affecting current work:
 - testBackoffConfig() returns 1ms delays for fast test execution
 - MockConnector tracks DisconnectWithContext calls for test verification
 - testableOrphanCleaner wrapper controls resolver behavior in tests
+- Orphan events use structured logging instead of K8s events (no PVC available)
+- Connection failure events include target address for debugging
+- Connection recovery events include attempt count for metrics
 
 ### Pending Todos
 
@@ -99,9 +102,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 04-01-PLAN.md - all phases complete
+Stopped at: Completed 04-04-PLAN.md - extended event types
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-30 - Phase 4 Plan 1 complete, all phases finished*
+*Last updated: 2026-01-30 - Phase 4 Plan 4 complete, extended event types added*
