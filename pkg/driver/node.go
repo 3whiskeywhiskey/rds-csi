@@ -433,6 +433,9 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		return nil, status.Error(codes.InvalidArgument, "volume path is required")
 	}
 
+	// Track volume condition - always set before returning
+	var volumeCondition *csi.VolumeCondition
+
 	// Check for stale mount if we can derive NQN
 	// For stats, we just need to verify mount is healthy
 	nqn, err := volumeIDToNQN(volumeID)
@@ -440,17 +443,36 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		stale, reason, checkErr := ns.staleChecker.IsMountStale(volumePath, nqn)
 		if checkErr != nil {
 			klog.V(4).Infof("Could not check mount staleness: %v", checkErr)
+			// Health check inconclusive - report as healthy with note
+			volumeCondition = &csi.VolumeCondition{
+				Abnormal: false,
+				Message:  fmt.Sprintf("Health check inconclusive: %v", checkErr),
+			}
 		} else if stale {
 			// For GetVolumeStats, we report unhealthy rather than attempting recovery
 			// Recovery should happen in NodePublishVolume when pod accesses volume
 			klog.Warningf("Stale mount detected for volume %s at %s (reason: %s)", volumeID, volumePath, reason)
+			volumeCondition = &csi.VolumeCondition{
+				Abnormal: true,
+				Message:  fmt.Sprintf("Stale mount detected: %s", reason),
+			}
+			// Return early with empty usage for stale mounts
 			return &csi.NodeGetVolumeStatsResponse{
-				Usage: []*csi.VolumeUsage{},
-				VolumeCondition: &csi.VolumeCondition{
-					Abnormal: true,
-					Message:  fmt.Sprintf("Stale mount detected: %s", reason),
-				},
+				Usage:           []*csi.VolumeUsage{},
+				VolumeCondition: volumeCondition,
 			}, nil
+		} else {
+			// Mount is healthy
+			volumeCondition = &csi.VolumeCondition{
+				Abnormal: false,
+				Message:  "Volume is healthy",
+			}
+		}
+	} else {
+		// Could not derive NQN or no stale checker - assume healthy
+		volumeCondition = &csi.VolumeCondition{
+			Abnormal: false,
+			Message:  "Volume is healthy",
 		}
 	}
 
@@ -475,6 +497,7 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 				Available: stats.AvailableInodes,
 			},
 		},
+		VolumeCondition: volumeCondition,
 	}, nil
 }
 
