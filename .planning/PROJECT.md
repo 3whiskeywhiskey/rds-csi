@@ -1,63 +1,81 @@
-# RDS CSI Driver - Production Stability
+# RDS CSI Driver
 
 ## What This Is
 
-A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynamic NVMe/TCP block storage. The driver manages volume lifecycle via SSH/RouterOS CLI (control plane) and connects to storage via NVMe over TCP (data plane). Currently functional but has reliability issues when NVMe-oF connections drop and reconnect.
+A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynamic NVMe/TCP block storage. The driver manages volume lifecycle via SSH/RouterOS CLI (control plane) and connects to storage via NVMe over TCP (data plane).
 
 ## Core Value
 
-**Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver must detect and handle controller renumbering so mounted volumes continue working without pod restarts.
+**Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
+
+## Current State
+
+**Version:** v1 Production Stability (shipped 2026-01-31)
+**LOC:** 22,424 Go
+**Tech Stack:** Go 1.24, CSI Spec v1.5.0+, NVMe/TCP, SSH/RouterOS CLI
+
+### What's Working
+
+- Volume creation/deletion via SSH with NVMe/TCP export
+- Node staging with NVMe connect, format, mount
+- **NQN-based device path resolution** (no hardcoded paths)
+- **Automatic stale mount detection and recovery**
+- **Kernel reconnection parameters** (ctrl_loss_tmo, reconnect_delay)
+- **Prometheus metrics** on :9809
+- **Kubernetes events** for mount failures
+- **VolumeCondition** health reporting
+
+### Known Limitations
+
+- Single RDS controller (no multipath)
+- No volume snapshots yet
+- No controller HA (single replica)
 
 ## Requirements
 
 ### Validated
 
-- ✓ Volume creation via SSH (`/disk add`) with NVMe/TCP export — existing
-- ✓ Volume deletion via SSH (`/disk remove`) — existing
-- ✓ Node staging: NVMe connect, format filesystem, mount to staging path — existing
-- ✓ Node publishing: bind mount to pod path — existing
-- ✓ Node unstaging: unmount, NVMe disconnect — existing
-- ✓ SSH connection pooling with retry logic — existing
-- ✓ Orphan volume reconciliation (detect/cleanup unused volumes) — existing
-- ✓ Input validation preventing command injection — existing
-- ✓ Secure mount options enforced (nosuid, nodev, noexec) — existing
-- ✓ Security event logging for audit trails — existing
+- ✓ Volume creation via SSH (`/disk add`) with NVMe/TCP export — v1
+- ✓ Volume deletion via SSH (`/disk remove`) — v1
+- ✓ Node staging: NVMe connect, format filesystem, mount to staging path — v1
+- ✓ Node publishing: bind mount to pod path — v1
+- ✓ Node unstaging: unmount, NVMe disconnect — v1
+- ✓ SSH connection pooling with retry logic — v1
+- ✓ Orphan volume reconciliation (detect/cleanup unused volumes) — v1
+- ✓ Input validation preventing command injection — v1
+- ✓ Secure mount options enforced (nosuid, nodev, noexec) — v1
+- ✓ Security event logging for audit trails — v1
+- ✓ Detect NVMe-oF controller renumbering after reconnection — v1
+- ✓ Update or remount when device paths change (nvme0 → nvme3) — v1
+- ✓ Cleanup stale mounts referencing non-existent device paths — v1
+- ✓ Health checks via VolumeCondition in NodeGetVolumeStats — v1
+- ✓ Validate device paths are functional before returning them — v1
+- ✓ Handle orphaned NVMe subsystems (appear connected but no device path) — v1
+- ✓ Prometheus metrics endpoint — v1
 
 ### Active
 
-- [ ] Detect NVMe-oF controller renumbering after reconnection
-- [ ] Update or remount when device paths change (nvme0 → nvme3)
-- [ ] Cleanup stale mounts referencing non-existent device paths
-- [ ] Health checks to proactively detect connection issues
-- [ ] Validate device paths are functional before returning them
-- [ ] Handle orphaned NVMe subsystems (appear connected but no device path)
+(None — define for next milestone)
 
 ### Out of Scope
 
-- Volume snapshots — deferred to future milestone
-- Controller high availability — deferred to future milestone
-- Volume encryption — deferred to future milestone
-- Prometheus metrics endpoint — deferred to future milestone
+- Volume snapshots — separate milestone
+- Controller HA — separate milestone, requires leader election
+- Volume encryption — separate milestone, different concern
+- NVMe multipath — single RDS controller, not applicable
+- Automatic pod restart — CSI spec says drivers report, orchestrators act
 
-## Context
+## Key Decisions
 
-**The Bug:**
-When NVMe-oF connections drop and reconnect, Linux assigns new controller numbers (nvme3 instead of nvme0). The driver's mount points still reference old device paths (/dev/nvme0n1) which no longer exist. Any I/O to these mounts fails with "no available path" error.
-
-**Evidence from production:**
-- dpu-c4140: Active controllers nvme3, nvme4 but mounts reference nvme0n1, nvme2n1 (stale)
-- dpu-r640: Active controllers nvme0, nvme1 with matching mounts (working)
-- Correlation: more uptime + more reconnection cycles = more stale state
-
-**Codebase state:**
-- NVMe device path resolution already flagged as fragile (multiple fallback paths, precedence unclear)
-- Orphan subsystem detection partially implemented but incomplete
-- No tests for reconnection scenarios
-
-**Testing constraints:**
-- RDS reboot disrupts site networking (disruptive to test)
-- Need high confidence before hardware testing
-- Look for ways to test reconnection without full RDS restart
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| 10s TTL for DeviceResolver cache | Balances freshness vs scanning overhead | ✓ Good |
+| Prefer nvmeXnY over nvmeXcYnZ | Multipath compatibility | ✓ Good |
+| ctrl_loss_tmo=-1 default | Prevents filesystem read-only mount | ✓ Good |
+| 10% jitter in backoff | Prevents thundering herd | ✓ Good |
+| Refuse force unmount if in use | Prevents data loss | ✓ Good |
+| Custom prometheus.Registry | Avoids restart panics | ✓ Good |
+| Orphan cleanup on startup | Best-effort, non-blocking | ✓ Good |
 
 ## Constraints
 
@@ -65,11 +83,5 @@ When NVMe-oF connections drop and reconnect, Linux assigns new controller number
 - **Compatibility**: Must work with existing volumes and mounts (no breaking changes)
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
-## Key Decisions
-
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Research best practices first | Limited testing ability, need high confidence | — Pending |
-
 ---
-*Last updated: 2026-01-30 after initialization*
+*Last updated: 2026-01-31 after v1 milestone*
