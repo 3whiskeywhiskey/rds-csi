@@ -8,9 +8,21 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
+## Current Milestone: v0.3.0 Volume Fencing
+
+**Goal:** Prevent volume ping-pong between nodes by implementing proper CSI attachment tracking.
+
+**Target features:**
+- ControllerPublishVolume/ControllerUnpublishVolume implementation
+- Attachment state tracking (in-memory + PV annotations)
+- PUBLISH_UNPUBLISH_VOLUME capability declaration
+- Rejection of conflicting attachments for ReadWriteOnce volumes
+
+**Problem being solved:** Without ControllerPublish/Unpublish, multiple nodes can connect to the same NVMe/TCP volume simultaneously, causing I/O errors and VM pauses in KubeVirt workloads.
+
 ## Current State
 
-**Version:** v1 Production Stability (shipped 2026-01-31)
+**Version:** v0.2.0 (shipped 2026-01-31)
 **LOC:** 22,424 Go
 **Tech Stack:** Go 1.24, CSI Spec v1.5.0+, NVMe/TCP, SSH/RouterOS CLI
 
@@ -55,7 +67,11 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 ### Active
 
-(None — define for next milestone)
+- [ ] ControllerPublishVolume tracks which node owns each volume attachment
+- [ ] ControllerUnpublishVolume releases attachment before new node can attach
+- [ ] Attachment state persisted to PV annotations (survives controller restart)
+- [ ] PUBLISH_UNPUBLISH_VOLUME capability declared
+- [ ] Conflicting attachments rejected for ReadWriteOnce volumes
 
 ### Out of Scope
 
@@ -84,4 +100,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-01-31 after v1 milestone*
+*Last updated: 2026-01-31 after starting v0.3.0 milestone*

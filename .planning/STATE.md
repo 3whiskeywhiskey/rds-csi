@@ -5,20 +5,20 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** v1 Production Stability complete — ready for next milestone
+**Current focus:** v0.3.0 Volume Fencing — prevent multi-node attachment conflicts
 
 ## Current Position
 
-Phase: Complete (v1 milestone shipped)
-Plan: N/A
-Status: Ready for next milestone
-Last activity: 2026-01-31 — v1 Production Stability shipped
+Phase: Not started (researching)
+Plan: —
+Status: Researching ControllerPublish/Unpublish patterns
+Last activity: 2026-01-31 — Milestone v0.3.0 started
 
-Progress: [██████████] 100% (v1 complete)
+Progress: [░░░░░░░░░░] 0%
 
 ## Milestone History
 
-- **v1 Production Stability** — shipped 2026-01-31
+- **v0.2.0 Production Stability** — shipped 2026-01-31
   - 4 phases, 17 plans
   - NVMe-oF reconnection reliability
 
@@ -26,22 +26,26 @@ Progress: [██████████] 100% (v1 complete)
 
 ### Decisions
 
-Key decisions logged in PROJECT.md. All v1 decisions marked as ✓ Good outcome.
+- Use ControllerPublish/Unpublish for fencing (standard CSI approach)
+- Store attachment state in-memory + PV annotations (survives restarts)
 
 ### Pending Todos
 
-None — v1 milestone complete. Define for next milestone.
+None — defining requirements after research.
 
 ### Blockers/Concerns
 
-None — ready for production testing on hardware.
+Root cause from production feedback:
+- Volume ping-pong between nodes every ~7 minutes
+- `CONFLICT: PVC is in use by VMI` errors
+- No ControllerPublish/Unpublish = no fencing
 
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: v1 milestone completion
-Resume file: None — fresh start for next milestone
+Stopped at: Starting v0.3.0 milestone, researching
+Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — v1 milestone complete*
+*Last updated: 2026-01-31 — v0.3.0 milestone started*
