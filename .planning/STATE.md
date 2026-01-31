@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 
 ## Current Position
 
-Phase: 6 of 7 (CSI Publish/Unpublish) ✓ VERIFIED
-Plan: All 3 plans complete
-Status: Phase verified, ready for Phase 7
-Last activity: 2026-01-31 — Phase 6 executed and verified (6/6 must-haves)
+Phase: 7 of 7 (Robustness and Observability)
+Plan: 1 of TBD complete
+Status: In progress
+Last activity: 2026-01-31 — Completed 07-01-PLAN.md (grace period tracking and metrics)
 
-Progress: [██████░░░░] 66%
+Progress: [███████░░░] 70%
 
 ## Milestone History
 
@@ -50,6 +50,9 @@ Progress: [██████░░░░] 66%
 | CSI-07    | Fail-closed on K8s API errors              | 06-02 | Safety over availability      |
 | TEST-01   | Test volume IDs use valid UUID format      | 06-03 | Required by validation        |
 | TEST-02   | MockClient implements full RDSClient       | 06-03 | Test isolation                |
+| GRACE-01  | Per-volume grace period with detachTimestamps map | 07-01 | Preserves detach history for migration |
+| METRICS-01 | Sub-second histogram buckets (0.01-5s)    | 07-01 | Attachment ops mostly in-memory |
+| EVENTS-01 | Normal event type for routine lifecycle    | 07-01 | VolumeAttached/Detached not failures |
 
 ### Pending Todos
 
@@ -65,9 +68,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Phase 6 complete and verified
+Stopped at: Completed 07-01-PLAN.md (grace period tracking and attachment metrics)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 6 executed and verified*
+*Last updated: 2026-01-31 — Phase 7 Plan 1 complete (grace period and metrics)*
