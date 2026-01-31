@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 5 of 7 (Attachment Manager Foundation)
-Plan: 1 of 3
+Plan: 2 of 3
 Status: In progress
-Last activity: 2026-01-31 — Completed 05-01-PLAN.md
+Last activity: 2026-01-31 — Completed 05-02-PLAN.md
 
-Progress: [█░░░░░░░░░] 10%
+Progress: [██░░░░░░░░] 20%
 
 ## Milestone History
 
@@ -38,6 +38,9 @@ Progress: [█░░░░░░░░░] 10%
 | ATTACH-01 | In-memory map with RWMutex for tracking     | 05-01 | Simple, fast, single controller |
 | ATTACH-02 | Per-volume locking with VolumeLockManager   | 05-01 | Prevents deadlocks, allows concurrency |
 | ATTACH-03 | Lock order: release manager before per-volume | 05-01 | Critical deadlock prevention |
+| ATTACH-04 | Rollback on persistence failure             | 05-02 | Ensures in-memory/PV consistency |
+| ATTACH-05 | PV annotations for state persistence        | 05-02 | Survives controller restarts |
+| ATTACH-06 | Initialize before orphan reconciler         | 05-02 | State ready before operations |
 
 ### Pending Todos
 
@@ -53,9 +56,9 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 05-01-PLAN.md (Attachment Manager Foundation)
+Stopped at: Completed 05-02-PLAN.md (Attachment Persistence)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Completed plan 05-01*
+*Last updated: 2026-01-31 — Completed plan 05-02*
