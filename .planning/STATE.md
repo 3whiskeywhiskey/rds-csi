@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 10 of 10 (Upstream Contribution)
-Plan: 1 of 2 in progress
-Status: In progress
-Last activity: 2026-01-31 — Completed 10-01-PLAN.md (prepared commits for upstream PR)
+Plan: 2 of 2 prepared (awaiting manual submission)
+Status: Prepared — PR ready, not submitted
+Last activity: 2026-01-31 — Prepared 10-02 (PR description and branch ready)
 
-Progress: [█████████░] 90% (prior milestones) + v0.5 implementation complete, upstream prep done
+Progress: [██████████] 100% (implementation) — upstream PR pending user submission
 
 ## Milestone History
 
@@ -76,6 +76,7 @@ Progress: [█████████░] 90% (prior milestones) + v0.5 impleme
 | PREP-01    | Cherry-pick commits to exclude CI workflow files | 10-01 | Upstream doesn't need fork-specific CI |
 | PREP-02    | Use --signoff flag during cherry-pick for DCO | 10-01 | Simpler than interactive rebase |
 | PREP-03    | Base upstream-pr on upstream/main | 10-01 | Ensures PR applies cleanly to upstream |
+| PR-01      | Defer upstream PR submission to user | 10-02 | User controls timing of upstream engagement |
 
 ### Pending Todos
 
@@ -135,16 +136,17 @@ Resume file: None
 - Test location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/vmi_test.go
 - Validated on: metal cluster with nested K3s worker (homelab-node-1)
 
-**Phase 10 (Upstream Contribution):** ⏳ IN PROGRESS
+**Phase 10 (Upstream Contribution):** ✅ PREPARED (awaiting manual submission)
 - ✓ 10-01: Prepare commits for upstream PR (wave 1)
   - Created upstream-pr branch from upstream/main
   - Cherry-picked fix commits with DCO sign-off
   - Commits: dde549140a (fix), d9622dd922 (tests)
   - Branch pushed to whiskey-works/kubevirt
-- ○ 10-02: Submit PR to kubevirt/kubevirt (wave 2)
-  - Open PR from upstream-pr branch
-  - Include validation results from 09-03
-  - Reference issues: #6564, #9708, #16520
+- ⏸ 10-02: Submit PR to kubevirt/kubevirt (wave 2) — PREPARED, NOT SUBMITTED
+  - PR description ready: `.planning/phases/10-upstream-contribution/10-02-PR-DESCRIPTION.md`
+  - Branch ready: `whiskey-works/kubevirt:upstream-pr`
+  - To submit: https://github.com/kubevirt/kubevirt/compare/main...whiskey-works:kubevirt:upstream-pr
+  - References: #6564, #9708, #16520
 
 ## Developer Notes
 
@@ -156,4 +158,4 @@ Use this when pushing to `whiskey-works/*` repos to avoid SSH key mismatch with 
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 10-01 complete, commits prepared for upstream PR*
+*Last updated: 2026-01-31 — Phase 10 prepared, upstream PR awaiting manual submission*
