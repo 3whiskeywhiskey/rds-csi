@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 9 of 9 (Implement and Test Fix)
-Plan: 2 of 3 complete
-Status: In progress
-Last activity: 2026-01-31 — Completed 09-02-PLAN.md (unit tests for fix)
+Plan: 3 of 3 complete
+Status: Phase complete
+Last activity: 2026-01-31 — Completed 09-03-PLAN.md (manual validation on metal cluster)
 
-Progress: [████████░░] 80% (prior milestones) + 09-01, 09-02 of v0.5
+Progress: [█████████░] 90% (prior milestones) + v0.5 implementation complete
 
 ## Milestone History
 
@@ -70,6 +70,9 @@ Progress: [████████░░] 80% (prior milestones) + 09-01, 09-02
 | HOTPLUG-02 | Early return from cleanupAttachmentPods | 09-01 | Cleaner than per-pod skip logic |
 | TEST-04    | Tests added to existing vmi_test.go | 09-02 | Already has test infrastructure |
 | TEST-05    | Direct cleanupAttachmentPods() invocation | 09-02 | Better unit test isolation |
+| CI-01      | Use GitHub Actions CI for KubeVirt builds | 09-03 | macOS incompatible with Bazel/Linux syscalls |
+| GHCR-01    | Made GHCR packages public for cluster access | 09-03 | Simpler than imagePullSecret |
+| TEST-06    | Test on nested K3s worker for realistic workload | 09-03 | Production-like validation scenario |
 
 ### Pending Todos
 
@@ -91,7 +94,7 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 09-02-PLAN.md
+Stopped at: Completed 09-03-PLAN.md (Phase 9 complete)
 Resume file: None
 
 ### Current Work State
@@ -104,31 +107,44 @@ Resume file: None
 - ✓ PR #1 build passed
 - ○ Merge PR #1, test deployment with custom images
 
-**Phase 9 (Implement and Test Fix):**
-- ✓ 09-01: Document code path and implement fix (wave 1) - COMPLETE
+**Phase 9 (Implement and Test Fix):** ✅ COMPLETE
+- ✓ 09-01: Document code path and implement fix (wave 1)
   - Code path documented in 09-01-CODEPATH.md
   - Fix committed to hotplug-fix-v1 branch (cc1b700)
   - allHotplugVolumesReady() checks VolumeReady phase before pod deletion
-- ✓ 09-02: Unit tests for fix (wave 2) - COMPLETE
+- ✓ 09-02: Unit tests for fix (wave 2)
   - 5 unit tests added to vmi_test.go (6546421)
   - Tests cover bug reproduction, normal operation, regression scenarios
-  - Local test run blocked (macOS), push blocked (SSH key mismatch)
-- ○ 09-03: Manual validation on metal cluster (wave 3, has checkpoint)
+  - CI validated tests after push
+- ✓ 09-03: Manual validation on metal cluster (wave 3)
+  - Custom images deployed via GitHub Actions CI (workflow 21549308226)
+  - Images: ghcr.io/whiskey-works/kubevirt/*:hotplug-fix-v1-708d58b902
+  - GHCR packages made public for cluster access
+  - ✅ Multi-volume hotplug validated: VM stayed Running, no I/O errors
+  - ✅ Volume removal validated: clean detachment
+  - ✅ Single-volume regression check passed
+  - Validation documented in 09-03-VALIDATION.md
 
 **Fix summary:**
 - Added allHotplugVolumesReady() helper function
 - Modified cleanupAttachmentPods() to check all volumes ready before deleting old pods
 - Fix location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/volume-hotplug.go
 - Test location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/vmi_test.go
+- Validated on: metal cluster with nested K3s worker (homelab-node-1)
 
-**Blocker for CI validation:**
-- SSH key (`ianmcmahon`) lacks write access to `whiskey-works/kubevirt`
-- Need to push with correct authentication to trigger CI
+**Next phase:**
+- Phase 10: Upstream Contribution (create PR to kubevirt/kubevirt)
+- PR will include: fix (cc1b700), tests (6546421), validation results
+- References: kubevirt/kubevirt#6564, #9708, #16520
 
-**Next steps:**
-1. Push hotplug-fix-v1 branch (requires auth fix)
-2. Execute 09-03-PLAN.md (manual validation)
+## Developer Notes
+
+**SSH key for whiskey-works repos:**
+```bash
+export GIT_SSH_COMMAND="ssh -i ~/.ssh/whiskey_ed25519 -F /dev/null"
+```
+Use this when pushing to `whiskey-works/*` repos to avoid SSH key mismatch with default key.
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — 09-02 complete, unit tests added*
+*Last updated: 2026-01-31 — Phase 9 complete, fix validated on metal cluster*
