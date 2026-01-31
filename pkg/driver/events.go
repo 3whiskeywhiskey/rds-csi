@@ -19,6 +19,14 @@ const (
 	EventReasonMountFailure       = "MountFailure"
 	EventReasonRecoveryFailed     = "RecoveryFailed"
 	EventReasonStaleMountDetected = "StaleMountDetected"
+
+	// Connection lifecycle events
+	EventReasonConnectionFailure  = "ConnectionFailure"
+	EventReasonConnectionRecovery = "ConnectionRecovery"
+
+	// Orphan cleanup events
+	EventReasonOrphanDetected = "OrphanDetected"
+	EventReasonOrphanCleaned  = "OrphanCleaned"
 )
 
 // EventPoster posts Kubernetes events for mount operations
