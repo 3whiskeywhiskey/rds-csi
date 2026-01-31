@@ -16,6 +16,14 @@ import (
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
+// EventPoster is an interface for posting Kubernetes events for attachment lifecycle.
+// This interface allows the reconciler to post events without creating a circular
+// dependency with the driver package.
+type EventPoster interface {
+	// PostStaleAttachmentCleared posts an event when a stale attachment is cleared
+	PostStaleAttachmentCleared(ctx context.Context, pvcNamespace, pvcName, volumeID, staleNodeID string) error
+}
+
 // AttachmentReconciler periodically checks for stale attachments and cleans them up.
 // Stale attachments occur when a node is deleted without proper cleanup of attached volumes.
 type AttachmentReconciler struct {
@@ -24,6 +32,7 @@ type AttachmentReconciler struct {
 	interval    time.Duration
 	gracePeriod time.Duration
 	metrics     *observability.Metrics
+	eventPoster EventPoster // Optional, may be nil
 
 	// Control channels
 	stopCh chan struct{}
@@ -38,6 +47,7 @@ type ReconcilerConfig struct {
 	Interval    time.Duration // Default: 5 minutes
 	GracePeriod time.Duration // Default: 30 seconds
 	Metrics     *observability.Metrics
+	EventPoster EventPoster // Optional, may be nil - for posting lifecycle events
 }
 
 // NewAttachmentReconciler creates a new AttachmentReconciler.
@@ -61,6 +71,7 @@ func NewAttachmentReconciler(config ReconcilerConfig) (*AttachmentReconciler, er
 		interval:    config.Interval,
 		gracePeriod: config.GracePeriod,
 		metrics:     config.Metrics,
+		eventPoster: config.EventPoster,
 	}, nil
 }
 
@@ -172,7 +183,8 @@ func (r *AttachmentReconciler) reconcile(ctx context.Context) {
 		}
 
 		// Clear stale attachment
-		klog.Infof("Clearing stale attachment: volume=%s node=%s (node deleted)", volumeID, state.NodeID)
+		staleNodeID := state.NodeID // Capture before clearing
+		klog.Infof("Clearing stale attachment: volume=%s node=%s (node deleted)", volumeID, staleNodeID)
 		if err := r.manager.UntrackAttachment(ctx, volumeID); err != nil {
 			klog.Errorf("Failed to clear stale attachment for volume %s: %v", volumeID, err)
 			continue
@@ -185,6 +197,9 @@ func (r *AttachmentReconciler) reconcile(ctx context.Context) {
 			r.metrics.RecordStaleAttachmentCleared()
 			r.metrics.RecordReconcileAction("clear_stale")
 		}
+
+		// Post event (best effort - don't fail reconciliation if event posting fails)
+		r.postStaleAttachmentClearedEvent(ctx, volumeID, staleNodeID)
 	}
 
 	duration := time.Since(startTime)
@@ -216,4 +231,30 @@ func (r *AttachmentReconciler) nodeExists(ctx context.Context, nodeID string) (b
 // GetGracePeriod returns the configured grace period duration.
 func (r *AttachmentReconciler) GetGracePeriod() time.Duration {
 	return r.gracePeriod
+}
+
+// postStaleAttachmentClearedEvent posts an event when a stale attachment is cleared.
+// This is a best-effort operation - failures are logged but don't affect reconciliation.
+func (r *AttachmentReconciler) postStaleAttachmentClearedEvent(ctx context.Context, volumeID, staleNodeID string) {
+	if r.eventPoster == nil {
+		return
+	}
+
+	// Look up the PV to get the bound PVC information
+	// Volume ID is typically the PV name (e.g., pvc-<uuid>)
+	pv, err := r.k8sClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	if err != nil {
+		klog.V(3).Infof("Cannot get PV %s for stale attachment event: %v", volumeID, err)
+		return
+	}
+
+	claimRef := pv.Spec.ClaimRef
+	if claimRef == nil {
+		klog.V(3).Infof("PV %s has no claimRef for stale attachment event", volumeID)
+		return
+	}
+
+	if err := r.eventPoster.PostStaleAttachmentCleared(ctx, claimRef.Namespace, claimRef.Name, volumeID, staleNodeID); err != nil {
+		klog.Warningf("Failed to post stale attachment cleared event for volume %s: %v", volumeID, err)
+	}
 }
