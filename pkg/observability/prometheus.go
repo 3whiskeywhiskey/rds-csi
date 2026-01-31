@@ -39,6 +39,15 @@ type Metrics struct {
 
 	// Kubernetes events metrics
 	eventsPostedTotal *prometheus.CounterVec
+
+	// Attachment operation metrics
+	attachmentAttachTotal     *prometheus.CounterVec
+	attachmentDetachTotal     *prometheus.CounterVec
+	attachmentConflictsTotal  prometheus.Counter
+	attachmentReconcileTotal  *prometheus.CounterVec
+	attachmentOpDuration      *prometheus.HistogramVec
+	attachmentGracePeriodUsed prometheus.Counter
+	attachmentStaleCleared    prometheus.Counter
 }
 
 // NewMetrics creates a new Metrics instance with all metrics registered.
@@ -128,6 +137,68 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"reason"},
 		),
+
+		attachmentAttachTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Subsystem: "attachment",
+				Name:      "attach_total",
+				Help:      "Total attachment operations by status",
+			},
+			[]string{"status"}, // success, failure
+		),
+
+		attachmentDetachTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Subsystem: "attachment",
+				Name:      "detach_total",
+				Help:      "Total detachment operations by status",
+			},
+			[]string{"status"},
+		),
+
+		attachmentConflictsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "attachment",
+			Name:      "conflicts_total",
+			Help:      "Total attachment conflicts (RWO violations)",
+		}),
+
+		attachmentReconcileTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Subsystem: "attachment",
+				Name:      "reconcile_total",
+				Help:      "Total reconciliation actions by type",
+			},
+			[]string{"action"}, // clear_stale, sync_annotation
+		),
+
+		attachmentOpDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Namespace: namespace,
+				Subsystem: "attachment",
+				Name:      "operation_duration_seconds",
+				Help:      "Duration of attachment operations",
+				Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			},
+			[]string{"operation"}, // attach, detach, reconcile
+		),
+
+		attachmentGracePeriodUsed: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "attachment",
+			Name:      "grace_period_used_total",
+			Help:      "Total times grace period prevented a conflict",
+		}),
+
+		attachmentStaleCleared: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "attachment",
+			Name:      "stale_cleared_total",
+			Help:      "Total stale attachments cleared by reconciler",
+		}),
 	}
 
 	// Register all metrics with the custom registry
@@ -142,6 +213,13 @@ func NewMetrics() *Metrics {
 		m.staleRecoveriesTotal,
 		m.orphansCleanedTotal,
 		m.eventsPostedTotal,
+		m.attachmentAttachTotal,
+		m.attachmentDetachTotal,
+		m.attachmentConflictsTotal,
+		m.attachmentReconcileTotal,
+		m.attachmentOpDuration,
+		m.attachmentGracePeriodUsed,
+		m.attachmentStaleCleared,
 	)
 
 	return m
@@ -219,4 +297,43 @@ func (m *Metrics) RecordOrphanCleaned() {
 // reason should match the event reason constants (e.g., MountFailure, RecoveryFailed).
 func (m *Metrics) RecordEventPosted(reason string) {
 	m.eventsPostedTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordAttachmentOp records an attachment or detachment operation with duration.
+// operation should be "attach" or "detach".
+func (m *Metrics) RecordAttachmentOp(operation string, err error, duration time.Duration) {
+	status := "success"
+	if err != nil {
+		status = "failure"
+	}
+
+	switch operation {
+	case "attach":
+		m.attachmentAttachTotal.WithLabelValues(status).Inc()
+	case "detach":
+		m.attachmentDetachTotal.WithLabelValues(status).Inc()
+	}
+
+	m.attachmentOpDuration.WithLabelValues(operation).Observe(duration.Seconds())
+}
+
+// RecordAttachmentConflict records an RWO attachment conflict.
+func (m *Metrics) RecordAttachmentConflict() {
+	m.attachmentConflictsTotal.Inc()
+}
+
+// RecordGracePeriodUsed records when grace period prevented a conflict.
+func (m *Metrics) RecordGracePeriodUsed() {
+	m.attachmentGracePeriodUsed.Inc()
+}
+
+// RecordStaleAttachmentCleared records when reconciler cleared a stale attachment.
+func (m *Metrics) RecordStaleAttachmentCleared() {
+	m.attachmentStaleCleared.Inc()
+}
+
+// RecordReconcileAction records a reconciliation action.
+// action should be "clear_stale" or "sync_annotation".
+func (m *Metrics) RecordReconcileAction(action string) {
+	m.attachmentReconcileTotal.WithLabelValues(action).Inc()
 }
