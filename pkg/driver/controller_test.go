@@ -407,14 +407,14 @@ func testNode(name string) *corev1.Node {
 
 // Test volume IDs must be valid UUIDs (pvc-<uuid> format)
 const (
-	testVolumeID1    = "pvc-11111111-1111-1111-1111-111111111111"
-	testVolumeID2    = "pvc-22222222-2222-2222-2222-222222222222"
-	testVolumeID3    = "pvc-33333333-3333-3333-3333-333333333333"
-	testVolumeID4    = "pvc-44444444-4444-4444-4444-444444444444"
-	testVolumeID5    = "pvc-55555555-5555-5555-5555-555555555555"
-	testVolumeID6    = "pvc-66666666-6666-6666-6666-666666666666"
-	testVolumeID7    = "pvc-77777777-7777-7777-7777-777777777777"
-	testVolumeID8    = "pvc-88888888-8888-8888-8888-888888888888"
+	testVolumeID1     = "pvc-11111111-1111-1111-1111-111111111111"
+	testVolumeID2     = "pvc-22222222-2222-2222-2222-222222222222"
+	testVolumeID3     = "pvc-33333333-3333-3333-3333-333333333333"
+	testVolumeID4     = "pvc-44444444-4444-4444-4444-444444444444"
+	testVolumeID5     = "pvc-55555555-5555-5555-5555-555555555555"
+	testVolumeID6     = "pvc-66666666-6666-6666-6666-666666666666"
+	testVolumeID7     = "pvc-77777777-7777-7777-7777-777777777777"
+	testVolumeID8     = "pvc-88888888-8888-8888-8888-888888888888"
 	testVolumeIDStale = "pvc-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 )
 
@@ -559,7 +559,7 @@ func TestControllerPublishVolume_StaleAttachmentSelfHealing(t *testing.T) {
 	am := cs.driver.GetAttachmentManager()
 	// Use TrackAttachment directly on the manager to bypass validation
 	// (in reality, this could happen if controller restarts and loads stale state)
-	am.TrackAttachment(ctx, testVolumeIDStale, "deleted-node")
+	_ = am.TrackAttachment(ctx, testVolumeIDStale, "deleted-node")
 
 	// Try to attach to node-1 - should succeed (self-healing)
 	req := &csi.ControllerPublishVolumeRequest{
@@ -694,7 +694,7 @@ func TestControllerUnpublishVolume_Success(t *testing.T) {
 
 	// First publish
 	am := cs.driver.GetAttachmentManager()
-	am.TrackAttachment(ctx, testVolumeID5, "node-1")
+	_ = am.TrackAttachment(ctx, testVolumeID5, "node-1")
 
 	// Unpublish
 	req := &csi.ControllerUnpublishVolumeRequest{
@@ -779,7 +779,7 @@ func TestControllerUnpublishVolume_EmptyNodeID(t *testing.T) {
 
 	// Track an attachment first
 	am := cs.driver.GetAttachmentManager()
-	am.TrackAttachment(ctx, testVolumeID7, "some-node")
+	_ = am.TrackAttachment(ctx, testVolumeID7, "some-node")
 
 	req := &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: testVolumeID7,

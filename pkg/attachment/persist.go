@@ -108,7 +108,7 @@ func isNotFoundError(err error) bool {
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr ||
 		(len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-		indexOf(s, substr) >= 0)))
+			indexOf(s, substr) >= 0)))
 }
 
 // indexOf returns the index of substr in s, or -1 if not found

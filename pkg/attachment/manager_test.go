@@ -151,8 +151,8 @@ func TestAttachmentManager_UntrackAttachment_Idempotent(t *testing.T) {
 
 	// Track and untrack
 	volumeID := "vol-1"
-	am.TrackAttachment(ctx, volumeID, "node-1")
-	am.UntrackAttachment(ctx, volumeID)
+	_ = am.TrackAttachment(ctx, volumeID, "node-1")
+	_ = am.UntrackAttachment(ctx, volumeID)
 
 	// Untrack again - should be idempotent
 	err = am.UntrackAttachment(ctx, volumeID)
@@ -522,11 +522,10 @@ func TestIsWithinGracePeriod_OutsidePeriod(t *testing.T) {
 	}
 
 	// Use a very short grace period that we've already exceeded
-	result := am.IsWithinGracePeriod(volumeID, 1*time.Nanosecond)
 	// Sleep a tiny bit to ensure we're past the grace period
 	time.Sleep(1 * time.Millisecond)
 
-	result = am.IsWithinGracePeriod(volumeID, 1*time.Nanosecond)
+	result := am.IsWithinGracePeriod(volumeID, 1*time.Nanosecond)
 	if result {
 		t.Error("Expected IsWithinGracePeriod to return false after grace period expired")
 	}
