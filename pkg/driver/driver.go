@@ -155,12 +155,19 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 
 	// Initialize attachment reconciler if enabled
 	if config.EnableController && config.EnableAttachmentReconciler && config.K8sClient != nil && driver.attachmentManager != nil {
+		// Create EventPoster for posting lifecycle events
+		var eventPoster attachment.EventPoster
+		if config.K8sClient != nil {
+			eventPoster = NewEventPoster(config.K8sClient)
+		}
+
 		reconcilerConfig := attachment.ReconcilerConfig{
 			Manager:     driver.attachmentManager,
 			K8sClient:   config.K8sClient,
 			Interval:    config.AttachmentReconcileInterval,
 			GracePeriod: config.AttachmentGracePeriod,
 			Metrics:     config.Metrics,
+			EventPoster: eventPoster,
 		}
 
 		attachmentReconciler, err := attachment.NewAttachmentReconciler(reconcilerConfig)
