@@ -154,6 +154,11 @@ func main() {
 		cleanupConnector := nvme.NewConnector()
 		cleaner := nvme.NewOrphanCleaner(cleanupConnector)
 
+		// Pass metrics to cleaner for recording orphan cleanup
+		if promMetrics != nil {
+			cleaner.SetMetrics(promMetrics)
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		if err := cleaner.CleanupOrphanedConnections(ctx); err != nil {
 			// Log warning but don't fail startup - cleanup is best effort

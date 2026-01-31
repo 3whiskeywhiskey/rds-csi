@@ -12,6 +12,8 @@ import (
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
 // Event reasons - use consistent naming for filtering
@@ -33,6 +35,12 @@ const (
 type EventPoster struct {
 	recorder  record.EventRecorder
 	clientset kubernetes.Interface
+	metrics   *observability.Metrics
+}
+
+// SetMetrics sets the Prometheus metrics for recording event posting
+func (ep *EventPoster) SetMetrics(m *observability.Metrics) {
+	ep.metrics = m
 }
 
 // eventSinkAdapter adapts the EventInterface to record.EventSink
@@ -98,6 +106,11 @@ func (ep *EventPoster) PostMountFailure(ctx context.Context, pvcNamespace, pvcNa
 	// Post Warning event to PVC
 	ep.recorder.Event(pvc, corev1.EventTypeWarning, EventReasonMountFailure, eventMessage)
 
+	// Record metric
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonMountFailure)
+	}
+
 	klog.V(2).Infof("Posted mount failure event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 
 	return nil
@@ -119,6 +132,11 @@ func (ep *EventPoster) PostRecoveryFailed(ctx context.Context, pvcNamespace, pvc
 
 	// Post Warning event to PVC
 	ep.recorder.Event(pvc, corev1.EventTypeWarning, EventReasonRecoveryFailed, eventMessage)
+
+	// Record metric
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonRecoveryFailed)
+	}
 
 	klog.V(2).Infof("Posted recovery failure event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 
@@ -143,6 +161,11 @@ func (ep *EventPoster) PostStaleMountDetected(ctx context.Context, pvcNamespace,
 	// Post Normal event to PVC (informational, not a failure)
 	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonStaleMountDetected, eventMessage)
 
+	// Record metric
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonStaleMountDetected)
+	}
+
 	klog.V(2).Infof("Posted stale mount detection event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 
 	return nil
@@ -160,6 +183,11 @@ func (ep *EventPoster) PostConnectionFailure(ctx context.Context, pvcNamespace, 
 	eventMessage := fmt.Sprintf("[%s] on [%s]: Connection to %s failed: %v", volumeID, nodeName, targetAddress, err)
 	ep.recorder.Event(pvc, corev1.EventTypeWarning, EventReasonConnectionFailure, eventMessage)
 
+	// Record metric
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonConnectionFailure)
+	}
+
 	klog.V(2).Infof("Posted connection failure event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 	return nil
 }
@@ -175,6 +203,11 @@ func (ep *EventPoster) PostConnectionRecovery(ctx context.Context, pvcNamespace,
 	eventMessage := fmt.Sprintf("[%s] on [%s]: Connection to %s recovered after %d attempts", volumeID, nodeName, targetAddress, attempts)
 	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonConnectionRecovery, eventMessage)
 
+	// Record metric
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonConnectionRecovery)
+	}
+
 	klog.V(2).Infof("Posted connection recovery event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 	return nil
 }
@@ -184,6 +217,10 @@ func (ep *EventPoster) PostConnectionRecovery(ctx context.Context, pvcNamespace,
 // The log format is structured for easy parsing by log aggregation systems.
 func (ep *EventPoster) PostOrphanDetected(ctx context.Context, nodeName, nqn string) error {
 	klog.Infof("OrphanDetected: node=%s nqn=%s", nodeName, nqn)
+	// Record metric (even though no K8s event is posted)
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonOrphanDetected)
+	}
 	return nil
 }
 
@@ -191,5 +228,9 @@ func (ep *EventPoster) PostOrphanDetected(ctx context.Context, nodeName, nqn str
 // Orphans have no associated PVC, so this logs rather than posting a K8s event.
 func (ep *EventPoster) PostOrphanCleaned(ctx context.Context, nodeName, nqn string) error {
 	klog.Infof("OrphanCleaned: node=%s nqn=%s", nodeName, nqn)
+	// Record metric (even though no K8s event is posted)
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonOrphanCleaned)
+	}
 	return nil
 }

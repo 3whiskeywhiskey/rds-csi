@@ -5,12 +5,20 @@ import (
 	"fmt"
 
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
 // OrphanCleaner detects and removes orphaned NVMe subsystem connections
 type OrphanCleaner struct {
 	connector Connector
 	resolver  *DeviceResolver
+	metrics   *observability.Metrics
+}
+
+// SetMetrics sets the Prometheus metrics for recording orphan cleanup
+func (oc *OrphanCleaner) SetMetrics(m *observability.Metrics) {
+	oc.metrics = m
 }
 
 // NewOrphanCleaner creates an OrphanCleaner using the connector's resolver
@@ -65,6 +73,10 @@ func (oc *OrphanCleaner) CleanupOrphanedConnections(ctx context.Context) error {
 			// Continue to next orphan - best effort cleanup
 		} else {
 			klog.V(2).Infof("Successfully disconnected orphaned subsystem: %s", nqn)
+			// Record metric for successful cleanup
+			if oc.metrics != nil {
+				oc.metrics.RecordOrphanCleaned()
+			}
 		}
 	}
 

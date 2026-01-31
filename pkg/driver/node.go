@@ -77,6 +77,11 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 		recoverer.SetMetrics(driver.metrics)
 	}
 
+	// Pass metrics to eventPoster if available
+	if driver.metrics != nil && eventPoster != nil {
+		eventPoster.SetMetrics(driver.metrics)
+	}
+
 	return &NodeServer{
 		driver:       driver,
 		nvmeConn:     connector,
@@ -185,6 +190,10 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	klog.V(2).Infof("Staging volume %s: NQN=%s, Address=%s:%d, FSType=%s",
 		volumeID, nqn, nvmeAddress, port, fsType)
 
+	// Extract PVC info for event posting
+	pvcNamespace := volumeContext["csi.storage.k8s.io/pvc/namespace"]
+	pvcName := volumeContext["csi.storage.k8s.io/pvc/name"]
+
 	// Log volume stage request
 	secLogger := security.GetLogger()
 	secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeUnknown, nil, 0)
@@ -204,6 +213,11 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	devicePath, err := ns.nvmeConn.ConnectWithRetry(ctx, target, connConfig)
 	if err != nil {
+		// Post connection failure event
+		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
+			targetAddr := fmt.Sprintf("%s:%d", nvmeAddress, port)
+			ns.eventPoster.PostConnectionFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, targetAddr, err)
+		}
 		// Log volume stage failure
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
 		return nil, status.Errorf(codes.Internal, "failed to connect to NVMe target: %v", err)
@@ -213,6 +227,10 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	// Step 2: Format filesystem if needed
 	if err := ns.mounter.Format(devicePath, fsType); err != nil {
+		// Post mount failure event (format is part of mount preparation)
+		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
+			ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to format device %s: %v", devicePath, err))
+		}
 		// Cleanup on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
 		// Log volume stage failure
@@ -227,6 +245,10 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	if err := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); err != nil {
+		// Post mount failure event
+		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
+			ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to mount %s to %s: %v", devicePath, stagingPath, err))
+		}
 		// Cleanup on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
 		// Log volume stage failure
@@ -610,19 +632,24 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 // Returns nil if mount is healthy or recovery succeeded
 // Returns error if mount is stale and recovery failed
 func (ns *NodeServer) checkAndRecoverMount(ctx context.Context, stagingPath, nqn, fsType string, mountOptions []string, pvcNamespace, pvcName, volumeID string) error {
-	// Check for stale mount
-	stale, reason, err := ns.staleChecker.IsMountStale(stagingPath, nqn)
+	// Check for stale mount with detailed info for event posting
+	staleInfo, err := ns.staleChecker.GetStaleInfo(stagingPath, nqn)
 	if err != nil {
 		klog.Warningf("Failed to check mount staleness for %s: %v", stagingPath, err)
 		// Don't fail the operation if we can't check - proceed optimistically
 		return nil
 	}
 
-	if !stale {
+	if !staleInfo.IsStale {
 		return nil
 	}
 
-	klog.Warningf("Stale mount detected at %s (reason: %s), attempting recovery", stagingPath, reason)
+	klog.Warningf("Stale mount detected at %s (reason: %s), attempting recovery", stagingPath, staleInfo.Reason)
+
+	// Post stale mount detection event
+	if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
+		ns.eventPoster.PostStaleMountDetected(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, staleInfo.MountDevice, staleInfo.CurrentDevice)
+	}
 
 	// Attempt recovery
 	result, err := ns.recoverer.Recover(ctx, stagingPath, nqn, fsType, mountOptions)
