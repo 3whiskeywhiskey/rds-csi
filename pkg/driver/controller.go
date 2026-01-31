@@ -488,9 +488,42 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	}, nil
 }
 
-// ControllerUnpublishVolume is not supported (node-local attachment)
+// ControllerUnpublishVolume removes volume attachment tracking for a node.
+// This method is idempotent - returns success even if volume not currently attached.
 func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ControllerUnpublishVolume is not supported")
+	volumeID := req.GetVolumeId()
+	nodeID := req.GetNodeId()
+
+	klog.V(2).Infof("ControllerUnpublishVolume called for volume %s from node %s", volumeID, nodeID)
+
+	// Validate request
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+	// Note: nodeID can be empty for force-detach scenarios per CSI spec
+
+	// Validate volume ID format (security: prevent injection)
+	if err := utils.ValidateVolumeID(volumeID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
+	}
+
+	// Get attachment manager
+	am := cs.driver.GetAttachmentManager()
+	if am == nil {
+		// No attachment manager = nothing to untrack
+		klog.V(3).Infof("Attachment manager not available, skipping untrack for volume %s", volumeID)
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	// CSI-03: Untrack attachment (idempotent - succeeds even if not tracked)
+	if err := am.UntrackAttachment(ctx, volumeID); err != nil {
+		// Log but don't fail - unpublish must be idempotent (CONTEXT.md decision)
+		klog.Warningf("Error untracking attachment for volume %s: %v (returning success)", volumeID, err)
+	}
+
+	klog.V(2).Infof("Successfully unpublished volume %s", volumeID)
+
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
 // CreateSnapshot is not yet implemented
