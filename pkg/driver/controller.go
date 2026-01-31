@@ -532,6 +532,11 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				// Post event for operator visibility (best effort)
 				cs.postAttachmentConflictEvent(ctx, req, existing.NodeID)
 
+				// Record conflict metric
+				if cs.driver.metrics != nil {
+					cs.driver.metrics.RecordAttachmentConflict()
+				}
+
 				return nil, status.Errorf(codes.FailedPrecondition,
 					"volume %s already attached to node %s, cannot attach to %s",
 					volumeID, existing.NodeID, nodeID)
@@ -543,6 +548,9 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	if err := am.TrackAttachment(ctx, volumeID, nodeID); err != nil {
 		// Check if this is a conflict (race condition - another request won)
 		if existing, exists := am.GetAttachment(volumeID); exists && existing.NodeID != nodeID {
+			if cs.driver.metrics != nil {
+				cs.driver.metrics.RecordAttachmentConflict()
+			}
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"volume %s already attached to node %s, cannot attach to %s",
 				volumeID, existing.NodeID, nodeID)
