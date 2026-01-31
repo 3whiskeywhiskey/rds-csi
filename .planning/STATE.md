@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 9 of 9 (Implement and Test Fix)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In progress
-Last activity: 2026-01-31 — Completed 09-01-PLAN.md (document code path and implement fix)
+Last activity: 2026-01-31 — Completed 09-02-PLAN.md (unit tests for fix)
 
-Progress: [████████░░] 80% (prior milestones) + 09-01 of v0.5
+Progress: [████████░░] 80% (prior milestones) + 09-01, 09-02 of v0.5
 
 ## Milestone History
 
@@ -68,6 +68,8 @@ Progress: [████████░░] 80% (prior milestones) + 09-01 of v0.
 | EVENTS-04 | PV lookup for PVC info in unpublish | 07-04 | volumeContext not available in unpublish |
 | HOTPLUG-01 | Check ALL hotplug volumes for VolumeReady | 09-01 | Simpler than tracking "new" volumes |
 | HOTPLUG-02 | Early return from cleanupAttachmentPods | 09-01 | Cleaner than per-pod skip logic |
+| TEST-04    | Tests added to existing vmi_test.go | 09-02 | Already has test infrastructure |
+| TEST-05    | Direct cleanupAttachmentPods() invocation | 09-02 | Better unit test isolation |
 
 ### Pending Todos
 
@@ -89,7 +91,7 @@ Production issue motivating this milestone:
 ## Session Continuity
 
 Last session: 2026-01-31
-Stopped at: Completed 09-01-PLAN.md
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
 
 ### Current Work State
@@ -107,19 +109,26 @@ Resume file: None
   - Code path documented in 09-01-CODEPATH.md
   - Fix committed to hotplug-fix-v1 branch (cc1b700)
   - allHotplugVolumesReady() checks VolumeReady phase before pod deletion
-- ○ 09-02: Unit tests for fix (wave 2)
+- ✓ 09-02: Unit tests for fix (wave 2) - COMPLETE
+  - 5 unit tests added to vmi_test.go (6546421)
+  - Tests cover bug reproduction, normal operation, regression scenarios
+  - Local test run blocked (macOS), push blocked (SSH key mismatch)
 - ○ 09-03: Manual validation on metal cluster (wave 3, has checkpoint)
 
 **Fix summary:**
 - Added allHotplugVolumesReady() helper function
 - Modified cleanupAttachmentPods() to check all volumes ready before deleting old pods
 - Fix location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/volume-hotplug.go
+- Test location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/vmi_test.go
+
+**Blocker for CI validation:**
+- SSH key (`ianmcmahon`) lacks write access to `whiskey-works/kubevirt`
+- Need to push with correct authentication to trigger CI
 
 **Next steps:**
-1. Execute 09-02-PLAN.md (unit tests)
+1. Push hotplug-fix-v1 branch (requires auth fix)
 2. Execute 09-03-PLAN.md (manual validation)
-3. Push hotplug-fix-v1 branch, create PR to trigger CI
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — 09-01 complete, fix implemented*
+*Last updated: 2026-01-31 — 09-02 complete, unit tests added*
