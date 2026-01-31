@@ -392,6 +392,55 @@ func (cs *ControllerServer) postAttachmentConflictEvent(ctx context.Context, req
 	}
 }
 
+// postVolumeAttachedEvent posts a K8s event when a volume is attached.
+// Best effort - failures are logged but don't affect the main operation.
+func (cs *ControllerServer) postVolumeAttachedEvent(ctx context.Context, req *csi.ControllerPublishVolumeRequest, duration time.Duration) {
+	volCtx := req.GetVolumeContext()
+	pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+	pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+
+	if pvcNamespace == "" || pvcName == "" {
+		klog.V(3).Infof("Cannot post volume attached event: PVC info not in volume context")
+		return
+	}
+
+	if cs.driver.k8sClient == nil {
+		return
+	}
+
+	poster := NewEventPoster(cs.driver.k8sClient)
+	if err := poster.PostVolumeAttached(ctx, pvcNamespace, pvcName, req.GetVolumeId(), req.GetNodeId(), duration); err != nil {
+		klog.Warningf("Failed to post volume attached event: %v", err)
+	}
+}
+
+// postVolumeDetachedEvent posts a K8s event when a volume is detached.
+// Best effort - failures are logged but don't affect the main operation.
+func (cs *ControllerServer) postVolumeDetachedEvent(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) {
+	if cs.driver.k8sClient == nil {
+		return
+	}
+
+	// For unpublish, we don't have volume context with PVC info
+	// We need to look up the PV to get the claimRef
+	pv, err := cs.driver.k8sClient.CoreV1().PersistentVolumes().Get(ctx, req.GetVolumeId(), metav1.GetOptions{})
+	if err != nil {
+		klog.V(3).Infof("Cannot get PV %s for detached event: %v", req.GetVolumeId(), err)
+		return
+	}
+
+	claimRef := pv.Spec.ClaimRef
+	if claimRef == nil {
+		klog.V(3).Infof("PV %s has no claimRef for detached event", req.GetVolumeId())
+		return
+	}
+
+	poster := NewEventPoster(cs.driver.k8sClient)
+	if err := poster.PostVolumeDetached(ctx, claimRef.Namespace, claimRef.Name, req.GetVolumeId(), req.GetNodeId()); err != nil {
+		klog.Warningf("Failed to post volume detached event: %v", err)
+	}
+}
+
 // ControllerPublishVolume tracks volume attachment to a node and enforces RWO semantics.
 // Returns publish_context with NVMe connection parameters for NodeStageVolume.
 func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
@@ -502,9 +551,13 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	}
 
 	// Record attachment success metric
+	duration := time.Since(startTime)
 	if cs.driver.metrics != nil {
-		cs.driver.metrics.RecordAttachmentOp("attach", nil, time.Since(startTime))
+		cs.driver.metrics.RecordAttachmentOp("attach", nil, duration)
 	}
+
+	// Post attachment event (best effort)
+	cs.postVolumeAttachedEvent(ctx, req, duration)
 
 	klog.V(2).Infof("Successfully published volume %s to node %s", volumeID, nodeID)
 
@@ -551,6 +604,9 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	if cs.driver.metrics != nil {
 		cs.driver.metrics.RecordAttachmentOp("detach", nil, time.Since(startTime))
 	}
+
+	// Post detachment event (best effort)
+	cs.postVolumeDetachedEvent(ctx, req)
 
 	klog.V(2).Infof("Successfully unpublished volume %s", volumeID)
 
