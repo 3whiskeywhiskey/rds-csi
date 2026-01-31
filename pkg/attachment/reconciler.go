@@ -107,7 +107,13 @@ func (r *AttachmentReconciler) Stop() {
 
 // run is the main reconciliation loop.
 func (r *AttachmentReconciler) run(ctx context.Context) {
-	defer close(r.doneCh)
+	// Capture channels as local variables to avoid race with Stop()
+	r.mu.Lock()
+	stopCh := r.stopCh
+	doneCh := r.doneCh
+	r.mu.Unlock()
+
+	defer close(doneCh)
 
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
@@ -119,7 +125,7 @@ func (r *AttachmentReconciler) run(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			r.reconcile(ctx)
-		case <-r.stopCh:
+		case <-stopCh:
 			klog.V(2).Info("Attachment reconciler shutting down")
 			return
 		case <-ctx.Done():
