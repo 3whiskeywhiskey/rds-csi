@@ -11,10 +11,10 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 
 Phase: 10 of 10 (Upstream Contribution)
 Plan: 2 of 2 prepared (awaiting manual submission)
-Status: Prepared — PR ready, not submitted
-Last activity: 2026-01-31 — Prepared 10-02 (PR description and branch ready)
+Status: Testing v3 fix — build in progress
+Last activity: 2026-02-01 — Implemented v3 fix with AttachPodUID handoff check
 
-Progress: [██████████] 100% (implementation) — upstream PR pending user submission
+Progress: [█████████░] 95% — v3 fix building, needs validation before upstream PR
 
 ## Milestone History
 
@@ -77,10 +77,15 @@ Progress: [██████████] 100% (implementation) — upstream PR
 | PREP-02    | Use --signoff flag during cherry-pick for DCO | 10-01 | Simpler than interactive rebase |
 | PREP-03    | Base upstream-pr on upstream/main | 10-01 | Ensures PR applies cleanly to upstream |
 | PR-01      | Defer upstream PR submission to user | 10-02 | User controls timing of upstream engagement |
+| FIX-01     | v1 fix checked VolumeReady status — FAILED | 09    | Status reflects old pod, not new pod |
+| FIX-02     | v2 fix checked pod Running — FAILED | 09    | Pod Running doesn't mean volumes mounted |
+| FIX-03     | v3 fix checks AttachPodUID matches new pod | 09    | Confirms virt-handler completed handoff |
 
 ### Pending Todos
 
-None
+- Deploy v3 images after build completes (~50 min from 01:38 UTC)
+- Validate concurrent hotplug with v3 fix
+- Update upstream-pr branch with v3 fix if successful
 
 ### Blockers/Concerns
 
@@ -97,9 +102,15 @@ Production issue motivating this milestone:
 
 ## Session Continuity
 
-Last session: 2026-01-31
-Stopped at: Completed 10-01-PLAN.md (prepared commits for upstream PR)
+Last session: 2026-02-01
+Stopped at: v3 fix pushed, build in progress (run 21554366079)
 Resume file: None
+
+**Resume instructions:**
+1. Check build status: `gh run view 21554366079 --repo whiskey-works/kubevirt`
+2. If complete, deploy: `kubectl patch kubevirt kubevirt -n kubevirt --type=merge -p '{"spec":{"imageTag":"hotplug-fix-v1-a0ffe0c"}}'`
+3. Test concurrent hotplug on homelab-node-1/2/3
+4. If successful, update upstream-pr branch with v3 commits
 
 ### Current Work State
 
@@ -129,24 +140,25 @@ Resume file: None
   - ✅ Single-volume regression check passed
   - Validation documented in 09-03-VALIDATION.md
 
-**Fix summary:**
-- Added allHotplugVolumesReady() helper function
-- Modified cleanupAttachmentPods() to check all volumes ready before deleting old pods
-- Fix location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/volume-hotplug.go
-- Test location: /tmp/kubevirt-fork/pkg/virt-controller/watch/vmi/vmi_test.go
-- Validated on: metal cluster with nested K3s worker (homelab-node-1)
+**Fix Evolution:**
 
-**Phase 10 (Upstream Contribution):** ✅ PREPARED (awaiting manual submission)
-- ✓ 10-01: Prepare commits for upstream PR (wave 1)
-  - Created upstream-pr branch from upstream/main
-  - Cherry-picked fix commits with DCO sign-off
-  - Commits: dde549140a (fix), d9622dd922 (tests)
-  - Branch pushed to whiskey-works/kubevirt
-- ⏸ 10-02: Submit PR to kubevirt/kubevirt (wave 2) — PREPARED, NOT SUBMITTED
-  - PR description ready: `.planning/phases/10-upstream-contribution/10-02-PR-DESCRIPTION.md`
-  - Branch ready: `whiskey-works/kubevirt:upstream-pr`
-  - To submit: https://github.com/kubevirt/kubevirt/compare/main...whiskey-works:kubevirt:upstream-pr
-  - References: #6564, #9708, #16520
+| Version | Approach | Result |
+|---------|----------|--------|
+| v1 | Check `allHotplugVolumesReady(vmi)` - VolumeReady phase | FAILED - status reflects OLD pod |
+| v2 | Check `currentPod.Status.Phase == Running` | FAILED - Running doesn't mean volumes mounted |
+| v3 | Check `allVolumesHandedOffToPod(vmi, currentPod)` | TESTING - checks AttachPodUID matches new pod |
+
+**v3 Fix Details:**
+- Function: `allVolumesHandedOffToPod(vmi, pod)` in volume-hotplug.go
+- Checks: (1) pod Running, (2) all volumes VolumeReady, (3) all volumes' AttachPodUID == pod.UID
+- This confirms virt-handler has completed setting up volumes on the new pod
+- Commit: a0ffe0c on hotplug-fix-v1 branch
+- Build: GitHub Actions run 21554366079 (queued 01:38 UTC, ~50 min build)
+- Images will be: ghcr.io/whiskey-works/kubevirt/*:hotplug-fix-v1-a0ffe0c
+
+**Phase 10 (Upstream Contribution):** ⏸ BLOCKED on v3 validation
+- ✓ 10-01: Prepare commits for upstream PR (wave 1) — NEEDS UPDATE after v3 validated
+- ⏸ 10-02: Submit PR to kubevirt/kubevirt (wave 2) — BLOCKED on v3 success
 
 ## Developer Notes
 
@@ -158,4 +170,4 @@ Use this when pushing to `whiskey-works/*` repos to avoid SSH key mismatch with 
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 10 prepared, upstream PR awaiting manual submission*
+*Last updated: 2026-02-01 — v3 fix implemented, build in progress, awaiting validation*
