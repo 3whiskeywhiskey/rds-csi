@@ -250,7 +250,29 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 			return nil, status.Errorf(codes.Internal, "failed to write device metadata: %v", err)
 		}
 
-		klog.V(2).Infof("Successfully staged block volume %s to %s (device: %s)", volumeID, stagingPath, devicePath)
+		// Create dev directory for kubelet's globalMapPath
+		// Kubelet expects block devices to be in staging_path/dev/
+		devDir := filepath.Join(stagingPath, "dev")
+		if err := os.MkdirAll(devDir, 0750); err != nil {
+			_ = ns.nvmeConn.Disconnect(nqn)
+			secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to create dev directory: %v", err)
+		}
+
+		// Create symlink to device in dev directory
+		// This allows kubelet to find the device at globalMapPath
+		devSymlink := filepath.Join(devDir, filepath.Base(devicePath))
+		if err := os.Symlink(devicePath, devSymlink); err != nil {
+			if !os.IsExist(err) {
+				_ = ns.nvmeConn.Disconnect(nqn)
+				secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
+				return nil, status.Errorf(codes.Internal, "failed to create device symlink: %v", err)
+			}
+			// Symlink already exists, that's fine (idempotency)
+		}
+
+		klog.V(2).Infof("Successfully staged block volume %s to %s (device: %s, symlink: %s)",
+			volumeID, stagingPath, devicePath, devSymlink)
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeSuccess, nil, time.Since(startTime))
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
@@ -370,6 +392,12 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 					klog.Warningf("Device busy check failed for %s: %v (proceeding)", devicePath, result.Error)
 				}
 			}
+		}
+
+		// Remove dev directory and its contents (symlinks)
+		devDir := filepath.Join(stagingPath, "dev")
+		if err := os.RemoveAll(devDir); err != nil && !os.IsNotExist(err) {
+			klog.Warningf("Failed to remove dev directory %s: %v", devDir, err)
 		}
 
 		// Remove metadata file
