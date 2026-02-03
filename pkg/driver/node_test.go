@@ -1126,6 +1126,101 @@ func TestNodeUnstageVolume_FilesystemVolume_Unchanged(t *testing.T) {
 	}
 }
 
+// TestNodePublishVolume_FilesystemVolume tests publishing a filesystem volume
+func TestNodePublishVolume_FilesystemVolume(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "node-test-fs-publish-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Setup staging directory (no device metadata file for filesystem volumes)
+	if err := os.MkdirAll(stagingPath, 0750); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	// For filesystem volumes, staging path must report as mounted
+	mounter := &mockMounter{
+		isLikelyMounted: true, // Simulate staging path is mounted
+	}
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+		// No stale checker - will skip stale mount recovery check
+	}
+
+	// Use invalid volume ID format that won't derive NQN, skipping stale mount check
+	req := &csi.NodePublishVolumeRequest{
+		VolumeId:          "test-volume-no-nqn",
+		StagingTargetPath: stagingPath,
+		TargetPath:        targetPath,
+		VolumeCapability:  createFilesystemVolumeCapability(),
+		Readonly:          false,
+	}
+
+	_, err = ns.NodePublishVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("NodePublishVolume failed: %v", err)
+	}
+
+	// Verify: Mount WAS called for filesystem bind mount
+	if !mounter.mountCalled {
+		t.Error("Mount should be called for filesystem volume bind mount")
+	}
+}
+
+// TestNodeUnpublishVolume_FilesystemVolume tests unpublishing a filesystem volume
+func TestNodeUnpublishVolume_FilesystemVolume(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "node-test-fs-unpublish-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Create target directory (filesystem volumes use directories, not files)
+	if err := os.MkdirAll(targetPath, 0750); err != nil {
+		t.Fatalf("failed to create target dir: %v", err)
+	}
+
+	mounter := &mockMounter{}
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+	}
+
+	req := &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+		TargetPath: targetPath,
+	}
+
+	_, err = ns.NodeUnpublishVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("NodeUnpublishVolume failed: %v", err)
+	}
+
+	// Verify: Unmount WAS called
+	if !mounter.unmountCalled {
+		t.Error("Unmount should be called for filesystem volume")
+	}
+}
+
 // TestNodeGetVolumeStats_VolumeConditionNeverNil is a focused test to verify
 // the critical invariant that VolumeCondition is never nil
 func TestNodeGetVolumeStats_VolumeConditionNeverNil(t *testing.T) {

@@ -1213,6 +1213,38 @@ func TestControllerPublishVolume_RWXIdempotent(t *testing.T) {
 	}
 }
 
+func TestValidateVolumeCapabilities_ErrorMessageStructure(t *testing.T) {
+	cs, _ := testControllerServer(t)
+
+	// RWX filesystem should produce actionable error
+	err := cs.validateVolumeCapabilities([]*csi.VolumeCapability{
+		{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+			},
+		},
+	})
+
+	if err == nil {
+		t.Fatal("expected error for RWX filesystem")
+	}
+
+	errMsg := err.Error()
+
+	// WHAT: identifies the problem
+	if !strings.Contains(errMsg, "RWX") && !strings.Contains(errMsg, "MULTI_NODE") {
+		t.Error("error should mention RWX or MULTI_NODE (what's wrong)")
+	}
+
+	// HOW: provides remediation
+	if !strings.Contains(errMsg, "volumeMode: Block") {
+		t.Error("error should provide fix (use volumeMode: Block)")
+	}
+}
+
 func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
 	// Use valid UUID format for volume ID
 	testVolID := "pvc-11111111-2222-3333-4444-555555555555"
