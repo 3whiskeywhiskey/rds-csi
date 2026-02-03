@@ -17,9 +17,9 @@
 
 ### Observability
 
-- [ ] **OBS-01**: Prometheus metrics expose migrations_total, migration_duration_seconds, active_migrations gauge
-- [ ] **OBS-02**: Kubernetes events posted to PVC: MigrationStarted, MigrationCompleted, MigrationFailed
-- [ ] **OBS-03**: User documentation explains RWX is safe only for KubeVirt live migration (not general RWX workloads)
+- [x] **OBS-01**: Prometheus metrics expose migrations_total, migration_duration_seconds, active_migrations gauge
+- [x] **OBS-02**: Kubernetes events posted to PVC: MigrationStarted, MigrationCompleted, MigrationFailed
+- [x] **OBS-03**: User documentation explains RWX is safe only for KubeVirt live migration (not general RWX workloads)
 
 ## Future Requirements
 
@@ -46,9 +46,9 @@
 | SAFETY-02 | Phase 9 | [x] |
 | SAFETY-03 | Phase 9 | [x] |
 | SAFETY-04 | Phase 9 | [x] |
-| OBS-01 | Phase 10 | [ ] |
-| OBS-02 | Phase 10 | [ ] |
-| OBS-03 | Phase 10 | [ ] |
+| OBS-01 | Phase 10 | [x] |
+| OBS-02 | Phase 10 | [x] |
+| OBS-03 | Phase 10 | [x] |
 
 ---
 *Requirements defined: 2026-02-03*
