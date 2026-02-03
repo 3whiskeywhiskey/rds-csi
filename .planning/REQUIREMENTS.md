@@ -10,10 +10,10 @@
 
 ### Migration Safety
 
-- [ ] **SAFETY-01**: Migration timeout (5 min default, configurable) allows dual-attachment window without triggering RWO conflict
-- [ ] **SAFETY-02**: Non-migration dual-attach attempts fail immediately with FAILED_PRECONDITION (not delayed by grace period)
-- [ ] **SAFETY-03**: AttachmentState tracks secondary attachment with migration timestamp for cleanup
-- [ ] **SAFETY-04**: NodeUnstageVolume verifies no open file descriptors before issuing NVMe disconnect
+- [x] **SAFETY-01**: Migration timeout (5 min default, configurable) allows dual-attachment window without triggering RWO conflict
+- [x] **SAFETY-02**: Non-migration dual-attach attempts fail immediately with FAILED_PRECONDITION (not delayed by grace period)
+- [x] **SAFETY-03**: AttachmentState tracks secondary attachment with migration timestamp for cleanup
+- [x] **SAFETY-04**: NodeUnstageVolume verifies no open file descriptors before issuing NVMe disconnect
 
 ### Observability
 
@@ -42,10 +42,10 @@
 | RWX-01 | Phase 8 | [x] |
 | RWX-02 | Phase 8 | [x] |
 | RWX-03 | Phase 8 | [x] |
-| SAFETY-01 | Phase 9 | [ ] |
-| SAFETY-02 | Phase 9 | [ ] |
-| SAFETY-03 | Phase 9 | [ ] |
-| SAFETY-04 | Phase 9 | [ ] |
+| SAFETY-01 | Phase 9 | [x] |
+| SAFETY-02 | Phase 9 | [x] |
+| SAFETY-03 | Phase 9 | [x] |
+| SAFETY-04 | Phase 9 | [x] |
 | OBS-01 | Phase 10 | [ ] |
 | OBS-02 | Phase 10 | [ ] |
 | OBS-03 | Phase 10 | [ ] |
