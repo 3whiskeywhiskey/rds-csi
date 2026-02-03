@@ -82,6 +82,10 @@ func (m *mockMounter) IsMountInUse(path string) (bool, []int, error) {
 	return false, nil, nil
 }
 
+func (m *mockMounter) MakeFile(pathname string) error {
+	return nil
+}
+
 // staleCheckBehavior defines the expected behavior of stale check
 type staleCheckBehavior struct {
 	stale  bool

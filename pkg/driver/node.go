@@ -3,6 +3,8 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -124,6 +126,9 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
 
+	// Detect volume mode early - block volumes don't have filesystems
+	isBlockVolume := req.GetVolumeCapability().GetBlock() != nil
+
 	// Extract volume context
 	volumeContext := req.GetVolumeContext()
 	nqn := volumeContext[volumeContextNQN]
@@ -158,11 +163,13 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe target context: %v", err)
 	}
 
-	// Get filesystem type from capability or use default
+	// Get filesystem type from capability or use default (only for filesystem volumes)
 	fsType := defaultFSType
-	if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
-		if mnt.FsType != "" {
-			fsType = mnt.FsType
+	if !isBlockVolume {
+		if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
+			if mnt.FsType != "" {
+				fsType = mnt.FsType
+			}
 		}
 	}
 
@@ -224,6 +231,30 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	klog.V(2).Infof("Connected to NVMe target, device: %s", devicePath)
+
+	if isBlockVolume {
+		// Block volume: store device path in staging directory, skip format/mount
+		// CSI spec: staging_target_path is ALWAYS a directory, even for block volumes
+		if err := os.MkdirAll(stagingPath, 0750); err != nil {
+			_ = ns.nvmeConn.Disconnect(nqn)
+			secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to create staging directory: %v", err)
+		}
+
+		// Store device path in metadata file for NodePublishVolume to read
+		metadataPath := filepath.Join(stagingPath, "device")
+		if err := os.WriteFile(metadataPath, []byte(devicePath), 0600); err != nil {
+			_ = ns.nvmeConn.Disconnect(nqn)
+			secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to write device metadata: %v", err)
+		}
+
+		klog.V(2).Infof("Successfully staged block volume %s to %s (device: %s)", volumeID, stagingPath, devicePath)
+		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeSuccess, nil, time.Since(startTime))
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
+	// Filesystem volume: format and mount (existing code follows)
 
 	// Step 2: Format filesystem if needed
 	if err := ns.mounter.Format(devicePath, fsType); err != nil {
