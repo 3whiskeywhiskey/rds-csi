@@ -463,6 +463,17 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Determine access mode from VolumeCapability (singular, not slice)
+	// ControllerPublishVolume uses GetVolumeCapability() which returns a single capability
+	accessMode := "RWO"
+	isRWX := false
+	if cap := req.GetVolumeCapability(); cap != nil {
+		if cap.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			accessMode = "RWX"
+			isRWX = true
+		}
+	}
+
 	// Acquire per-VMI lock if serialization is enabled
 	// This prevents concurrent volume operations on the same VMI from racing
 	if vmiGrouper := cs.driver.GetVMIGrouper(); vmiGrouper != nil {
@@ -497,15 +508,44 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	// Check existing attachment
 	existing, exists := am.GetAttachment(volumeID)
 	if exists {
-		if existing.NodeID == nodeID {
-			// CSI-01: Idempotent - already attached to same node
+		// Check if already attached to requesting node (idempotent)
+		if am.IsAttachedToNode(volumeID, nodeID) {
 			klog.V(2).Infof("Volume %s already attached to node %s (idempotent)", volumeID, nodeID)
 			return &csi.ControllerPublishVolumeResponse{
 				PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
 			}, nil
 		}
 
-		// Different node - check grace period FIRST
+		// Different node - behavior depends on access mode
+		if isRWX {
+			// RWX: Allow second attachment if within limit
+			nodeCount := am.GetNodeCount(volumeID)
+			if nodeCount >= 2 {
+				// ROADMAP-5: 2-node migration limit reached
+				klog.Warningf("RWX volume %s already attached to 2 nodes, rejecting 3rd attachment to %s",
+					volumeID, nodeID)
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Volume %s already attached to 2 nodes (migration limit). Wait for migration to complete. Attached nodes: %v",
+					volumeID, existing.GetNodeIDs())
+			}
+
+			// Allow second attachment for migration
+			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target)", volumeID, nodeID)
+			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to track secondary attachment: %v", err)
+			}
+
+			// Record RWX dual-attach (distinct from RWO conflict)
+			if cs.driver.metrics != nil {
+				cs.driver.metrics.RecordAttachmentOp("attach_secondary", nil, time.Since(startTime))
+			}
+
+			return &csi.ControllerPublishVolumeResponse{
+				PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
+			}, nil
+		}
+
+		// RWO: Check grace period first
 		gracePeriod := cs.driver.GetAttachmentGracePeriod()
 		if gracePeriod > 0 && am.IsWithinGracePeriod(volumeID, gracePeriod) {
 			klog.V(2).Infof("Volume %s within grace period, allowing attachment handoff from %s to %s",
@@ -540,8 +580,8 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				}
 				// Fall through to allow new attachment
 			} else {
-				// CSI-02: Node exists - genuine RWO conflict
-				klog.Warningf("Volume %s already attached to node %s, rejecting attachment to node %s",
+				// CSI-02: Node exists - genuine RWO conflict - hint about RWX
+				klog.Warningf("RWO volume %s already attached to node %s, rejecting attachment to node %s",
 					volumeID, existing.NodeID, nodeID)
 
 				// Post event for operator visibility (best effort)
@@ -553,16 +593,16 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				}
 
 				return nil, status.Errorf(codes.FailedPrecondition,
-					"volume %s already attached to node %s, cannot attach to %s",
-					volumeID, existing.NodeID, nodeID)
+					"Volume %s already attached to node %s. For multi-node access, use RWX with block volumes.",
+					volumeID, existing.NodeID)
 			}
 		}
 	}
 
-	// Track new attachment (uses per-volume lock internally)
-	if err := am.TrackAttachment(ctx, volumeID, nodeID); err != nil {
+	// No existing attachment - track new primary attachment with access mode
+	if err := am.TrackAttachmentWithMode(ctx, volumeID, nodeID, accessMode); err != nil {
 		// Check if this is a conflict (race condition - another request won)
-		if existing, exists := am.GetAttachment(volumeID); exists && existing.NodeID != nodeID {
+		if existing, exists := am.GetAttachment(volumeID); exists && !am.IsAttachedToNode(volumeID, nodeID) {
 			if cs.driver.metrics != nil {
 				cs.driver.metrics.RecordAttachmentConflict()
 			}
@@ -617,22 +657,27 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
-	// CSI-03: Untrack attachment (idempotent - succeeds even if not tracked)
-	if err := am.UntrackAttachment(ctx, volumeID); err != nil {
-		// Log but don't fail - unpublish must be idempotent (CONTEXT.md decision)
-		klog.Warningf("Error untracking attachment for volume %s: %v (returning success)", volumeID, err)
+	// Remove this node's attachment (handles both RWO and RWX)
+	fullyDetached, err := am.RemoveNodeAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		klog.Warningf("Error removing node attachment for volume %s: %v (returning success)", volumeID, err)
 	}
 
-	// Record detachment metric
-	if cs.driver.metrics != nil {
-		cs.driver.metrics.RecordAttachmentOp("detach", nil, time.Since(startTime))
+	if fullyDetached {
+		// Record detachment metric
+		if cs.driver.metrics != nil {
+			cs.driver.metrics.RecordAttachmentOp("detach", nil, time.Since(startTime))
+		}
+		cs.postVolumeDetachedEvent(ctx, req)
+	} else {
+		// Partial detach (RWX migration - one node still attached)
+		klog.V(2).Infof("Volume %s partially detached from node %s, other node(s) still attached", volumeID, nodeID)
+		if cs.driver.metrics != nil {
+			cs.driver.metrics.RecordAttachmentOp("detach_partial", nil, time.Since(startTime))
+		}
 	}
 
-	// Post detachment event (best effort)
-	cs.postVolumeDetachedEvent(ctx, req)
-
-	klog.V(2).Infof("Successfully unpublished volume %s", volumeID)
-
+	klog.V(2).Infof("Successfully unpublished volume %s from node %s", volumeID, nodeID)
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
