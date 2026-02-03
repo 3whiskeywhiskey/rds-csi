@@ -143,6 +143,11 @@ func (am *AttachmentManager) AddSecondaryAttachment(ctx context.Context, volumeI
 	existing.MigrationStartedAt = &now
 	existing.MigrationTimeout = migrationTimeout
 
+	// Record metric: migration started
+	if am.metrics != nil {
+		am.metrics.RecordMigrationStarted()
+	}
+
 	klog.V(2).Infof("Tracked secondary attachment: volume=%s, node=%s, timeout=%v (migration target)",
 		volumeID, nodeID, migrationTimeout)
 	return nil
@@ -309,6 +314,13 @@ func (am *AttachmentManager) RemoveNodeAttachment(ctx context.Context, volumeID,
 		return false, nil
 	}
 
+	// Capture migration state before potentially clearing it
+	wasMigrating := existing.MigrationStartedAt != nil
+	var migrationStartedAt time.Time
+	if wasMigrating {
+		migrationStartedAt = *existing.MigrationStartedAt
+	}
+
 	// Find and remove the node
 	newNodes := make([]NodeAttachment, 0, len(existing.Nodes))
 	found := false
@@ -339,6 +351,14 @@ func (am *AttachmentManager) RemoveNodeAttachment(ctx context.Context, volumeID,
 		existing.MigrationStartedAt = nil
 		existing.MigrationTimeout = 0
 		klog.V(2).Infof("Migration completed for volume %s, cleared migration state", volumeID)
+
+		// If this was a migration completion (was migrating, now down to 1 node)
+		if wasMigrating {
+			duration := time.Since(migrationStartedAt)
+			if am.metrics != nil {
+				am.metrics.RecordMigrationResult("success", duration)
+			}
+		}
 	}
 
 	// Update with remaining nodes
