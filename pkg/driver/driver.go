@@ -13,6 +13,7 @@ import (
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 const (
@@ -122,6 +123,14 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	}
 
 	klog.Infof("Driver: %s Version: %s GitCommit: %s BuildDate: %s", config.DriverName, config.Version, gitCommit, buildDate)
+
+	// Add configured base path to security allowlist
+	if config.RDSVolumeBasePath != "" {
+		if err := utils.AddAllowedBasePath(config.RDSVolumeBasePath); err != nil {
+			return nil, fmt.Errorf("failed to add base path to allowlist: %w", err)
+		}
+		klog.Infof("Added volume base path to security allowlist: %s", config.RDSVolumeBasePath)
+	}
 
 	driver := &Driver{
 		name:      config.DriverName,

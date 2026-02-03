@@ -31,12 +31,34 @@ var dangerousCharacters = []string{
 }
 
 // AllowedBasePaths defines the whitelist of allowed base paths for volumes
-// In production, this should be configurable via environment or config file
+// Additional paths can be added via AddAllowedBasePath()
 var AllowedBasePaths = []string{
 	"/storage-pool/kubernetes-volumes",
 	"/storage-pool/metal-csi",
 	"/storage-pool/metal-csi/volumes",
-	// Add more allowed paths as needed
+}
+
+// AddAllowedBasePath adds a path to the allowed base paths whitelist
+// This should be called during driver initialization with the configured base path
+func AddAllowedBasePath(path string) error {
+	if path == "" {
+		return nil // No path to add
+	}
+
+	cleanPath, err := SanitizeBasePath(path)
+	if err != nil {
+		return fmt.Errorf("invalid base path: %w", err)
+	}
+
+	// Check if already in list
+	for _, existing := range AllowedBasePaths {
+		if existing == cleanPath {
+			return nil // Already exists
+		}
+	}
+
+	AllowedBasePaths = append(AllowedBasePaths, cleanPath)
+	return nil
 }
 
 // ValidateFilePath validates that a file path is safe for use in shell commands
