@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 13 of 13 (Hardware Validation)
-Plan: 1 of 1 in current phase
-Status: In progress - ready for validation execution
-Last activity: 2026-02-03 — Phase 13 planned, bug fix deployed, nodes healthy
+Phase: 14 of 14 (Error Resilience and Mount Storm Prevention)
+Plan: 2 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 14-02-PLAN.md (Safe procmounts parsing)
 
-Progress: [█████████████████████████████░░░░] 85% (45/53 plans completed across all phases)
+Progress: [█████████████████████████████░░░░] 87% (47/54 plans completed across all phases)
 
 ## Performance Metrics
 
@@ -48,6 +48,11 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
+- Phase 14-02: Use moby/sys/mountinfo for production-ready mount parsing (Docker/containerd standard)
+- Phase 14-02: 10 second timeout for procmounts parsing prevents hangs
+- Phase 14-02: 100 mount threshold for duplicate detection catches mount storms
+- Phase 14-02: Deprecate GetMounts in favor of GetMountsWithTimeout
+- Phase 14-01: Configurable NQN prefix via Helm value (defaults to "pvc-")
 - Phase 13: Critical bug fix in Mount() - skip MkdirAll when target is file (block volumes)
 - Phase 13: Orphan cleaner NQN filtering bug documented (not active, but blocker for future use)
 - Phase 13: All worker nodes recovered, CSI driver deployed with fix (commit 3807645)
@@ -89,6 +94,6 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 13 hardware validation interrupted, NQN filtering hotfix applied
+Stopped at: Completed 14-02-PLAN.md (Safe procmounts parsing with timeout and mount storm detection)
 Resume file: None
-Next action: Redeploy driver with fix (commit 6d7cece), then retry Phase 13 validation
+Next action: Continue Phase 14 with plan 14-03 (Stale mount detection integration)
