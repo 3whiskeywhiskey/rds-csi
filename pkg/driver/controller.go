@@ -537,6 +537,18 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 					volumeID, existing.GetNodeIDs())
 			}
 
+			// SAFETY-01: Check if existing migration has timed out
+			// This prevents indefinite dual-attach if migration fails
+			if existing.IsMigrationTimedOut() {
+				elapsed := time.Since(*existing.MigrationStartedAt)
+				klog.Warningf("RWX volume %s migration timed out (%v elapsed, %v max), rejecting new secondary attachment",
+					volumeID, elapsed, existing.MigrationTimeout)
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Volume %s migration timeout exceeded (%v elapsed, %v max). "+
+					"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
+					volumeID, elapsed.Round(time.Second), existing.MigrationTimeout)
+			}
+
 			// Parse migration timeout from VolumeContext
 			volCtx := req.GetVolumeContext()
 			migrationTimeoutParams := map[string]string{
@@ -545,7 +557,7 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			migrationTimeout := ParseMigrationTimeout(migrationTimeoutParams)
 
 			// Allow second attachment for migration
-			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target)", volumeID, nodeID)
+			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target, timeout=%v)", volumeID, nodeID, migrationTimeout)
 			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID, migrationTimeout); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to track secondary attachment: %v", err)
 			}
@@ -559,6 +571,13 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
 			}, nil
 		}
+
+		// RWO: Fail immediately for dual-attach attempts
+		// SAFETY-02: Grace period is ONLY for reattachment AFTER detach
+		// It does NOT allow concurrent multi-node attachment like RWX
+		// This distinction is critical: grace period tolerates network blips during
+		// pod migration where old pod dies before new pod starts. It does NOT
+		// enable live migration where both nodes need simultaneous access.
 
 		// RWO: Check grace period first
 		gracePeriod := cs.driver.GetAttachmentGracePeriod()
