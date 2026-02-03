@@ -48,6 +48,11 @@ type Metrics struct {
 	attachmentOpDuration      *prometheus.HistogramVec
 	attachmentGracePeriodUsed prometheus.Counter
 	attachmentStaleCleared    prometheus.Counter
+
+	// Migration operation metrics
+	migrationsTotal    *prometheus.CounterVec
+	migrationDuration  prometheus.Histogram
+	activeMigrations   prometheus.Gauge
 }
 
 // NewMetrics creates a new Metrics instance with all metrics registered.
@@ -199,6 +204,31 @@ func NewMetrics() *Metrics {
 			Name:      "stale_cleared_total",
 			Help:      "Total stale attachments cleared by reconciler",
 		}),
+
+		migrationsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Subsystem: "migration",
+				Name:      "migrations_total",
+				Help:      "Total number of KubeVirt live migrations by result",
+			},
+			[]string{"result"}, // success, failed, timeout
+		),
+
+		migrationDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "migration",
+			Name:      "duration_seconds",
+			Help:      "Duration of KubeVirt live migrations in seconds",
+			Buckets:   []float64{15, 30, 60, 90, 120, 180, 300, 600},
+		}),
+
+		activeMigrations: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "migration",
+			Name:      "active_migrations",
+			Help:      "Number of currently in-progress KubeVirt live migrations",
+		}),
 	}
 
 	// Register all metrics with the custom registry
@@ -220,6 +250,9 @@ func NewMetrics() *Metrics {
 		m.attachmentOpDuration,
 		m.attachmentGracePeriodUsed,
 		m.attachmentStaleCleared,
+		m.migrationsTotal,
+		m.migrationDuration,
+		m.activeMigrations,
 	)
 
 	return m
