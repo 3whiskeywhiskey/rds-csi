@@ -1,240 +1,203 @@
-# Research Summary: Volume Fencing (v0.3.0)
+# Project Research Summary
 
-**Project:** RDS CSI Driver - Volume Fencing
-**Domain:** Kubernetes CSI ControllerPublishVolume/ControllerUnpublishVolume implementation
-**Researched:** 2026-01-30
+**Project:** RDS CSI Driver - KubeVirt Live Migration Support
+**Domain:** Kubernetes CSI Driver for Block Storage with VM Migration
+**Researched:** 2026-02-03
 **Confidence:** HIGH
 
 ## Executive Summary
 
-Volume fencing through `ControllerPublishVolume` and `ControllerUnpublishVolume` solves the critical volume ping-pong problem causing KubeVirt VMs to pause every 7 minutes due to concurrent NVMe access. The recommended approach uses **in-memory attachment tracking backed by PV annotations** for persistence across controller restarts, with per-volume locking to prevent race conditions during concurrent publish requests. This is a well-established pattern used by production CSI drivers (AWS EBS, Azure Disk, vSphere).
+KubeVirt live migration has a single hard requirement: **PVC access mode must be ReadWriteMany (RWX)**. The RDS CSI driver currently only advertises `SINGLE_NODE_WRITER` (RWO) and `SINGLE_NODE_READER_ONLY` (ROX), causing VMs to show `LiveMigratable: false`. The good news: **no new dependencies are required**. NVMe/TCP natively supports multi-initiator access, and the driver's existing infrastructure (AttachmentManager, VMIGrouper, grace period mechanism) provides most of the foundation needed.
 
-The implementation requires **zero new dependencies** - everything needed exists in the current stack (client-go v0.28.0, sync.RWMutex, CSI spec v1.10.0). The primary risk is state loss on controller restart leading to silent data corruption, which is mitigated by persisting attachment state to PV annotations and rebuilding state on startup. Secondary risks include race conditions between concurrent publish operations (mitigated by per-volume locking) and dangling attachments after node deletion (mitigated by node existence validation).
+The recommended approach is a "Trust QEMU" strategy: advertise `MULTI_NODE_MULTI_WRITER` capability for **block volumes only**, allow 2-node attachment during migration, and rely on QEMU/KubeVirt to coordinate I/O. This is the simplest path because QEMU already handles the hard problem of I/O coordination during VM migration - the CSI driver just needs to permit the dual-attachment window. RWX for filesystem-mode volumes should be explicitly rejected to prevent data corruption.
 
-This is a foundational capability that enables ReadWriteOnce enforcement for the RDS CSI driver. Without it, multi-attach errors and data corruption are inevitable in any multi-pod or migration scenario.
+The primary risks are data corruption from dual filesystem mounts (critical but preventable by restricting RWX to block-only) and split-brain scenarios during network partitions (inherent to NVMe/TCP without storage-level fencing). Mitigation requires strict capability validation, separate handling for migration vs conflict detection, and clear documentation that RWX is safe only for KubeVirt live migration use cases.
 
 ## Key Findings
 
 ### Recommended Stack
 
-**No new dependencies required.** The existing codebase has everything needed for volume fencing:
+**No new dependencies required.** The existing CSI driver stack is sufficient:
 
-**Core technologies:**
-- **k8s.io/client-go v0.28.0**: PersistentVolumes().Update() for annotation CRUD, retry.RetryOnConflict for conflict handling — already in go.mod
-- **sync.RWMutex**: Thread-safe in-memory attachment state tracking — standard library, matches existing codebase patterns (used in 7+ places)
-- **CSI Spec v1.10.0**: PUBLISH_UNPUBLISH_VOLUME capability already defined — just needs declaration in ControllerGetCapabilities
+**Core technologies (unchanged):**
+- Go 1.24: Driver implementation - well-established, no change needed
+- github.com/container-storage-interface/spec v1.10.0: Already includes `MULTI_NODE_MULTI_WRITER` access mode enum
+- NVMe/TCP: Data plane already supports multi-initiator connections to same target
+- prometheus/client_golang: Existing metrics framework can be extended for migration tracking
 
-**Key finding:** The codebase already uses client-go for the orphan reconciler (`pkg/reconciler/orphan_reconciler.go`), so the pattern for PV annotation updates is well-established. The AttachmentManager follows the same sync.RWMutex + map pattern used consistently throughout the codebase (`pkg/nvme/resolver.go`, `pkg/nvme/nvme.go`, `pkg/rds/pool.go`, `pkg/security/metrics.go`).
+**Existing infrastructure to leverage:**
+- AttachmentManager (`pkg/attachment/manager.go`): Tracks volume-to-node attachments, has grace period support
+- VMIGrouper (`pkg/driver/vmi_grouper.go`): Per-VMI operation serialization, PVC-to-VMI resolution
+- AttachmentReconciler (`pkg/attachment/reconciler.go`): Stale attachment cleanup from deleted nodes
+- EventPoster (`pkg/driver/events.go`): Kubernetes events for lifecycle visibility
 
 ### Expected Features
 
 **Must have (table stakes):**
-- **PUBLISH_UNPUBLISH_VOLUME capability** - external-attacher requires this to call the RPCs
-- **ControllerPublishVolume implementation** - makes volume available on target node before NodeStage
-- **ControllerUnpublishVolume implementation** - revokes volume availability after NodeUnstage
-- **Attachment state tracking** - in-memory + PV annotation persistence to detect conflicts
-- **Idempotent Publish/Unpublish** - retries must succeed without errors
-- **FAILED_PRECONDITION on multi-attach** - return gRPC code 9 when RWO volume already attached elsewhere
-- **NOT_FOUND for missing volume/node** - return gRPC code 5 for non-existent resources
-- **publish_context return** - pass NVMe connection metadata to NodeStageVolume
+- ReadWriteMany access mode for block volumes - KubeVirt checks PVC access mode at VMI startup
+- Simultaneous 2-node attachment during migration window - source and destination need concurrent access
+- Idempotent ControllerUnpublishVolume - must succeed even if volume not attached (migration cleanup)
 
-**Should have (differentiators):**
-- **publish_context with NVMe parameters** - pass ctrl_loss_tmo, reconnect_delay for resilient connections (low effort, high value)
-- **Kubernetes Events** - post events for attach/detach visibility (already have event infrastructure)
-- **Prometheus metrics** - expose attachment counts, durations, failure rates (already have metrics infrastructure)
+**Should have (competitive):**
+- Migration-aware metrics - distinguish migration handoffs from RWO conflicts
+- Migration events on PVC - visibility into migration lifecycle
+- Automatic migration timeout handling - reconciler cleans up stuck migrations
 
 **Defer (v2+):**
-- **Persistent attachment state in ConfigMap/CRD** - in-memory + PV annotations sufficient for single-replica controller
-- **LIST_VOLUMES_PUBLISHED_NODES capability** - adds complexity for attachment reconciliation
-- **Force-detach with timeout** - safety concerns, requires careful design
-- **Node health integration** - consider node Ready status before allowing attachment
+- Cluster filesystem support (GFS2/OCFS2) - adds complexity, only needed for true RWX filesystem use cases
+- RDS-level namespace reservations/fencing - requires RouterOS investigation
+- KubeVirt API client integration - can function without it using existing VMIGrouper
 
 ### Architecture Approach
 
-The implementation adds a new **AttachmentManager** component that integrates into the existing ControllerServer. It maintains primary state in memory (fast lookups) with PV annotations as durable backup for controller restarts. The AttachmentManager uses per-volume locking to serialize concurrent ControllerPublishVolume calls, preventing race conditions where two nodes could simultaneously attach the same RWO volume.
+The architecture is **primarily complete**. The core change is adding `MULTI_NODE_MULTI_WRITER` to the driver's capability list and modifying the AttachmentManager to allow 2-node attachment for RWX block volumes during migration. All other infrastructure exists: grace period mechanism can be repurposed for migration window, VMI serialization prevents concurrent operations on same VM, reconciler handles stale attachment cleanup.
 
-**Major components:**
-1. **AttachmentManager** (`pkg/attachment/manager.go`) - Thread-safe volume-to-node attachment tracking; enforces RWO constraints; persists to PV annotations
-2. **ControllerPublishVolume** (modified `pkg/driver/controller.go`) - Validates RWO constraints; records attachment; returns publish_context with NVMe connection info
-3. **ControllerUnpublishVolume** (modified `pkg/driver/controller.go`) - Removes attachment record defensively (always succeeds even if state inconsistent)
-4. **Driver capability declaration** (modified `pkg/driver/driver.go`) - Adds PUBLISH_UNPUBLISH_VOLUME to ControllerGetCapabilities
-5. **CSIDriver manifest** (`deploy/kubernetes/csi-driver.yaml`) - Sets attachRequired: true to enable external-attacher
+**Major components and required changes:**
 
-**Key pattern:** In-memory state with annotation persistence. Primary state lives in a map[string]AttachmentInfo protected by sync.RWMutex. PV annotations serve as backup - updated asynchronously (best-effort) on attach/detach, and loaded synchronously on controller startup to rebuild state after restarts.
+1. **Driver Capabilities** (`pkg/driver/driver.go`) - Add `MULTI_NODE_MULTI_WRITER` to vcaps array
+2. **Attachment Manager** (`pkg/attachment/manager.go`) - Allow dual attachment when access mode is RWX and volume mode is block
+3. **Controller Service** (`pkg/driver/controller.go`) - Pass access mode to attachment validation, differentiate migration from conflict
+4. **Capability Validation** - Reject RWX for filesystem volumes (prevent corruption)
 
 ### Critical Pitfalls
 
-1. **In-Memory State Loss on Controller Restart** - Pure in-memory tracking loses all attachment knowledge when controller restarts. Next ControllerPublishVolume for already-attached volume succeeds, allowing multi-attach. **Prevention:** Persist to PV annotations, rebuild state on startup from all PVs with driver name matching. This is the FIRST thing to implement.
+1. **Filesystem mounted on two nodes simultaneously** - Fatal data corruption. Prevention: RWX only for `volumeMode: Block`, explicitly reject RWX filesystem volumes in capability validation.
 
-2. **Race Condition Between Concurrent Publish Calls** - Two pods scheduled simultaneously on different nodes for same RWO volume. Both ControllerPublishVolume calls check attachments[vol] before either completes, both pass the check, both attach. **Prevention:** Per-volume locking using sync.Map of mutexes - serialize all publish operations for each volume. Must be present from day one.
+2. **Advertising RWX without block-only restriction** - Enables silent corruption. Prevention: Validate that `MULTI_NODE_MULTI_WRITER` requests have `cap.GetBlock() != nil`, reject mount volumes.
 
-3. **Dangling VolumeAttachments After Node Deletion** - Node forcefully removed but VolumeAttachment remains. Controller's attachment state shows volume → deleted_node. New pod scheduled on healthy node gets rejected with "already attached". **Prevention:** Validate node existence before rejecting publish request; background reconciliation loop to clean stale attachments every 5 minutes.
+3. **Single grace period for both migration and conflicts** - Conflicts should fail immediately, migrations need longer window. Prevention: Separate logic - migrations get configurable timeout (5 min default), non-migration dual-attach attempts fail with FAILED_PRECONDITION immediately.
 
-4. **ControllerUnpublish Before NodeUnstage Completes** - external-attacher doesn't wait for NodeUnstageVolume completion. Calls ControllerUnpublishVolume while NVMe still connected. Controller clears state, new pod attaches immediately while old node still accessing volume. **Prevention:** Reattachment grace period (30s) where volume marked as "unpublishing" but not immediately available for new attachments.
+4. **NVMe disconnect while device in use** - Kernel panic or I/O errors. Prevention: NodeUnstageVolume must verify no open file descriptors before `nvme disconnect`.
 
-5. **Incorrect Error Codes** - Returning error when it should be success (idempotent same-node publish), or ABORTED when it should be FAILED_PRECONDITION. Wrong codes cause infinite retries or stuck pods. **Prevention:** Read CSI spec carefully - same-node publish returns success, different-node RWO publish returns FAILED_PRECONDITION (code 9), in-flight operation returns ABORTED (code 10).
+5. **Split-brain during network partition** - Source node appears down but still has NVMe connection. Prevention: Refuse migration if source node is NotReady; require manual verification for force-detach. Document the limitation clearly.
 
 ## Implications for Roadmap
 
-Based on research, this milestone naturally divides into 2-3 phases with clear boundaries and dependencies.
+Based on research, suggested phase structure:
 
-### Phase 1: Core Fencing (Foundation)
-**Rationale:** Attachment tracking persistence and concurrency control are prerequisites for everything else. Without these, data corruption is inevitable. These must be correct from day one.
+### Phase 1: Core RWX Capability (MVP)
+**Rationale:** Minimum change to enable live migration. Focus on the happy path first.
+**Delivers:** KubeVirt VMs can live migrate with RWX block PVCs
+**Addresses:** ReadWriteMany access mode, simultaneous attachment
+**Avoids:** Filesystem corruption pitfall by block-only restriction
 
-**Delivers:**
-- AttachmentManager with in-memory state + PV annotation persistence
-- State rebuild on controller startup
-- Per-volume locking to prevent concurrent publish races
-- Basic ControllerPublishVolume/ControllerUnpublishVolume stubs
+Implementation:
+- Add `MULTI_NODE_MULTI_WRITER` to driver vcaps
+- Modify ControllerPublishVolume to allow 2-node attachment for RWX block volumes
+- Add access mode validation in capability check
+- Reject RWX for filesystem volumes
 
-**Addresses (from FEATURES.md):**
-- Attachment state tracking (table stakes)
-- Idempotent Publish/Unpublish (table stakes)
-- PV annotation CRUD (persistence mechanism)
+**Estimated effort:** 2-3 days
 
-**Avoids (from PITFALLS.md):**
-- Pitfall 1: In-memory state loss (CRITICAL)
-- Pitfall 2: Concurrent publish race (CRITICAL)
-- Pitfall 6: PV annotation update conflicts
+### Phase 2: Migration Safety and Tracking
+**Rationale:** MVP needs robustness - handle failures, track state, clean up stale migrations
+**Delivers:** Production-ready migration with failure recovery
+**Uses:** Existing AttachmentManager, reconciler infrastructure
+**Implements:** Migration state machine, timeout handling
 
-**Implementation order:**
-1. Create `pkg/attachment/types.go` - Attachment struct, AttachmentManager interface
-2. Create `pkg/attachment/manager.go` - In-memory state with RWMutex, Attach/Detach/GetAttachment methods
-3. Add PV annotation persistence - persistAttachment (async), LoadFromAnnotations (startup sync)
-4. Wire AttachmentManager into ControllerServer - add field, initialize, call LoadFromAnnotations
-5. Implement basic ControllerPublishVolume - request validation, RWO enforcement, idempotent behavior
-6. Implement basic ControllerUnpublishVolume - defensive handling, always return success
+Implementation:
+- Extend AttachmentState for secondary attachment and migration timestamp
+- Separate migration timeout from conflict detection
+- Add reconciler logic for stale migration cleanup
+- Enhance device-in-use check in NodeUnstageVolume
 
-### Phase 2: CSI Spec Compliance
-**Rationale:** After core state management works, implement full CSI spec requirements. This ensures external-attacher integration works correctly and error handling is spec-compliant.
+**Estimated effort:** 2-3 days
 
-**Delivers:**
-- PUBLISH_UNPUBLISH_VOLUME capability declaration
-- Correct CSI error codes (FAILED_PRECONDITION, NOT_FOUND, ABORTED)
-- publish_context with NVMe connection parameters
-- Volume/node existence validation
-- Unit tests for all CSI method behaviors
+### Phase 3: Observability and Documentation
+**Rationale:** Operators need visibility; users need guidance on safe usage
+**Delivers:** Migration-specific metrics, events, user documentation
+**Avoids:** Poor observability pitfall, misuse of RWX outside KubeVirt
 
-**Addresses (from FEATURES.md):**
-- PUBLISH_UNPUBLISH_VOLUME capability (table stakes)
-- FAILED_PRECONDITION on multi-attach (table stakes)
-- NOT_FOUND for missing resources (table stakes)
-- publish_context with NVMe parameters (differentiator)
+Implementation:
+- Add Prometheus metrics: migrations_total, migration_duration_seconds, etc.
+- Post events: MigrationStarted, MigrationCompleted, MigrationFailed
+- Document: RWX is safe only for KubeVirt live migration
+- Add troubleshooting guide for common issues
 
-**Uses (from STACK.md):**
-- CSI Spec v1.10.0 capability definitions
-- client-go for volume/node existence checks
+**Estimated effort:** 1-2 days
 
-**Avoids (from PITFALLS.md):**
-- Pitfall 5: Incorrect error codes (HIGH severity)
-- Pitfall 7: Missing publish_context
-- Pitfall 11: Not handling volume not found in unpublish
+### Phase 4: Testing and Validation
+**Rationale:** Migration has many edge cases; must test slow/failed/fault-injected scenarios
+**Delivers:** Confidence that migration works in production conditions
 
-**Implementation order:**
-1. Update capability declarations - add PUBLISH_UNPUBLISH_VOLUME to cscaps
-2. Update CSIDriver manifest - set attachRequired: true
-3. Implement correct error code handling in Publish/Unpublish
-4. Build publish_context map with NVMe connection info
-5. Add volume/node existence validation
-6. CSI sanity tests for spec compliance
+Implementation:
+- E2E tests: fast migration, slow migration (throttled network), failed migration
+- Fault injection: node failure during migration, network partition
+- Data integrity validation: checksum verification post-migration
+- VMI serialization verification during migration
 
-### Phase 3: Production Robustness (Optional for v0.3.0, Required Before v1.0)
-**Rationale:** After basic fencing works, add defensive handling for node failures and edge cases. These are critical for production use with node failures but not blocking for initial release.
-
-**Delivers:**
-- Node existence validation before rejecting publish
-- Background reconciliation to clean stale attachments
-- Reattachment grace period to prevent dual-access during migration
-- Prometheus metrics for attachment operations
-- Kubernetes Events for attach/detach lifecycle
-
-**Addresses (from FEATURES.md):**
-- Prometheus metrics (differentiator)
-- Kubernetes Events (differentiator)
-- Graceful handling of node failures
-
-**Avoids (from PITFALLS.md):**
-- Pitfall 3: Dangling attachments after node deletion (CRITICAL)
-- Pitfall 4: Unpublish before unstage completes (HIGH)
-- Pitfall 8: 6-minute force detach timeout (MEDIUM)
-- Pitfall 9: Stuck VolumeAttachment finalizer (HIGH)
-
-**Implementation order:**
-1. Add node existence check in ControllerPublishVolume
-2. Implement background reconciliation loop (5-minute interval)
-3. Add reattachment grace period logic (30s delay)
-4. Add Prometheus metrics for attachments
-5. Post Kubernetes Events on attach/detach
-6. E2E tests for node failure scenarios
+**Estimated effort:** 2-3 days
 
 ### Phase Ordering Rationale
 
-- **Phase 1 before Phase 2:** Must have working state management before declaring capability, otherwise external-attacher will call methods that crash
-- **Phase 2 before Phase 3:** Spec compliance is higher priority than edge case handling; better to block multi-attach correctly than handle stale attachments gracefully
-- **Phase 3 optional for initial release:** Can ship v0.3.0 with Phases 1-2, add Phase 3 in v0.3.1 or defer to v0.4.0 depending on testing results
+- **Phase 1 first:** Unblocks the use case with minimal risk. Block-only restriction prevents the most critical pitfall.
+- **Phase 2 before Phase 3:** Robustness before observability. A system that fails silently is worse than one that fails loudly.
+- **Phase 3 before Phase 4:** Metrics help debug issues found during testing.
+- **Phase 4 last:** Full test suite validates all previous work together.
 
-**Dependency chain:**
-```
-Phase 1 (State Management)
-    ↓
-Phase 2 (CSI Compliance) ← Can release v0.3.0 here
-    ↓
-Phase 3 (Production Hardening) ← Add in v0.3.1 or v0.4.0
-```
+This order also allows incremental delivery: Phase 1 is a working MVP that could be released with documentation caveats.
 
 ### Research Flags
 
-**Phases with standard patterns (skip research-phase):**
-- **Phase 1:** Attachment tracking is well-documented in AWS EBS CSI, Azure Disk CSI, vSphere CSI drivers. sync.RWMutex pattern already used throughout codebase.
-- **Phase 2:** CSI spec is authoritative source. Error codes and capability declarations are explicit in spec.
-- **Phase 3:** Node existence validation is standard Kubernetes API. Metrics and Events already implemented in codebase.
+**Phases needing deeper research during planning:**
+- **Phase 2:** Split-brain protection strategy needs validation. Current recommendation is "refuse migration if source NotReady" but this may be too conservative. Consider testing RDS behavior with concurrent NVMe connections.
+- **Phase 4:** VMI serialization during migration needs verification - does the VMIGrouper correctly handle two virt-launcher pods for the same VM?
 
-**No additional research needed.** This research is comprehensive and HIGH confidence. All patterns are established, all APIs are documented, all pitfalls are known from production driver issues.
+**Phases with standard patterns (skip research-phase):**
+- **Phase 1:** Capability declaration is straightforward CSI spec implementation. Well-documented pattern from Portworx, democratic-csi examples.
+- **Phase 3:** Prometheus metrics and Kubernetes events follow established patterns.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | **HIGH** | Zero new dependencies. All APIs already in use in codebase. |
-| Features | **HIGH** | CSI spec is explicit about requirements. Table stakes clearly defined. |
-| Architecture | **HIGH** | Pattern verified in 3+ production CSI drivers. Matches existing codebase patterns. |
-| Pitfalls | **HIGH** | Critical pitfalls derived from CSI spec requirements and production driver issues. 20+ GitHub issues analyzed. |
+| Stack | HIGH | No new dependencies; existing CSI spec supports required capability |
+| Features | HIGH | KubeVirt documentation explicitly states RWX requirement |
+| Architecture | HIGH | Components exist; changes are localized to capability and attachment logic |
+| Pitfalls | HIGH | Well-documented failure modes; filesystem corruption risk is universally understood |
 
-**Overall confidence:** **HIGH**
-
-This is one of the most well-documented areas of CSI driver development. The CSI specification is explicit, production drivers provide reference implementations, and pitfalls are well-known from years of community experience.
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-**No significant gaps.** The research is comprehensive for the v0.3.0 scope.
+- **RDS multi-initiator behavior:** Need to test `nvme connect` from two nodes to same NQN simultaneously on actual RDS hardware. Expected to work (NVMe/TCP spec supports it) but not verified.
 
-**Minor note:** Live migration with KubeVirt VMs is not supported with RWO volumes (Pitfall 12). This is a known limitation - live migration requires RWX access mode or storage-level migration. Document this clearly but defer RWX support to post-v0.3.0.
+- **Optimal migration timeout:** Default 5 minutes is estimated. May need tuning based on real-world memory sizes and network conditions. Recommend making it configurable.
 
-**Hardware limitation:** NVMe/TCP on MikroTik RDS does not support NVMe Reservations (storage-level fencing equivalent to SCSI-3 Persistent Reservations). Controller-level fencing is sufficient for standard Kubernetes workflows but won't prevent direct NVMe connections outside CSI. Document this limitation.
+- **KubeVirt virt-launcher lifecycle:** Exact timing of ControllerPublishVolume to target vs ControllerUnpublishVolume from source during migration is understood from docs but not verified with traces.
+
+- **Non-KubeVirt RWX usage:** If users mount RWX block volumes outside KubeVirt context, data corruption is possible. Documentation must be explicit. Consider adding a StorageClass parameter like `restrictToKubevirt: true` to prevent misuse.
+
+## Research Agreement and Disagreement
+
+**Consensus across research files:**
+- RWX is required for KubeVirt live migration (all agree)
+- Block mode is the correct approach for NVMe/TCP (all agree)
+- No new dependencies needed (STACK and ARCHITECTURE agree)
+- Data corruption is the primary risk (FEATURES and PITFALLS agree)
+
+**Minor disagreement:**
+- ARCHITECTURE.md states "Live Migration NOT Supported" while FEATURES.md and STACK.md describe how to enable it. Resolution: ARCHITECTURE.md reflects current state; other files describe target state for v0.5.0.
+
+**Key insight from synthesis:** PITFALLS.md correctly identifies that the CSI driver trusts QEMU/KubeVirt for I/O coordination - the driver's job is just to permit dual-attachment, not to coordinate writes. This simplifies the implementation significantly.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- **CSI Specification v1.7.0-1.10.0** - ControllerPublishVolume/ControllerUnpublishVolume requirements, error code definitions, idempotency semantics
-- **Kubernetes client-go v0.28.0** - PersistentVolume API, retry.RetryOnConflict patterns
-- **Existing codebase** - `pkg/reconciler/orphan_reconciler.go` (PV access patterns), `pkg/nvme/resolver.go` (sync.RWMutex patterns), `pkg/driver/controller.go` (current stubs)
+- [KubeVirt Live Migration](https://kubevirt.io/user-guide/compute/live_migration/) - RWX requirement, migration workflow
+- [CSI Specification](https://github.com/container-storage-interface/spec/blob/master/spec.md) - MULTI_NODE_MULTI_WRITER definition
+- [Kubernetes CSI Raw Block Volume](https://kubernetes-csi.github.io/docs/raw-block.html) - Block mode multi-attach guidance
+- Existing codebase: `pkg/driver/driver.go`, `pkg/attachment/manager.go`, `pkg/driver/vmi_grouper.go`
 
-### Secondary (MEDIUM-HIGH confidence)
-- **AWS EBS CSI Driver** - Production attachment tracking implementation, ControllerPublishVolume reference
-- **Azure Disk CSI Driver** - State recovery after controller restart patterns
-- **vSphere CSI Driver** - Multi-attach prevention and error handling
-- **DigitalOcean CSI Driver** - ControllerPublishVolume example implementation
-- **Kubernetes External-Attacher** - VolumeAttachment lifecycle and finalizer handling
-- **Kubernetes Issues #67853, #77324, #106710** - VolumeAttachment dangling, force detach behavior
-- **CSI Driver Issues** - 15+ issues analyzed across 5 production drivers for pitfall validation
+### Secondary (MEDIUM confidence)
+- [Portworx Raw Block for Live Migration](https://docs.portworx.com/portworx-csi/operations/raw-block-for-live-migration) - 2-node limit pattern
+- [democratic-csi RWX Issue](https://github.com/democratic-csi/democratic-csi/issues/285) - QEMU coordination insight
+- [Red Hat Storage for OpenShift Virtualization](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization) - Filesystem corruption warning
 
-### Tertiary (context only)
-- **KubeVirt Documentation** - Live migration requirements (RWX for concurrent access)
-- **Longhorn Volume Migration Enhancement** - Alternative to live migration for RWO volumes
-- **AWS EBS NVMe Reservations** - Storage-level fencing (not applicable to RDS)
+### Tertiary (LOW confidence)
+- RDS multi-initiator behavior - needs testing on actual hardware
+- Optimal migration timeout values - needs E2E validation
 
 ---
-*Research completed: 2026-01-30*
-*Ready for roadmap: **yes***
-*Recommended phases: 2 core + 1 optional (Foundation → Compliance → Robustness)*
-*Estimated effort: 25-30 hours for MVP (Phases 1-2)*
+*Research completed: 2026-02-03*
+*Ready for roadmap: yes*

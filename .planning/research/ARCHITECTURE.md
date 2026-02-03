@@ -1,670 +1,381 @@
-# Architecture Research: Volume Fencing via ControllerPublish/Unpublish
+# Architecture Research: KubeVirt Live Migration Integration
 
-**Domain:** CSI Controller Service - Volume Attachment Tracking
+**Domain:** CSI Controller Service - KubeVirt VM Migration Support
 **Researched:** 2026-01-30
+**Updated:** 2026-02-03 (KubeVirt Live Migration Architecture)
 **Confidence:** HIGH
 
-## Problem Context
+## Executive Summary
 
-The RDS CSI driver currently does not implement ControllerPublishVolume/ControllerUnpublishVolume. Without these methods:
+The RDS CSI driver architecture for KubeVirt integration is **complete**. All necessary components exist and are functional. This document clarifies what is supported, what is not, and how the existing architecture handles VM migration scenarios.
 
-- **No volume fencing**: A ReadWriteOnce volume can be attached to multiple nodes simultaneously during pod migration or failover
-- **No attachment tracking**: Controller has no visibility into which nodes have volumes attached
-- **Data corruption risk**: Two nodes writing to the same NVMe/TCP target concurrently
+**Key Clarification:** KubeVirt "live migration" (zero-downtime memory+disk migration) requires RWX (ReadWriteMany) storage. The RDS CSI driver only supports RWO (ReadWriteOnce) due to NVMe/TCP protocol limitations. However, the driver fully supports **VM restart handoff** - fast failover where a VM restarts on a new node within seconds using the grace period mechanism.
 
-Current controller returns `codes.Unimplemented` for both methods (lines 336-343 in controller.go).
+## What Is vs Is Not Supported
 
-## Integration with Existing Architecture
+| Feature | Supported | Reason |
+|---------|-----------|--------|
+| **True Live Migration** | No | Requires RWX - both nodes need simultaneous volume access during memory sync |
+| **VM Restart Handoff** | Yes | Grace period (30s) allows fast reattachment on new node after detach |
+| **Fast Failover** | Yes | Node failure triggers ControllerUnpublish, new node attaches within grace period |
+| **Concurrent Operations** | Yes | VMIGrouper serializes per-VMI operations to prevent race conditions |
+| **Stale Attachment Cleanup** | Yes | AttachmentReconciler detects deleted nodes, clears attachments |
+| **RWO Enforcement** | Yes | AttachmentManager blocks multi-node attach attempts |
 
-### Current Controller Structure
+## Current Architecture Components
 
-```
-pkg/driver/
-├── driver.go          # Driver initialization, capability declaration
-├── controller.go      # ControllerServer implementation
-├── node.go            # NodeServer implementation
-├── server.go          # gRPC server setup
-├── events.go          # Kubernetes event posting
-└── params.go          # StorageClass parameter parsing
-
-pkg/rds/
-├── client.go          # RDS SSH client interface
-├── pool.go            # Connection pool with circuit breaker
-├── commands.go        # RouterOS command execution
-└── types.go           # VolumeInfo, CapacityInfo structs
-
-pkg/reconciler/
-└── orphan_reconciler.go  # Orphaned volume cleanup
-```
-
-### Integration Points for AttachmentManager
-
-The new AttachmentManager component integrates at these points:
+### Integration Points (Existing)
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ControllerServer (controller.go)                                      │
-│                                                                        │
-│  ┌────────────────────┐  ┌────────────────────┐                      │
-│  │ CreateVolume       │  │ DeleteVolume       │                      │
-│  │ - Uses rdsClient   │  │ - Uses rdsClient   │                      │
-│  │ - No attachment    │  │ - No attachment    │                      │
-│  │   awareness        │  │   awareness        │                      │
-│  └────────────────────┘  └────────────────────┘                      │
-│                                                                        │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │ NEW: ControllerPublishVolume / ControllerUnpublishVolume       │  │
-│  │                                                                  │  │
-│  │  ┌──────────────────────────────────────────────────────────┐  │  │
-│  │  │ AttachmentManager (NEW COMPONENT)                        │  │  │
-│  │  │                                                           │  │  │
-│  │  │  - In-memory state: map[volumeID]nodeID                  │  │  │
-│  │  │  - PV annotation persistence: csi.rds.srvlab.io/node-id  │  │  │
-│  │  │  - ReadWriteOnce enforcement                              │  │  │
-│  │  │  - Thread-safe operations (sync.RWMutex)                 │  │  │
-│  │  └──────────────────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                        │
-│  Existing components:                                                  │
-│  ┌────────────────────┐  ┌────────────────────┐                      │
-│  │ rdsClient          │  │ k8sClient          │                      │
-│  │ - SSH pool         │  │ - PV read/update   │                      │
-│  │ - Volume commands  │  │ - Event posting    │                      │
-│  └────────────────────┘  └────────────────────┘                      │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ CSI Controller Plugin                                                     │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │ ControllerServer (pkg/driver/controller.go)                          │ │
+│  │                                                                       │ │
+│  │  ControllerPublishVolume()                                           │ │
+│  │    │                                                                  │ │
+│  │    ├── VMIGrouper.LockVMI() ──────────────────────────────────────┐ │ │
+│  │    │   Serialize operations per-VMI to prevent races              │ │ │
+│  │    │                                                               │ │ │
+│  │    ├── AttachmentManager.GetAttachment() ─────────────────────────┤ │ │
+│  │    │   Check if volume already attached                           │ │ │
+│  │    │                                                               │ │ │
+│  │    ├── AttachmentManager.IsWithinGracePeriod() ───────────────────┤ │ │
+│  │    │   Allow handoff if recently detached (30s default)           │ │ │
+│  │    │                                                               │ │ │
+│  │    ├── validateBlockingNodeExists() ──────────────────────────────┤ │ │
+│  │    │   Self-heal if blocking node was deleted                     │ │ │
+│  │    │                                                               │ │ │
+│  │    └── AttachmentManager.TrackAttachment() ───────────────────────┘ │ │
+│  │        Record new attachment, persist to PV annotation              │ │
+│  │                                                                       │ │
+│  │  ControllerUnpublishVolume()                                         │ │
+│  │    │                                                                  │ │
+│  │    └── AttachmentManager.UntrackAttachment() ─────────────────────┐ │ │
+│  │        Record detach timestamp (enables grace period)             │ │ │
+│  │                                                                   │ │ │
+│  └───────────────────────────────────────────────────────────────────┘ │ │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │ Background Reconciler (pkg/attachment/reconciler.go)                 │ │
+│  │                                                                       │ │
+│  │  AttachmentReconciler.reconcile()                                    │ │
+│  │    ├── List all tracked attachments                                  │ │
+│  │    ├── Check node existence via K8s API                             │ │
+│  │    ├── If node deleted + outside grace period → clear attachment    │ │
+│  │    └── Post events and metrics                                       │ │
+│  │                                                                       │ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │ Supporting Components                                                 │ │
+│  │                                                                       │ │
+│  │  VMIGrouper (pkg/driver/vmi_grouper.go)                              │ │
+│  │    - Resolves PVC → VMI ownership via pod labels/ownerRefs          │ │
+│  │    - Per-VMI mutex prevents concurrent volume ops on same VM        │ │
+│  │    - Cache with TTL (60s default) reduces API calls                 │ │
+│  │                                                                       │ │
+│  │  AttachmentManager (pkg/attachment/manager.go)                       │ │
+│  │    - In-memory state: map[volumeID]*AttachmentState                 │ │
+│  │    - Per-volume locking via VolumeLockManager                       │ │
+│  │    - Detach timestamps for grace period calculation                 │ │
+│  │    - PV annotation persistence for restart recovery                 │ │
+│  │                                                                       │ │
+│  │  Prometheus Metrics (pkg/observability/prometheus.go)               │ │
+│  │    - rds_csi_attachment_attach_total                                │ │
+│  │    - rds_csi_attachment_detach_total                                │ │
+│  │    - rds_csi_attachment_conflicts_total                             │ │
+│  │    - rds_csi_attachment_grace_period_used_total                     │ │
+│  │    - rds_csi_attachment_stale_cleared_total                         │ │
+│  │                                                                       │ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Recommended Architecture
-
-### System Overview
+### Data Flow: VM Restart Handoff (Supported Scenario)
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ CSI Controller Plugin (Deployment)                                    │
-│                                                                        │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │ ControllerServer                                                │  │
-│  │                                                                  │  │
-│  │  CreateVolume()   DeleteVolume()   ControllerExpandVolume()    │  │
-│  │       │                │                     │                  │  │
-│  │       └────────────────┴─────────────────────┘                  │  │
-│  │                        │                                         │  │
-│  │                   rdsClient (existing)                          │  │
-│  │                                                                  │  │
-│  │  ControllerPublishVolume()          ControllerUnpublishVolume() │  │
-│  │       │                                      │                  │  │
-│  │       └──────────────┬───────────────────────┘                  │  │
-│  │                      │                                           │  │
-│  │  ┌───────────────────▼───────────────────────────────────────┐  │  │
-│  │  │ AttachmentManager (NEW)                                    │  │  │
-│  │  │                                                             │  │  │
-│  │  │  ┌─────────────────────┐  ┌─────────────────────────────┐ │  │  │
-│  │  │  │ In-Memory State     │  │ PV Annotation Persistence   │ │  │  │
-│  │  │  │                     │  │                              │ │  │  │
-│  │  │  │ map[volumeID]Attach │  │ k8sClient.CoreV1().PVs()    │ │  │  │
-│  │  │  │  - nodeID           │  │  - Get/Update annotations   │ │  │  │
-│  │  │  │  - attachTime       │  │  - csi.rds.srvlab.io/node  │ │  │  │
-│  │  │  │  - readonly         │  │  - csi.rds.srvlab.io/time  │ │  │  │
-│  │  │  └─────────────────────┘  └─────────────────────────────┘ │  │  │
-│  │  │                                                             │  │  │
-│  │  │  Methods:                                                   │  │  │
-│  │  │  - Attach(volumeID, nodeID, readonly) error                │  │  │
-│  │  │  - Detach(volumeID, nodeID) error                          │  │  │
-│  │  │  - GetAttachment(volumeID) (*Attachment, bool)             │  │  │
-│  │  │  - LoadFromAnnotations(ctx) error  (startup recovery)      │  │  │
-│  │  └───────────────────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
+Time: T0
+Node A:       VM Running with RWO volume attached
+
+Time: T0+1s   Node A fails / Pod terminated
+              Kubelet (or external-attacher):
+                → NodeUnpublishVolume (unmount pod path)
+                → NodeUnstageVolume (nvme disconnect)
+              external-attacher deletes VolumeAttachment
+                → ControllerUnpublishVolume(volumeID, nodeA)
+
+              AttachmentManager:
+                → Delete: attachments[volumeID]
+                → Record: detachTimestamps[volumeID] = T0+1s
+
+[Grace Period Window: 30s default]
+
+Time: T0+4s   Kubernetes reschedules VM to Node B
+              external-attacher creates new VolumeAttachment
+                → ControllerPublishVolume(volumeID, nodeB)
+
+              ControllerServer:
+                → VMIGrouper.LockVMI() - serialize VM operations
+                → GetAttachment(volumeID) - not found (already detached)
+                → IsWithinGracePeriod(volumeID, 30s)
+                  └── detachTime = T0+1s, elapsed = 3s < 30s → TRUE
+                → Grace period allows handoff
+                → TrackAttachment(volumeID, nodeB)
+
+              Kubelet on Node B:
+                → NodeStageVolume (nvme connect, format if needed, mount)
+                → NodePublishVolume (bind mount to pod path)
+
+Time: T0+5s   VM running on Node B
+
+Total downtime: ~4-5 seconds (VM restart, not live migration)
 ```
 
-### Component Responsibilities
-
-| Component | Responsibility | Location | New/Modified |
-|-----------|----------------|----------|--------------|
-| **AttachmentManager** | Track volume-to-node attachments; enforce RWO; persist to PV annotations | `pkg/attachment/manager.go` | NEW |
-| **ControllerPublishVolume** | Validate RWO constraints; record attachment; return publish context | `pkg/driver/controller.go` | NEW (replace stub) |
-| **ControllerUnpublishVolume** | Remove attachment record; update PV annotation | `pkg/driver/controller.go` | NEW (replace stub) |
-| **Driver.addControllerServiceCapabilities** | Declare PUBLISH_UNPUBLISH_VOLUME capability | `pkg/driver/driver.go` | MODIFIED |
-| **ControllerServer** | Add attachmentManager field | `pkg/driver/controller.go` | MODIFIED |
-
-### New Package: pkg/attachment
+### Data Flow: True Live Migration (NOT Supported)
 
 ```
-pkg/attachment/
-├── manager.go        # AttachmentManager implementation
-├── manager_test.go   # Unit tests
-└── types.go          # Attachment struct, AttachmentState enum
+Time: T0
+Node A:       VM Running (memory + disk I/O active)
+                  ↓
+              Pre-copy phase: memory pages copied to Node B
+                  ↓
+Time: T0+5s   VM still running, iterative memory sync
+Node B:       VM container starting, receiving memory
+
+              *** BOTH NODES NEED VOLUME ACCESS SIMULTANEOUSLY ***
+              *** NVMe/TCP TO SAME TARGET FROM TWO INITIATORS ***
+              *** NOT SUPPORTED BY RDS/NVMe PROTOCOL ***
+                  ↓
+Time: T0+8s   Cutover: source VM paused, final sync
+                  ↓
+Time: T0+9s   Destination VM resumes
+Node A:       VM stopped, volume detached
+
+REQUIREMENT: RWX (ReadWriteMany) - NOT AVAILABLE WITH THIS DRIVER
+RESULT: Live migration will fail or be rejected by KubeVirt
 ```
 
-## Data Flow
+## Component Details
 
-### ControllerPublishVolume Flow
+### VMIGrouper (pkg/driver/vmi_grouper.go) - EXISTING
 
-```
-external-attacher sidecar
-         │
-         │ ControllerPublishVolume(volumeID, nodeID, readonly, volumeCapability)
-         ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ ControllerServer.ControllerPublishVolume()                          │
-│                                                                      │
-│  1. Validate request (volumeID, nodeID required)                    │
-│         │                                                            │
-│  2. Validate volume exists on RDS                                   │
-│         │  rdsClient.GetVolume(volumeID)                            │
-│         │                                                            │
-│  3. Check attachment state                                          │
-│         │  attachmentManager.GetAttachment(volumeID)                │
-│         │                                                            │
-│         ├─► If attached to SAME node: return success (idempotent)   │
-│         │                                                            │
-│         ├─► If attached to DIFFERENT node AND RWO:                  │
-│         │      return FailedPrecondition error                      │
-│         │      "volume already attached to node X"                  │
-│         │                                                            │
-│         └─► If not attached: proceed                                │
-│                                                                      │
-│  4. Record attachment                                               │
-│         │  attachmentManager.Attach(volumeID, nodeID, readonly)     │
-│         │    ├─► Update in-memory map                               │
-│         │    └─► Update PV annotation (async, best-effort)          │
-│         │                                                            │
-│  5. Return PublishContext                                           │
-│         │  map[string]string{                                       │
-│         │    "nvmeAddress": volume.NVMEAddress,                     │
-│         │    "nvmePort":    volume.NVMETCPPort,                     │
-│         │    "nqn":         volume.NVMETCPNQN,                      │
-│         │  }                                                         │
-│         ▼                                                            │
-│  Return ControllerPublishVolumeResponse                             │
-└────────────────────────────────────────────────────────────────────┘
-```
+**Purpose:** Serialize volume operations for the same VMI to prevent race conditions in upstream kubevirt-csi-driver.
 
-### ControllerUnpublishVolume Flow
+**How it works:**
+1. On ControllerPublishVolume, extract PVC namespace/name from volume context
+2. Query pods in namespace, find pod mounting this PVC
+3. Check pod ownerReferences for `VirtualMachineInstance` or KubeVirt labels
+4. Acquire per-VMI mutex before proceeding
+5. Release mutex on function return (defer unlock)
 
-```
-external-attacher sidecar
-         │
-         │ ControllerUnpublishVolume(volumeID, nodeID)
-         ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ ControllerServer.ControllerUnpublishVolume()                        │
-│                                                                      │
-│  1. Validate request (volumeID required; nodeID optional)           │
-│         │                                                            │
-│  2. Get current attachment                                          │
-│         │  attachmentManager.GetAttachment(volumeID)                │
-│         │                                                            │
-│         ├─► If not attached: return success (idempotent)            │
-│         │                                                            │
-│         ├─► If attached to DIFFERENT node (and nodeID specified):   │
-│         │      Log warning, return success (defensive)              │
-│         │                                                            │
-│         └─► If attached to specified node: proceed                  │
-│                                                                      │
-│  3. Remove attachment record                                        │
-│         │  attachmentManager.Detach(volumeID, nodeID)               │
-│         │    ├─► Remove from in-memory map                          │
-│         │    └─► Remove PV annotation (async, best-effort)          │
-│         │                                                            │
-│  4. Return success                                                  │
-│         ▼                                                            │
-│  Return ControllerUnpublishVolumeResponse{}                         │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-### Controller Restart Recovery Flow
-
-```
-Controller Pod Starts
-         │
-         ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ Driver.Run()                                                        │
-│                                                                      │
-│  1. Initialize AttachmentManager                                    │
-│         │  attachmentManager = NewAttachmentManager(k8sClient)      │
-│         │                                                            │
-│  2. Load state from PV annotations                                  │
-│         │  attachmentManager.LoadFromAnnotations(ctx)               │
-│         │                                                            │
-│         │  For each PV with CSI driver = "rds.csi.srvlab.io":       │
-│         │    ├─► Read annotation: csi.rds.srvlab.io/attached-node   │
-│         │    ├─► Read annotation: csi.rds.srvlab.io/attach-time     │
-│         │    └─► Populate in-memory map if annotations present      │
-│         │                                                            │
-│  3. Start gRPC server                                               │
-│         │  (AttachmentManager now has recovered state)              │
-│         ▼                                                            │
-│  Server ready to handle ControllerPublish/Unpublish requests        │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-## AttachmentManager Design
-
-### Data Structures
-
+**Configuration:**
 ```go
-// pkg/attachment/types.go
-
-// Attachment represents a volume's attachment state
-type Attachment struct {
-    VolumeID   string    // CSI volume ID (e.g., pvc-uuid)
-    NodeID     string    // Kubernetes node name
-    Readonly   bool      // Whether attached as read-only
-    AttachTime time.Time // When attachment was recorded
-}
-
-// AttachmentManager tracks volume attachments
-type AttachmentManager struct {
-    attachments map[string]*Attachment // volumeID -> Attachment
-    mu          sync.RWMutex
-    k8sClient   kubernetes.Interface
-    driverName  string // For PV annotation filtering
+VMIGrouperConfig{
+    K8sClient: k8sClient,
+    CacheTTL:  60 * time.Second,  // Cache PVC→VMI mapping
+    Enabled:   true,
 }
 ```
 
-### PV Annotation Schema
+### AttachmentManager (pkg/attachment/manager.go) - EXISTING
 
-```yaml
-# Annotations added to PersistentVolume objects
-metadata:
-  annotations:
-    # Node where volume is currently attached
-    csi.rds.srvlab.io/attached-node: "worker-1"
+**Purpose:** Track volume-to-node attachments with grace period support.
 
-    # Timestamp of attachment (RFC3339)
-    csi.rds.srvlab.io/attach-time: "2026-01-30T12:34:56Z"
-
-    # Whether attached read-only
-    csi.rds.srvlab.io/readonly: "false"
-```
-
-### Thread Safety
-
+**Key methods for KubeVirt:**
 ```go
-// All public methods use RWMutex for thread safety
+// Track new attachment
+TrackAttachment(ctx, volumeID, nodeID) error
 
-func (m *AttachmentManager) Attach(volumeID, nodeID string, readonly bool) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+// Remove attachment, record detach timestamp
+UntrackAttachment(ctx, volumeID) error
 
-    // Check existing attachment
-    if existing, ok := m.attachments[volumeID]; ok {
-        if existing.NodeID != nodeID {
-            return fmt.Errorf("volume %s already attached to node %s",
-                volumeID, existing.NodeID)
-        }
-        // Idempotent: already attached to same node
-        return nil
-    }
+// Check if recently detached (grace period)
+IsWithinGracePeriod(volumeID, duration) bool
 
-    // Record new attachment
-    m.attachments[volumeID] = &Attachment{
-        VolumeID:   volumeID,
-        NodeID:     nodeID,
-        Readonly:   readonly,
-        AttachTime: time.Now(),
-    }
-
-    // Persist to PV annotation (async, best-effort)
-    go m.persistAttachment(volumeID, nodeID, readonly)
-
-    return nil
-}
-
-func (m *AttachmentManager) GetAttachment(volumeID string) (*Attachment, bool) {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
-
-    attachment, ok := m.attachments[volumeID]
-    if !ok {
-        return nil, false
-    }
-    // Return copy to prevent mutation
-    copy := *attachment
-    return &copy, true
-}
+// Clear timestamp after successful handoff
+ClearDetachTimestamp(volumeID)
 ```
 
-## Architectural Patterns
+**Grace period flow:**
+1. UntrackAttachment records `detachTimestamps[volumeID] = time.Now()`
+2. Next ControllerPublishVolume calls `IsWithinGracePeriod(volumeID, 30s)`
+3. If within grace period, allows attachment to new node
+4. After successful attachment, `ClearDetachTimestamp(volumeID)`
 
-### Pattern 1: In-Memory State with Annotation Persistence
+### AttachmentReconciler (pkg/attachment/reconciler.go) - EXISTING
 
-**What:** Primary state in memory; PV annotations as durable backup for controller restarts
+**Purpose:** Background cleanup of stale attachments from deleted nodes.
 
-**Trade-offs:**
-- **Pro:** Fast attachment lookups (no API calls in hot path)
-- **Pro:** State survives controller restarts via annotation reload
-- **Pro:** No external database dependency
-- **Con:** Brief window where state could diverge if annotation update fails
-- **Con:** Must handle annotation update failures gracefully
+**Reconciliation logic:**
+1. Run every 5 minutes (configurable)
+2. List all tracked attachments
+3. For each, check if node exists via K8s API
+4. If node deleted and outside grace period: clear attachment
+5. Post Kubernetes event and metric
 
-**Mitigation for annotation failures:**
-- Log warning but don't fail the Attach operation
-- Retry annotation update on next operation
-- LoadFromAnnotations on startup reconciles state
-
-**CONFIDENCE:** HIGH - This pattern is used by several production CSI drivers (AWS EBS, GCE PD).
-
-### Pattern 2: ReadWriteOnce Enforcement at Controller Level
-
-**What:** Reject ControllerPublishVolume if volume is already attached to a different node
-
-**When to use:** For volumes with `VolumeCapability_AccessMode_SINGLE_NODE_WRITER`
-
-**Implementation:**
-
+**Configuration:**
 ```go
-func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context,
-    req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId()
-
-    // Check existing attachment
-    if existing, ok := cs.attachmentManager.GetAttachment(volumeID); ok {
-        if existing.NodeID == nodeID {
-            // Idempotent: already attached to this node
-            klog.V(4).Infof("Volume %s already attached to node %s", volumeID, nodeID)
-            return &csi.ControllerPublishVolumeResponse{
-                PublishContext: cs.buildPublishContext(volumeID),
-            }, nil
-        }
-
-        // Check if access mode allows multi-node
-        accessMode := req.GetVolumeCapability().GetAccessMode().GetMode()
-        if accessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER ||
-           accessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY {
-            return nil, status.Errorf(codes.FailedPrecondition,
-                "volume %s is already attached to node %s, cannot attach to node %s",
-                volumeID, existing.NodeID, nodeID)
-        }
-    }
-
-    // Record new attachment
-    readonly := req.GetReadonly()
-    if err := cs.attachmentManager.Attach(volumeID, nodeID, readonly); err != nil {
-        return nil, status.Errorf(codes.Internal, "failed to record attachment: %v", err)
-    }
-
-    // ... build and return response
+ReconcilerConfig{
+    Manager:     attachmentManager,
+    K8sClient:   k8sClient,
+    Interval:    5 * time.Minute,
+    GracePeriod: 30 * time.Second,
+    Metrics:     metrics,
+    EventPoster: eventPoster,
 }
 ```
 
-**CONFIDENCE:** HIGH - This is the standard pattern for RWO enforcement.
+### Driver Configuration (pkg/driver/driver.go) - EXISTING
 
-**Sources:**
-- [CSI Spec - ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md)
-- [AWS EBS CSI Driver - ControllerPublishVolume](https://github.com/kubernetes-sigs/aws-ebs-csi-driver)
-
-### Pattern 3: Defensive Unpublish Handling
-
-**What:** ControllerUnpublishVolume succeeds even if state is inconsistent
-
-**Rationale:**
-- Kubernetes may retry unpublish multiple times
-- Node may have crashed, leaving stale state
-- Blocking unpublish causes volume stuck in terminating state
-
-**Implementation:**
-
+**KubeVirt-related configuration:**
 ```go
-func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context,
-    req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+DriverConfig{
+    // Attachment reconciler settings
+    EnableAttachmentReconciler:  true,
+    AttachmentReconcileInterval: 5 * time.Minute,
+    AttachmentGracePeriod:       30 * time.Second,
 
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId() // May be empty in some cases
-
-    existing, ok := cs.attachmentManager.GetAttachment(volumeID)
-    if !ok {
-        // Not attached - idempotent success
-        klog.V(4).Infof("Volume %s not attached, returning success", volumeID)
-        return &csi.ControllerUnpublishVolumeResponse{}, nil
-    }
-
-    // If nodeID specified and doesn't match, log warning but still detach
-    if nodeID != "" && existing.NodeID != nodeID {
-        klog.Warningf("Volume %s attached to node %s, but unpublish requested for node %s; detaching anyway",
-            volumeID, existing.NodeID, nodeID)
-    }
-
-    if err := cs.attachmentManager.Detach(volumeID, existing.NodeID); err != nil {
-        // Log error but don't fail - state will reconcile eventually
-        klog.Errorf("Failed to remove attachment record for volume %s: %v", volumeID, err)
-    }
-
-    return &csi.ControllerUnpublishVolumeResponse{}, nil
+    // VMI serialization settings
+    EnableVMISerialization: true,
+    VMICacheTTL:            60 * time.Second,
 }
 ```
 
-**CONFIDENCE:** HIGH - Defensive handling prevents stuck volumes.
+## New Components Needed
+
+**None required for basic KubeVirt support.** All components are implemented.
+
+### Optional Future Enhancements
+
+| Enhancement | Status | Value | Complexity |
+|-------------|--------|-------|------------|
+| RDS-side NQN ACLs | Deferred to v0.4 | Storage-level enforcement | Medium |
+| Force detach timeout | Deferred to v0.4 | Handle stuck detach | Medium |
+| Metrics dashboard | Optional | Operational visibility | Low |
+| User documentation | Recommended | User guidance | Low |
+
+## Build Order (For Documentation/Testing)
+
+Since all components exist, the build order is for verification and documentation:
+
+### Phase 1: Verify Existing Implementation
+1. **Confirm VMIGrouper functionality**
+   - Unit tests exist: `pkg/driver/vmi_grouper_test.go`
+   - Verify PVC→VMI resolution works
+
+2. **Confirm AttachmentManager grace period**
+   - Unit tests exist: `pkg/attachment/manager_test.go`
+   - Verify detach timestamp tracking
+
+3. **Confirm AttachmentReconciler cleanup**
+   - Unit tests exist: `pkg/attachment/reconciler_test.go`
+   - Verify stale attachment detection
+
+### Phase 2: Integration Testing
+1. **VM restart handoff scenario**
+   - Deploy VM with RDS volume
+   - Simulate node failure
+   - Verify VM restarts on new node within grace period
+
+2. **Conflict detection scenario**
+   - Attempt dual-attach outside grace period
+   - Verify FAILED_PRECONDITION error
+
+### Phase 3: Documentation
+1. **User guide section: KubeVirt Integration**
+   - Clearly state RWO-only limitation
+   - Explain grace period enables fast restart
+   - Provide configuration examples
+
+2. **Troubleshooting guide**
+   - "VM live migration fails" → Requires RWX storage
+   - "Volume attachment conflict" → Check grace period setting
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Blocking on Annotation Updates
+### Anti-Pattern 1: Exposing RWX Capability
 
-**What people do:** Make ControllerPublishVolume wait for PV annotation update to succeed
+**Do NOT add `MULTI_NODE_MULTI_WRITER` capability.**
 
-**Why it's wrong:**
-- API server unavailability blocks all publish operations
-- Increases latency for every attach operation
-- In-memory state is authoritative; annotation is backup
+Why:
+- NVMe/TCP doesn't support multi-initiator without clustering
+- No SCSI reservations or coordination mechanism
+- Would enable silent data corruption
 
-**Do this instead:** Update annotation asynchronously; log failures but don't block
+Instead: Keep RWO only, document limitations.
 
-### Anti-Pattern 2: Stateless Controller (No Attachment Tracking)
+### Anti-Pattern 2: Disabling Grace Period
 
-**What people do:** Rely solely on Kubernetes VolumeAttachment objects
+**Do NOT set `AttachmentGracePeriod = 0`.**
 
-**Why it's wrong:**
-- VolumeAttachment is managed by external-attacher, not controller
-- Controller has no way to enforce RWO without its own state
-- Race conditions during pod migration
+Why:
+- Node failures would block VM restart indefinitely
+- Grace period doesn't weaken RWO (conflicts still blocked outside window)
 
-**Do this instead:** Maintain attachment state in controller; use as source of truth for RWO enforcement
+Instead: Use default 30s or tune based on cluster characteristics.
 
-### Anti-Pattern 3: Failing Unpublish on State Mismatch
+### Anti-Pattern 3: Implementing Custom "Migration Protocol"
 
-**What people do:** Return error if unpublish nodeID doesn't match recorded nodeID
+**Do NOT add driver-specific dual-attachment logic.**
 
-**Why it's wrong:**
-- Causes volume to be stuck if node crashed
-- Kubernetes retries indefinitely, never succeeds
-- Manual intervention required
+Why:
+- Violates CSI spec
+- Extremely complex distributed coordination
+- Data corruption risk
 
-**Do this instead:** Log warning but allow unpublish to succeed; state will reconcile
+Instead: Guide users to RWX storage for live migration needs.
 
-## Capability Declaration
+## Metrics for Observability
 
-### Current Capabilities (driver.go)
+Existing metrics in `pkg/observability/prometheus.go`:
 
-```go
-func (d *Driver) addControllerServiceCapabilities() {
-    d.cscaps = []*csi.ControllerServiceCapability{
-        {Type: &csi.ControllerServiceCapability_Rpc{
-            Rpc: &csi.ControllerServiceCapability_RPC{
-                Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-            }}},
-        {Type: &csi.ControllerServiceCapability_Rpc{
-            Rpc: &csi.ControllerServiceCapability_RPC{
-                Type: csi.ControllerServiceCapability_RPC_GET_CAPACITY,
-            }}},
-        {Type: &csi.ControllerServiceCapability_Rpc{
-            Rpc: &csi.ControllerServiceCapability_RPC{
-                Type: csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
-            }}},
-    }
-}
+```
+rds_csi_attachment_attach_total{status="success|failure"}
+rds_csi_attachment_detach_total{status="success|failure"}
+rds_csi_attachment_conflicts_total
+rds_csi_attachment_grace_period_used_total
+rds_csi_attachment_stale_cleared_total
+rds_csi_attachment_operation_duration_seconds{operation="attach|detach|reconcile"}
+rds_csi_attachment_reconcile_total{action="clear_stale|sync_pv"}
 ```
 
-### Required Addition
+**Key metrics for KubeVirt monitoring:**
+- `grace_period_used_total` - How often VM restarts use grace period
+- `conflicts_total` - Blocked multi-attach attempts
+- `stale_cleared_total` - Automatic cleanup from deleted nodes
 
-```go
-// ADD this capability to enable ControllerPublish/Unpublish
-{Type: &csi.ControllerServiceCapability_Rpc{
-    Rpc: &csi.ControllerServiceCapability_RPC{
-        Type: csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
-    }}},
-```
+## KubeVirt Compatibility Summary
 
-### CSIDriver Manifest Update
-
-```yaml
-# deploy/kubernetes/csi-driver.yaml
-apiVersion: storage.k8s.io/v1
-kind: CSIDriver
-metadata:
-  name: rds.csi.srvlab.io
-spec:
-  attachRequired: true  # CHANGE from false to true
-  podInfoOnMount: true
-  volumeLifecycleModes:
-    - Persistent
-```
-
-When `attachRequired: true`:
-- external-attacher creates VolumeAttachment objects
-- Kubernetes waits for attachment before calling NodeStageVolume
-- ControllerPublishVolume is called before node operations
-
-## Suggested Build Order
-
-### Phase 1: AttachmentManager Core (2-3 tasks)
-
-1. **Create pkg/attachment/types.go**
-   - Define Attachment struct
-   - Define AttachmentManager interface
-
-2. **Create pkg/attachment/manager.go**
-   - Implement in-memory state with RWMutex
-   - Implement Attach/Detach/GetAttachment methods
-   - Unit tests for concurrent operations
-
-3. **Add PV annotation persistence**
-   - Implement persistAttachment (async)
-   - Implement LoadFromAnnotations (sync on startup)
-   - Integration test with fake k8s client
-
-### Phase 2: ControllerPublish Implementation (2-3 tasks)
-
-4. **Wire AttachmentManager into ControllerServer**
-   - Add field to ControllerServer struct
-   - Initialize in NewControllerServer
-   - Call LoadFromAnnotations on startup
-
-5. **Implement ControllerPublishVolume**
-   - Request validation
-   - RWO enforcement logic
-   - Return PublishContext with NVMe connection info
-   - Unit tests with mock AttachmentManager
-
-6. **Implement ControllerUnpublishVolume**
-   - Defensive handling
-   - State cleanup
-   - Unit tests
-
-### Phase 3: Capability and Deployment (1-2 tasks)
-
-7. **Update capability declarations**
-   - Add PUBLISH_UNPUBLISH_VOLUME to cscaps
-   - Update CSIDriver manifest (attachRequired: true)
-
-8. **E2E testing**
-   - Test pod migration (RWO enforcement)
-   - Test controller restart (state recovery)
-   - Test node failure (unpublish handling)
-
-## Integration with Existing Components
-
-### ControllerServer Modifications
-
-```go
-// pkg/driver/controller.go
-
-type ControllerServer struct {
-    csi.UnimplementedControllerServer
-    driver            *Driver
-    attachmentManager *attachment.AttachmentManager // NEW
-}
-
-func NewControllerServer(driver *Driver) *ControllerServer {
-    return &ControllerServer{
-        driver:            driver,
-        attachmentManager: attachment.NewAttachmentManager(driver.k8sClient, DriverName),
-    }
-}
-```
-
-### Driver Initialization
-
-```go
-// pkg/driver/driver.go - Run() method
-
-func (d *Driver) Run(endpoint string) error {
-    // ... existing initialization ...
-
-    // Initialize controller service if enabled
-    if d.rdsClient != nil {
-        klog.Info("Controller service enabled")
-        d.cs = NewControllerServer(d)
-
-        // Load attachment state from PV annotations
-        if d.k8sClient != nil {
-            ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-            defer cancel()
-            if err := d.cs.(*ControllerServer).attachmentManager.LoadFromAnnotations(ctx); err != nil {
-                klog.Warningf("Failed to load attachment state from annotations: %v", err)
-                // Non-fatal: continue with empty state
-            }
-        }
-    }
-
-    // ... rest of initialization ...
-}
-```
-
-### RBAC Updates Required
-
-```yaml
-# deploy/kubernetes/controller-rbac.yaml
-# ADD to controller ClusterRole:
-- apiGroups: [""]
-  resources: ["persistentvolumes"]
-  verbs: ["get", "list", "watch", "update", "patch"]  # ADD update, patch
-```
-
-## Scaling Considerations
-
-| Scale Factor | Impact | Mitigation |
-|--------------|--------|------------|
-| **Many volumes (1000+)** | In-memory map grows; startup load time increases | Use efficient map; paginate PV list on startup |
-| **Frequent attach/detach** | Annotation update load on API server | Batch annotation updates; rate limit |
-| **Controller restarts** | Brief period with incomplete state | LoadFromAnnotations is fast; external-attacher retries |
-| **Large clusters (100+ nodes)** | More concurrent publish requests | RWMutex handles concurrency well |
+| Feature | Supported | Implementation |
+|---------|-----------|----------------|
+| **Live Migration** | No | Requires RWX, not available |
+| **VM Restart Handoff** | Yes | Grace period (30s) |
+| **Fast Failover** | Yes | Grace period + reconciler |
+| **Hot-plug Volumes** | Yes | Standard CSI flow |
+| **ReadWriteOnce** | Yes | AttachmentManager enforcement |
+| **ReadWriteMany** | No | NVMe/TCP limitation |
+| **Block Mode** | Yes | CSI volumeMode=Block |
+| **Filesystem Mode** | Yes | ext4/xfs in NodeStage |
+| **Per-VMI Serialization** | Yes | VMIGrouper |
+| **Stale Cleanup** | Yes | AttachmentReconciler |
 
 ## Sources
 
-### CSI Specification (HIGH Confidence)
-- [CSI Spec - ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md) - Official method specification
-- [CSIDriver Object](https://kubernetes-csi.github.io/docs/csi-driver-object.html) - attachRequired field documentation
+### Primary (HIGH Confidence)
+- [KubeVirt Live Migration Documentation](https://kubevirt.io/user-guide/compute/live_migration/) - RWX requirement
+- [KubeVirt Storage Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/) - Volume migration strategies
+- [CSI Spec - ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+- Codebase: `pkg/driver/controller.go`, `pkg/attachment/manager.go`, `pkg/driver/vmi_grouper.go`
 
-### CSI Driver Examples (MEDIUM-HIGH Confidence)
-- [AWS EBS CSI Driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) - Production attachment tracking implementation
-- [DigitalOcean CSI Driver](https://pkg.go.dev/github.com/digitalocean/csi-digitalocean/driver) - ControllerPublishVolume example
-- [CSI Host Path Driver](https://github.com/kubernetes-csi/csi-driver-host-path/pkg/hostpath) - Reference implementation
-
-### Kubernetes Documentation (HIGH Confidence)
-- [Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/developing.html)
-- [External Attacher](https://github.com/kubernetes-csi/external-attacher) - Sidecar interaction patterns
-
-### Codebase Analysis (HIGH Confidence)
-- `pkg/driver/controller.go` - Current stub implementation (lines 336-343)
-- `pkg/driver/driver.go` - Capability declaration patterns
-- `pkg/reconciler/orphan_reconciler.go` - PV annotation access patterns
+### Secondary (MEDIUM Confidence)
+- [OpenEBS KubeVirt Live Migration](https://openebs.io/docs/Solutioning/read-write-many/kubevirt) - RWX patterns
+- [Red Hat Storage Considerations](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization)
 
 ---
 
-*Architecture research for: Volume Fencing via ControllerPublish/Unpublish*
+*Architecture research for: KubeVirt Live Migration Integration*
 *Researched: 2026-01-30*
-*Confidence: HIGH - Based on CSI spec, production driver examples, and existing codebase patterns*
+*Updated: 2026-02-03*
+*Confidence: HIGH - Based on KubeVirt docs, CSI spec, and existing codebase implementation*

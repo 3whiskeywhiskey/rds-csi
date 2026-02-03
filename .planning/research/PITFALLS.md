@@ -1,885 +1,784 @@
-# Volume Fencing Pitfalls: ControllerPublishVolume/ControllerUnpublishVolume
+# Domain Pitfalls: KubeVirt Live Migration with Block Storage CSI
 
-**Domain:** CSI Controller Attachment Tracking for ReadWriteOnce Volumes
-**Researched:** 2026-01-30
-**Confidence:** HIGH
-**Target:** v0.3.0 - Volume Fencing to fix volume ping-pong
+**Domain:** KubeVirt VM live migration with ReadWriteOnce block storage
+**Researched:** 2026-02-03
+**Context:** RDS CSI Driver using NVMe/TCP, no storage-level locking/reservations
+**Target:** v0.5.0 - KubeVirt Live Migration Support
 
-This research focuses on pitfalls when implementing `ControllerPublishVolume` and `ControllerUnpublishVolume` for attachment tracking, specifically for KubeVirt workloads with ReadWriteOnce volumes using in-memory state + PV annotations.
+## Executive Summary
 
----
+Adding live migration support to a CSI driver that currently enforces strict RWO semantics is **fraught with data corruption risks**. The core challenge: allowing temporary dual-attachment during migration without creating filesystem corruption from simultaneous writes. NVMe/TCP provides no storage-level fencing, so all safety must come from careful orchestration and timing.
+
+**Critical insight:** This is NOT just about relaxing attachment validation. Data corruption happens at the filesystem layer when two nodes mount the same block device simultaneously. The CSI driver must coordinate the handoff window precisely.
+
+**Key requirement clarification:** KubeVirt requires **ReadWriteMany (RWX) access mode** for standard live migration. RWO block volumes cannot be live migrated without storage-level block migration (copying data from source to destination). The challenge is implementing RWX-like behavior on NVMe/TCP storage that natively supports multi-initiator access but lacks filesystem-level coordination.
 
 ## Critical Pitfalls
 
-### Pitfall 1: In-Memory State Loss on Controller Restart
+These mistakes cause data corruption, VM crashes, or require complete rewrites.
 
-**What goes wrong:**
-Controller maintains attachment tracking in memory (map of volumeID -> nodeID). When controller pod restarts, crashes, or is rescheduled:
+### Pitfall 1: Filesystem Mounted on Two Nodes Simultaneously
 
-1. In-memory state is completely lost
-2. Controller returns to "clean slate" - doesn't know which volumes are attached where
-3. Next `ControllerPublishVolume` call for already-attached volume succeeds (no fencing)
-4. Volume now "published" to two nodes simultaneously
-5. Data corruption if both nodes perform I/O
+**What goes wrong:** The filesystem (ext4, xfs) inside the VM disk image gets corrupted when mounted read-write on two nodes at the same time. Both kernels cache metadata, make conflicting writes, and neither knows about the other's changes.
 
-**Why it happens:**
-Pure in-memory tracking without persistence. Common anti-pattern: relying on "controller will rebuild state from external-attacher calls" - but external-attacher doesn't re-call `ControllerPublishVolume` for already-attached volumes after controller restart.
+**Why it happens:** Developer assumes that because the migration is "temporary," brief dual-mounting is safe. It is not. Filesystems are explicitly designed for single-writer semantics.
 
 **Consequences:**
-- **Silent data corruption** - worst case, both nodes write to same volume
-- **Multi-attach errors** - Kubernetes eventually detects and blocks new pods
-- **Inconsistent state** - Driver thinks volume is available, but it's in use
+- Filesystem corruption requiring fsck or complete data loss
+- VM crashes with I/O errors during or after migration
+- Silent corruption that appears later (worst case)
 
-**Warning signs:**
-- After controller restart, `kubectl get volumeattachment` shows volumes attached, but controller has empty state
-- Multi-attach errors appear shortly after controller pod restart
-- Logs show "volume not found in publish context" when unpublishing
+**Prevention:**
+```
+KubeVirt live migration with block volumes works DIFFERENTLY than filesystem mounts:
 
-**Prevention strategy:**
+For KubeVirt VMs:
+- QEMU accesses the block device directly (no filesystem mount by Linux)
+- QEMU can coordinate I/O pause during migration handoff
+- The VM's INTERNAL filesystem is protected by QEMU, not Linux
 
+The CSI driver must:
+1. Allow RWX block volume mode (volumeMode: Block)
+2. NOT mount a filesystem on the block device
+3. Trust KubeVirt/QEMU to coordinate I/O during migration
+
+For filesystem volumes (non-KubeVirt):
+- NEVER allow dual filesystem mounts
+- Timeline enforcement still required if used outside KubeVirt
+```
+
+**Detection:**
+- Monitor for mount count on same volume (should be 0 for block mode, 1 for filesystem)
+- Check for filesystem errors in kernel logs on both nodes
+- VM shows I/O errors or read-only filesystem remount
+
+**Warning signs during implementation:**
+- Code path allows NodePublishVolume with mount while RWX is enabled
+- No distinction between block mode and filesystem mode volumes
+
+**Phase to address:** Implementation - Volume capability validation
+
+**Sources:**
+- [Red Hat: Storage considerations for OpenShift Virtualization](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization)
+- [Longhorn Issue #3597: Corruption using XFS after node restart](https://github.com/longhorn/longhorn/issues/3597)
+
+---
+
+### Pitfall 2: Advertising RWX Capability Without Proper Multi-Initiator Support
+
+**What goes wrong:** CSI driver advertises `MULTI_NODE_MULTI_WRITER` capability to enable RWX volumes, but the underlying storage or driver doesn't actually handle concurrent access safely.
+
+**Why it happens:** Developer focuses on the Kubernetes/CSI layer and forgets the storage layer. NVMe/TCP supports multi-initiator, but the driver's attachment tracking and namespace management may not.
+
+**Consequences:**
+- KubeVirt allows migration (sees RWX support)
+- Both nodes connect to NVMe target simultaneously
+- Without QEMU coordination, concurrent writes corrupt data
+- With QEMU coordination, migration may still fail due to CSI-level rejections
+
+**Prevention:**
 ```go
-// Option A: Persist to PV annotations (recommended for your use case)
-func (cs *ControllerServer) persistAttachment(volumeID, nodeID string) error {
-    pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
-    if err != nil {
-        return err
-    }
+// Volume capability validation must differentiate:
 
-    if pv.Annotations == nil {
-        pv.Annotations = make(map[string]string)
-    }
-    pv.Annotations["rds.csi.srvlab.io/attached-to"] = nodeID
-    pv.Annotations["rds.csi.srvlab.io/attached-at"] = time.Now().Format(time.RFC3339)
+func validateVolumeCapabilities(caps []*csi.VolumeCapability) error {
+    for _, cap := range caps {
+        accessMode := cap.GetAccessMode().GetMode()
 
-    _, err = cs.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
-    return err
-}
-
-// Rebuild state on startup
-func (cs *ControllerServer) rebuildStateFromPVs() error {
-    pvs, err := cs.kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
-    if err != nil {
-        return err
-    }
-
-    for _, pv := range pvs.Items {
-        if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != cs.driverName {
-            continue
-        }
-        if nodeID, ok := pv.Annotations["rds.csi.srvlab.io/attached-to"]; ok {
-            cs.attachments[pv.Name] = nodeID
-            klog.Infof("Recovered attachment: %s -> %s", pv.Name, nodeID)
+        // RWX with Block = OK for KubeVirt live migration
+        if accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+            if cap.GetBlock() == nil {
+                // RWX with Mount (filesystem) = NOT SAFE
+                return fmt.Errorf("MULTI_NODE_MULTI_WRITER only supported for block volumes")
+            }
+            // Block mode is OK - QEMU coordinates access
         }
     }
     return nil
 }
+
+// Capability advertisement:
+d.vcaps = []*csi.VolumeCapability_AccessMode{
+    {Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
+    // Add RWX ONLY for block mode
+    {Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER},
+}
 ```
 
-**Phase to address:**
-Phase 1: Core implementation. This is the FIRST thing to implement before any attachment logic.
+**Detection:**
+- Test: Create RWX filesystem PVC, try to mount on two nodes - should fail
+- Test: Create RWX block PVC for KubeVirt VM - should allow dual attachment
+
+**Warning signs during implementation:**
+- Adding MULTI_NODE_MULTI_WRITER to vcaps without access type validation
+- No test cases for filesystem vs block mode with RWX
+
+**Phase to address:** Research/Planning - Must decide capability scope before implementation
 
 **Sources:**
-- [Azure Disk CSI: CRI Recovery Enhancement](https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/1648) - describes state recovery challenges
-- [vSphere CSI: ControllerPublishVolume called twice](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/580) - shows duplicate attach after upgrade
+- [Portworx: Raw Block for Live Migration](https://docs.portworx.com/portworx-csi/operations/raw-block-for-live-migration)
+- [GitHub Issue: Azure Disk MULTI_NODE_MULTI_WRITER not supported](https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/827)
 
 ---
 
-### Pitfall 2: Race Condition Between Concurrent ControllerPublishVolume Calls
+### Pitfall 3: Race Between Attachment Validation and Actual Device Access
 
-**What goes wrong:**
-Two pods scheduled simultaneously on different nodes for the same RWO volume:
+**What goes wrong:** ControllerPublishVolume checks attachment state, returns OK for dual-attachment, but by the time NodeStageVolume runs, the device access conflicts with source node.
 
-```
-Timeline:
-T0: Pod A scheduled on Node1, triggers ControllerPublishVolume(vol, node1)
-T1: Pod B scheduled on Node2, triggers ControllerPublishVolume(vol, node2)
-T2: Controller checks attachments[vol] -> empty (neither completed yet)
-T3: Controller allows BOTH publications
-T4: Both nodes connect to same NVMe target
-T5: Data corruption
-```
-
-**Why it happens:**
-No locking around attachment check-and-set. The check ("is volume attached?") and set ("mark as attached") are not atomic. With concurrent requests, both pass the check before either completes the set.
+**Why it happens:** There's a time gap between CSI calls. The attachment manager tracks "intent," but NVMe connections are the "reality." Developer assumes attachment state equals connection state.
 
 **Consequences:**
-- RWO volume attached to multiple nodes simultaneously
-- NVMe/TCP allows multiple initiators (no built-in SCSI-like reservation)
-- Filesystem corruption guaranteed
+- Both nodes have active NVMe connections
+- NVMe namespace may show different controller IDs
+- Depending on RDS implementation, one connection may fail or data corruption
 
-**Warning signs:**
-- Multi-attach detected by kubelet but after initial I/O already occurred
-- Rapid pod scheduling (e.g., deployment scale-up) causes sporadic failures
-- Race window is small (milliseconds) so hard to reproduce reliably
+**Prevention:**
+```
+The attachment manager must track:
+1. Attachment INTENT (what ControllerPublishVolume approved)
+2. Connection STATE (what NodeStageVolume achieved)
+3. Mount STATE (what NodePublishVolume completed)
 
-**Prevention strategy:**
+For live migration:
+- Source: ATTACHED, CONNECTED, MOUNTED (block device to QEMU)
+- Destination: ATTACHED (approved), CONNECTING...
+- Source: UNMOUNTING (QEMU pauses I/O)
+- Source: DISCONNECTING
+- Destination: CONNECTED, MOUNTING
 
-```go
-type ControllerServer struct {
-    // Per-volume lock to serialize ControllerPublishVolume calls
-    volumeLocks sync.Map // map[string]*sync.Mutex
-
-    // Attachment state
-    attachments     map[string]string
-    attachmentsLock sync.RWMutex
-}
-
-func (cs *ControllerServer) getVolumeLock(volumeID string) *sync.Mutex {
-    lock, _ := cs.volumeLocks.LoadOrStore(volumeID, &sync.Mutex{})
-    return lock.(*sync.Mutex)
-}
-
-func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId()
-
-    // Serialize all publish operations for this volume
-    lock := cs.getVolumeLock(volumeID)
-    lock.Lock()
-    defer lock.Unlock()
-
-    // Now safe to check and set
-    cs.attachmentsLock.RLock()
-    existingNode, exists := cs.attachments[volumeID]
-    cs.attachmentsLock.RUnlock()
-
-    if exists {
-        if existingNode == nodeID {
-            // Idempotent: already attached to same node
-            return &csi.ControllerPublishVolumeResponse{}, nil
-        }
-        // Attached to different node - REJECT
-        return nil, status.Errorf(codes.FailedPrecondition,
-            "volume %s already attached to node %s, cannot attach to %s",
-            volumeID, existingNode, nodeID)
-    }
-
-    // Perform actual attachment tracking
-    cs.attachmentsLock.Lock()
-    cs.attachments[volumeID] = nodeID
-    cs.attachmentsLock.Unlock()
-
-    // Persist to PV annotation
-    if err := cs.persistAttachment(volumeID, nodeID); err != nil {
-        // Rollback in-memory state
-        cs.attachmentsLock.Lock()
-        delete(cs.attachments, volumeID)
-        cs.attachmentsLock.Unlock()
-        return nil, status.Errorf(codes.Internal, "failed to persist attachment: %v", err)
-    }
-
-    return &csi.ControllerPublishVolumeResponse{}, nil
-}
+The CSI driver cannot enforce this ordering - KubeVirt does.
+But the driver CAN:
+- Track all states for observability
+- Refuse connection if attachment not approved
+- Refuse disconnect if still marked as primary
 ```
 
-**Phase to address:**
-Phase 1: Core implementation. Must be present from day one.
+**Detection:**
+- Metrics show attachment count != connection count for same volume
+- Node logs show "NVMe already connected" errors
+- Multiple nvme subsystems connected to same NQN from different nodes
 
-**Sources:**
-- [CSI Spec: ControllerPublishVolume](https://github.com/container-storage-interface/spec/blob/master/spec.md) - requires FAILED_PRECONDITION for already-published volumes
-- [Kubernetes optimistic concurrency](https://kyungho.me/en/posts/kubernetes-concurrency-control) - explains why Kubernetes doesn't prevent this at scheduler level
+**Warning signs during implementation:**
+- ControllerPublishVolume returns success without tracking
+- No mechanism to verify source actually released before destination acquires
+
+**Phase to address:** Implementation - Attachment manager enhancement
 
 ---
 
-### Pitfall 3: Dangling VolumeAttachments After Node Deletion
+### Pitfall 4: NVMe Disconnect Timing - Volume Still In Use
 
-**What goes wrong:**
-Node is forcefully removed from cluster (hardware failure, `kubectl delete node --force`):
+**What goes wrong:** NodeUnstageVolume calls `nvme disconnect` while QEMU still has the block device open on the source node. Kernel panics, or I/O errors cause VM crash.
 
-1. VolumeAttachment objects remain in Terminating state
-2. external-attacher cannot call ControllerUnpublishVolume (node is gone)
-3. Controller's attachment state still shows volume -> deleted_node
-4. New pod scheduled on healthy node
-5. ControllerPublishVolume rejects with "already attached to [deleted_node]"
-6. Pod stuck in ContainerCreating forever
-
-**Why it happens:**
-Controller trusts its attachment state without validating node existence. When node is deleted, the attachment state becomes stale but is never cleaned up.
+**Why it happens:** Developer assumes NodeUnpublishVolume always runs first and QEMU closes the device. In failure scenarios or timing issues, QEMU may still have file descriptor open.
 
 **Consequences:**
-- Volumes become permanently unavailable until manual intervention
-- Operators must manually clear annotations or restart controller
-- Workloads cannot failover after node failures
+- Node kernel panic or filesystem errors
+- VM crash on source node
+- Data loss from in-flight writes
+- Stale NVMe subsystem state prevents reconnection
 
-**Warning signs:**
-- `kubectl get volumeattachment` shows attachments to non-existent nodes
-- Pods stuck in ContainerCreating with "already attached" errors
-- Errors reference nodes that don't appear in `kubectl get nodes`
+**Prevention:**
+```bash
+# In NodeUnstageVolume, ALWAYS verify device not in use:
 
-**Prevention strategy:**
+# 1. Check if device has any open file descriptors
+device_path=$(get_device_by_nqn "$nqn")
+if lsof "$device_path" 2>/dev/null | grep -q .; then
+    return FAILED_PRECONDITION "device still in use, cannot unstage"
+fi
 
-```go
-func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId()
+# 2. Check if device is mounted (paranoid check for block mode)
+if findmnt --source "$device_path"; then
+    return FAILED_PRECONDITION "device mounted, cannot disconnect"
+fi
 
-    lock := cs.getVolumeLock(volumeID)
-    lock.Lock()
-    defer lock.Unlock()
+# 3. Flush any pending I/O
+sync
+echo 1 > /proc/sys/vm/drop_caches  # Optional: clear page cache
 
-    cs.attachmentsLock.RLock()
-    existingNode, exists := cs.attachments[volumeID]
-    cs.attachmentsLock.RUnlock()
-
-    if exists && existingNode != nodeID {
-        // Before rejecting, verify the existing node still exists
-        _, err := cs.kubeClient.CoreV1().Nodes().Get(ctx, existingNode, metav1.GetOptions{})
-        if err != nil {
-            if errors.IsNotFound(err) {
-                klog.Warningf("Volume %s was attached to deleted node %s, allowing reattachment to %s",
-                    volumeID, existingNode, nodeID)
-                // Clear stale attachment
-                cs.attachmentsLock.Lock()
-                delete(cs.attachments, volumeID)
-                cs.attachmentsLock.Unlock()
-                // Fall through to allow new attachment
-            } else {
-                return nil, status.Errorf(codes.Internal, "failed to verify node existence: %v", err)
-            }
-        } else {
-            // Node exists - genuine conflict
-            return nil, status.Errorf(codes.FailedPrecondition,
-                "volume %s already attached to node %s", volumeID, existingNode)
-        }
-    }
-
-    // Continue with attachment...
-}
-
-// Also: background reconciliation loop
-func (cs *ControllerServer) reconcileStaleAttachments() {
-    ticker := time.NewTicker(5 * time.Minute)
-    for range ticker.C {
-        cs.attachmentsLock.RLock()
-        attachmentsCopy := make(map[string]string)
-        for k, v := range cs.attachments {
-            attachmentsCopy[k] = v
-        }
-        cs.attachmentsLock.RUnlock()
-
-        for volumeID, nodeID := range attachmentsCopy {
-            _, err := cs.kubeClient.CoreV1().Nodes().Get(context.Background(), nodeID, metav1.GetOptions{})
-            if errors.IsNotFound(err) {
-                klog.Warningf("Cleaning up stale attachment: %s -> %s (node deleted)", volumeID, nodeID)
-                cs.attachmentsLock.Lock()
-                delete(cs.attachments, volumeID)
-                cs.attachmentsLock.Unlock()
-                cs.clearPVAnnotation(volumeID)
-            }
-        }
-    }
-}
+# 4. ONLY THEN disconnect
+nvme disconnect -n "$nqn"
 ```
 
-**Phase to address:**
-Phase 2: Robustness. Can launch without this but must add before production use with node failures.
+**Detection:**
+- Kernel logs show "I/O error, dev nvmeXnY, sector ..." after disconnect
+- QEMU process crashes with block device errors
+- `dmesg` shows NVMe controller removal while in use
+
+**Warning signs during implementation:**
+- NodeUnstageVolume doesn't check for open file descriptors
+- No synchronization between QEMU unmount and NVMe disconnect
+
+**Phase to address:** Implementation - NodeUnstageVolume enhancement
 
 **Sources:**
-- [Kubernetes Issue #67853](https://github.com/kubernetes/kubernetes/issues/67853) - VolumeAttachment not recreated after node deletion
-- [VMware CSI Issue #245](https://github.com/vmware-archive/cloud-director-named-disk-csi-driver/issues/245) - Multi-attach due to dangling attachments
-- [Dell CSI KB](https://www.dell.com/support/kbdoc/en-us/000200778/container-storage-interface-csi-drivers-family-when-a-node-goes-down-due-to-node-crash-node-down-power-off-scenario-pods-cannot-come-up-on-a-new-node-because-storage-volumes-cannot-be-attached) - Node down volume attachment issues
+- [Dell CSI: When a Node Goes Down, Block Volumes Cannot be Attached to Another Node](https://www.dell.com/support/kbdoc/en-us/000200778/)
 
 ---
 
-### Pitfall 4: ControllerUnpublishVolume Called Before NodeUnstageVolume Completes
+### Pitfall 5: Grace Period Configuration Misuse
 
-**What goes wrong:**
-During pod deletion or node drain:
+**What goes wrong:** Migration takes longer than expected (network slow, large memory). Grace period expires, attachment reconciler forcibly detaches source, migration fails, VM crashes.
 
-1. kubelet calls `NodeUnpublishVolume` (unmount from pod path)
-2. kubelet calls `NodeUnstageVolume` (unmount staging, NVMe disconnect)
-3. **Before step 2 completes**, external-attacher calls `ControllerUnpublishVolume`
-4. Controller clears attachment state
-5. New pod scheduled immediately on different node
-6. Controller allows new attachment (old attachment cleared)
-7. Two nodes now accessing same volume - one disconnecting, one connecting
+**Alternative problem:** Grace period is applied universally, allowing genuine conflicts to proceed for grace period duration.
 
-**Why it happens:**
-The external-attacher doesn't wait for `NodeUnstageVolume` to complete. It watches VolumeAttachment deletion and immediately calls `ControllerUnpublishVolume`. The CSI spec says drivers MUST handle this, but many don't.
+**Why it happens:** Developer sets grace period based on "typical" migration time without accounting for variability. Or uses single grace period for both migration and conflict detection.
 
 **Consequences:**
-- Brief window where two nodes access volume
-- Less severe than Pitfall 2 (one node is disconnecting), but still dangerous for certain workloads
-- KubeVirt live migration particularly vulnerable
+- Migration fails mid-stream
+- VM experiences I/O errors and crashes
+- OR: Legitimate conflicts allowed for grace period window
 
-**Warning signs:**
-- Logs show ControllerUnpublishVolume before NodeUnstageVolume
-- Occasional filesystem corruption during rapid pod rescheduling
-- Works in testing (slow operations) but fails in production (fast operations)
+**Prevention:**
+```
+TWO SEPARATE CONCERNS:
 
-**Prevention strategy:**
+1. Migration Handoff Window (should be long):
+   - Allow dual-attachment for configured duration
+   - Configurable per-StorageClass or globally
+   - Default: 5 minutes (allows for slow migrations)
+   - Must be renewable if migration still in progress
 
-```go
-// Option A: Grace period before allowing re-attachment
-const reattachmentGracePeriod = 30 * time.Second
+2. Conflict Detection (should be immediate):
+   - Non-migration dual-attach attempts
+   - Should fail IMMEDIATELY with FailedPrecondition
+   - No grace period for conflicts
 
-type attachmentInfo struct {
-    NodeID       string
-    UnpublishAt  time.Time // When ControllerUnpublishVolume was called
-}
+How to distinguish:
+- Migration: ControllerPublishVolume from virt-launcher pod owner
+- Conflict: Any other dual-attach attempt
 
-func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
-    volumeID := req.GetVolumeId()
-
-    lock := cs.getVolumeLock(volumeID)
-    lock.Lock()
-    defer lock.Unlock()
-
-    // Don't immediately clear - mark as "unpublishing" with timestamp
-    cs.attachmentsLock.Lock()
-    cs.attachments[volumeID] = attachmentInfo{
-        NodeID:      req.GetNodeId(),
-        UnpublishAt: time.Now(),
+Implementation:
+func ControllerPublishVolume(req) {
+    if existingAttachment.NodeID != req.NodeID {
+        if isKubeVirtMigration(req) {
+            // Apply migration grace period
+            return allowMigrationHandoff(req)
+        }
+        // Not migration - reject immediately
+        return FAILED_PRECONDITION
     }
-    cs.attachmentsLock.Unlock()
-
-    // Background cleanup after grace period
-    go func() {
-        time.Sleep(reattachmentGracePeriod)
-        lock := cs.getVolumeLock(volumeID)
-        lock.Lock()
-        defer lock.Unlock()
-
-        cs.attachmentsLock.Lock()
-        if info, ok := cs.attachments[volumeID].(attachmentInfo); ok {
-            if time.Since(info.UnpublishAt) >= reattachmentGracePeriod {
-                delete(cs.attachments, volumeID)
-            }
-        }
-        cs.attachmentsLock.Unlock()
-    }()
-
-    return &csi.ControllerUnpublishVolumeResponse{}, nil
-}
-
-func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId()
-
-    lock := cs.getVolumeLock(volumeID)
-    lock.Lock()
-    defer lock.Unlock()
-
-    cs.attachmentsLock.RLock()
-    existing := cs.attachments[volumeID]
-    cs.attachmentsLock.RUnlock()
-
-    switch v := existing.(type) {
-    case string:
-        // Attached to a node
-        if v == nodeID {
-            return &csi.ControllerPublishVolumeResponse{}, nil // Idempotent
-        }
-        return nil, status.Errorf(codes.FailedPrecondition, "volume attached to %s", v)
-
-    case attachmentInfo:
-        // In grace period
-        if v.NodeID == nodeID {
-            // Re-attaching to same node - likely kubelet retry, allow it
-            return &csi.ControllerPublishVolumeResponse{}, nil
-        }
-        // Different node - enforce grace period
-        remaining := reattachmentGracePeriod - time.Since(v.UnpublishAt)
-        if remaining > 0 {
-            return nil, status.Errorf(codes.Unavailable,
-                "volume %s in detachment grace period, retry in %v", volumeID, remaining)
-        }
-        // Grace period expired, allow new attachment
-    }
-
-    // Continue with attachment...
 }
 ```
 
-**Phase to address:**
-Phase 2: KubeVirt support. Critical for live migration scenarios.
+**Detection:**
+- Metrics show `attachment_conflicts_total` during known migrations
+- Events on PVC: "Detached from node-A due to timeout" during active migration
+- OR: Metrics show conflicts allowed that should have been rejected
 
-**Sources:**
-- [CSI Spec](https://github.com/container-storage-interface/spec/blob/master/spec.md) - "This RPC MUST be called after all NodeUnstageVolume and NodeUnpublishVolume"
-- [Longhorn Volume Live Migration](https://github.com/longhorn/longhorn/blob/master/enhancements/20210216-volume-live-migration.md) - Detailed attach/detach flow for migration
+**Warning signs during implementation:**
+- Single `gracePeriod` config for all attachment decisions
+- No way to identify migration requests vs conflict requests
+
+**Phase to address:** Planning - Architecture of attachment manager
 
 ---
 
-### Pitfall 5: Incorrect FAILED_PRECONDITION vs ABORTED Error Codes
+### Pitfall 6: Node Failure During Migration - Split-Brain Attachment
 
-**What goes wrong:**
-CSI spec requires specific error codes for specific conditions:
+**What goes wrong:** Source node crashes mid-migration. Kubernetes thinks it's down, but it's actually network-partitioned and still has NVMe connection active. Destination node connects to same volume. Both write simultaneously.
 
-- `FAILED_PRECONDITION` (9): Volume attached to different node with incompatible access mode
-- `ABORTED` (10): Operation already in progress for this volume
-- `ALREADY_EXISTS` (6): Volume already attached to same node with same capabilities (should return success, not error)
-
-Wrong error codes cause wrong CO behavior:
-- Returning `ABORTED` when it should be `FAILED_PRECONDITION` causes infinite retries
-- Returning error when it should be success causes stuck pods
-
-**Why it happens:**
-Developers don't read CSI spec carefully. "Already attached" seems like an error, so they return an error.
+**Why it happens:** Without storage-level fencing (NVMe/TCP has none via RDS), there's no way to guarantee source node released the volume.
 
 **Consequences:**
-- Pods stuck in retry loops
-- Unnecessary load on controller
-- Confusing error messages for operators
+- Silent data corruption (worst case scenario)
+- Both nodes write to volume simultaneously
+- No immediate error - corruption appears later
+- Most dangerous when network partition resolves
 
-**Warning signs:**
-- Logs show constant retries for the same volume
-- `ControllerPublishVolume` errors for idempotent calls
-- external-attacher logs show unexpected error handling
+**Prevention:**
+```
+This is the HARDEST problem for RWO block storage without fencing.
 
-**Prevention strategy:**
+Options (in order of safety):
 
-```go
-func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId()
+1. Require manual intervention:
+   - If source node status = NotReady, refuse migration
+   - Operator must verify node is truly down before force-detach
+   - Document: "Network partitions can cause corruption"
 
-    cs.attachmentsLock.RLock()
-    existingNode, exists := cs.attachments[volumeID]
-    cs.attachmentsLock.RUnlock()
+2. Implement application-level fencing:
+   - Source node must actively confirm unmount before destination mounts
+   - Requires out-of-band communication channel (not CSI spec)
+   - Could use RDS SSH connection to verify state
 
-    if exists {
-        if existingNode == nodeID {
-            // CSI Spec: "If this RPC failed, or the CO does not know if it failed,
-            // it MAY call this RPC again. The Plugin SHOULD ensure that when this
-            // call is repeated, the result remains the same."
-            // This is IDEMPOTENT - return SUCCESS, not error
-            klog.V(4).Infof("Volume %s already published to node %s (idempotent)", volumeID, nodeID)
-            return &csi.ControllerPublishVolumeResponse{
-                PublishContext: map[string]string{
-                    "attachedNode": nodeID,
-                },
-            }, nil
-        }
+3. Use RDS-level protection (if available):
+   - MikroTik RDS might support namespace reservations
+   - Would need to research RouterOS capabilities
+   - Most robust but requires storage cooperation
 
-        // CSI Spec: "Indicates that a volume corresponding to the specified
-        // volume_id has already been published at the node corresponding to
-        // the specified node_id but is incompatible with the specified
-        // volume_capability or readonly flag."
-        // Use FAILED_PRECONDITION for RWO volume on different node
-        return nil, status.Errorf(codes.FailedPrecondition,
-            "volume %s is already exclusively attached to node %s, cannot attach to %s (ReadWriteOnce access mode)",
-            volumeID, existingNode, nodeID)
-    }
-
-    // Check if operation already in progress
-    if cs.isOperationInProgress(volumeID) {
-        // Use ABORTED for concurrent operation
-        return nil, status.Errorf(codes.Aborted,
-            "operation already in progress for volume %s", volumeID)
-    }
-
-    // Continue with attachment...
-}
+For RDS CSI (no fencing), recommend Option 1:
+- AttachmentReconciler detects NotReady nodes
+- Refuses migration if source node is NotReady
+- Requires confirmed node deletion or manual override
+- Logs aggressive warnings
 ```
 
-**Phase to address:**
-Phase 1: Core implementation. Get it right from the start.
+**Detection:**
+- Both nodes show NVMe connection to same NQN
+- Attachment manager shows volume attached to multiple nodes
+- Source node returns from partition with stale data
+
+**Warning signs during implementation:**
+- No check for source node status before allowing migration
+- No documentation of split-brain risks
+
+**Phase to address:** Research - Investigate RDS capabilities for fencing
 
 **Sources:**
-- [CSI Spec v1.7.0](https://github.com/container-storage-interface/spec/blob/v1.7.0/spec.md) - Complete error code requirements
-- [Kadalu CSI Sanity Failures](https://github.com/kadalu/kadalu/issues/494) - Spec conformance issues
+- [AIStore: Split-brain is Inevitable](https://aistore.nvidia.com/blog/2025/02/16/split-brain-blog)
+- [Kubernetes on SAN Storage: Fencing for Persistent Storage](https://datamattsson.tumblr.com/post/182297931146/highly-available-stateful-workloads-on-kubernetes)
+
+---
+
+### Pitfall 7: Attachment State Persisted After Migration Failure
+
+**What goes wrong:** Migration starts, attachment manager marks volume as "migrating to node-B". Migration fails. State persists. Future legitimate attachments rejected because volume still marked as migrating.
+
+**Why it happens:** Developer adds migration state but forgets cleanup path for failure cases.
+
+**Consequences:**
+- Volume stuck in "migrating" state
+- Future pod scheduling fails with "volume unavailable"
+- Requires manual annotation cleanup or controller restart
+
+**Prevention:**
+```
+Attachment state machine must handle ALL transitions:
+
+States:
+- AVAILABLE: No attachment
+- ATTACHED(nodeA): Single attachment
+- MIGRATING(nodeA -> nodeB): Dual attachment for migration
+- DETACHING(nodeA): Cleanup in progress
+
+Transitions:
+1. AVAILABLE -> ATTACHED: Normal attach
+2. ATTACHED -> MIGRATING: Migration start (ControllerPublish to new node)
+3. MIGRATING -> ATTACHED: Migration complete (ControllerUnpublish from old node)
+4. MIGRATING -> ATTACHED(original): Migration failed (rollback)
+5. ATTACHED -> DETACHING: Normal detach start
+6. DETACHING -> AVAILABLE: Detach complete
+
+Failure recovery:
+- Reconciler detects stale MIGRATING state (timestamp > max_migration_time)
+- Checks actual NVMe connections on both nodes
+- Resolves to correct single-attachment state
+- Posts event explaining resolution
+```
+
+**Detection:**
+- PV annotation shows migration in progress but no migration running
+- Volume attach fails with "migration in progress" error
+- Reconciler logs show repeated "stale migration state detected"
+
+**Warning signs during implementation:**
+- State machine only handles happy path
+- No reconciler logic for stale migration cleanup
+
+**Phase to address:** Implementation - Attachment state machine
 
 ---
 
 ## Moderate Pitfalls
 
-### Pitfall 6: PV Annotation Update Conflicts
+These cause delays, debugging sessions, or technical debt.
 
-**What goes wrong:**
-When using PV annotations for persistence, concurrent updates can conflict:
+### Pitfall 8: CSIDriver Object Configuration Mismatch
 
-1. Controller A reads PV (resourceVersion: 100)
-2. Controller B reads PV (resourceVersion: 100)
-3. Controller A updates annotation, write succeeds (resourceVersion: 101)
-4. Controller B updates annotation, write fails with "conflict"
-5. Controller B doesn't retry, attachment state inconsistent
+**What goes wrong:** CSIDriver object in Kubernetes has incorrect `attachRequired` setting. If false, Kubernetes skips ControllerPublishVolume entirely, breaking attachment tracking.
 
-**Why it happens:**
-Kubernetes uses optimistic concurrency. If you read a resource, modify it, and write it back, another writer may have updated it in between. Your write fails with StatusConflict (409).
+**Why it happens:** Developer changes driver behavior but forgets to update CSIDriver manifest.
 
-**Prevention strategy:**
+**Consequences:**
+- Attachment tracking bypassed
+- Grace period logic never invoked
+- Volumes appear to work but without proper fencing
 
-```go
-func (cs *ControllerServer) persistAttachment(volumeID, nodeID string) error {
-    return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-        pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
-        if err != nil {
-            return err
-        }
-
-        if pv.Annotations == nil {
-            pv.Annotations = make(map[string]string)
-        }
-        pv.Annotations["rds.csi.srvlab.io/attached-to"] = nodeID
-
-        _, err = cs.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
-        return err // If conflict, retry.RetryOnConflict will retry
-    })
-}
+**Prevention:**
+```yaml
+# CSIDriver must have attachRequired: true for attachment tracking
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: rds.csi.srvlab.io
+spec:
+  attachRequired: true  # CRITICAL: Must be true for ControllerPublish/Unpublish
+  podInfoOnMount: true  # Recommended for VMI grouper
+  volumeLifecycleModes:
+    - Persistent
 ```
 
-**Phase to address:**
-Phase 1: Core implementation.
+**Detection:**
+- ControllerPublishVolume never called (no logs)
+- Attachment metrics always zero
+- Migration "works" but attachment state is empty
 
-**Sources:**
-- [Kubernetes Operators Best Practices](https://alenkacz.medium.com/kubernetes-operators-best-practices-understanding-conflict-errors-d05353dff421) - Conflict handling
+**Warning signs during implementation:**
+- Changing deployment manifests without testing attachment flow
+- Copy-pasting CSIDriver from driver that doesn't need attachment
+
+**Phase to address:** Deployment - Manifest validation
 
 ---
 
-### Pitfall 7: Missing Publish Context in Response
+### Pitfall 9: VolumeAttachment Object Cleanup Delay
 
-**What goes wrong:**
-`ControllerPublishVolume` should return `PublishContext` map that is passed to `NodeStageVolume`. If empty or missing:
+**What goes wrong:** Kubernetes takes 6 minutes to clean up VolumeAttachment after node failure. During this time, volume cannot be attached to new node. Migration appears stuck.
 
-1. NodeStageVolume doesn't receive controller-provided metadata
-2. Node service must duplicate discovery logic
-3. State desync between controller and node
+**Why it happens:** This is Kubernetes default behavior (`maxWaitForUnmountDuration = 6m`). Not a driver bug, but impacts migration UX.
 
-**Prevention strategy:**
+**Prevention:**
+```
+Cannot change Kubernetes behavior, but can:
 
-```go
-func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-    // ... attachment logic ...
-
-    return &csi.ControllerPublishVolumeResponse{
-        PublishContext: map[string]string{
-            // Pass through to NodeStageVolume
-            "nvmeAddress":  cs.config.NVMeAddress,
-            "nvmePort":     cs.config.NVMePort,
-            "attachedNode": nodeID,
-            "attachedAt":   time.Now().Format(time.RFC3339),
-        },
-    }, nil
-}
+1. Document expected delay in operator runbooks
+2. Provide kubectl command for force cleanup:
+   kubectl delete volumeattachment csi-<volume-id>
+3. Add health check endpoint that detects this state
+4. Post events explaining the wait period
+5. Consider implementing force-detach with warnings
 ```
 
-**Phase to address:**
-Phase 1: Core implementation.
+**Detection:**
+- Migration stuck at "Waiting for volume detachment"
+- VolumeAttachment object exists for deleted pod
+- 6-minute timer in progress
+
+**Warning signs during implementation:**
+- No documentation of this Kubernetes limitation
+- Tests don't account for cleanup delays
+
+**Phase to address:** Documentation - Operator runbook
+
+**Sources:**
+- [Medium: Demystifying the Multi-Attach Error for Volume](https://medium.com/@golusstyle/demystifying-the-multi-attach-error-for-volume-causes-and-solutions-595a19316a0c)
 
 ---
 
-### Pitfall 8: Kubelet 6-Minute Force Detach Timeout
+### Pitfall 10: NVMe Multipath Interference
 
-**What goes wrong:**
-Kubernetes has hardcoded 6-minute `maxWaitForUnmountDuration`. After this:
+**What goes wrong:** If NVMe multipath is enabled on nodes, kernel may try to combine connections from different nodes into a multipath device. This breaks the single-initiator model.
 
-1. AttachDetach controller force-detaches volume even if still mounted
-2. VolumeAttachment marked as detached
-3. New pod can attach to volume
-4. Old node still has I/O in flight
+**Why it happens:** Default kernel NVMe settings may enable multipath. Developer doesn't explicitly disable it.
 
-**Why it happens:**
-This is Kubernetes behavior, not CSI driver behavior. The driver must handle it gracefully.
+**Consequences:**
+- Unexpected device naming (/dev/nvmeXcYnZ vs /dev/nvmeXnY)
+- Device path resolution fails
+- Potential I/O routing issues
 
-**Prevention strategy:**
+**Prevention:**
+```
+For RDS CSI driver (single controller, no multipath):
 
+1. Deployment requirements:
+   - Kernel parameter: nvme_core.multipath=N
+   - OR modprobe.d: options nvme_core multipath=N
+
+2. Driver validation at startup:
+   - Check /sys/module/nvme_core/parameters/multipath
+   - Log warning if multipath=Y
+   - Consider failing startup with clear error
+
+3. Documentation:
+   - Add to deployment prerequisites
+   - Explain why multipath should be disabled
+```
+
+**Detection:**
+- Device appears as /dev/dm-* instead of /dev/nvmeXnY
+- Multiple nvme controllers shown for same subsystem
+- `/sys/class/nvme-subsystem/*/nvme*/` shows unexpected entries
+
+**Warning signs during implementation:**
+- No validation of multipath setting
+- Device path code assumes simple naming
+
+**Phase to address:** Deployment - Prerequisites documentation
+
+---
+
+### Pitfall 11: VMI Serialization Unaware of Migration
+
+**What goes wrong:** Project has VMI serialization to prevent concurrent operations on same VMI. Migration adds second VMI (source + destination) operating on same volume. Serialization doesn't account for this.
+
+**Why it happens:** VMI grouper keys by single VMI name. During migration, two VMIs (source launcher + destination launcher) both operate on volume, bypassing serialization.
+
+**Prevention:**
+```
+Extend VMI grouper to handle migration:
+
+Option A: Track by volume, not VMI
+- Lock on volume ID for all operations
+- Works regardless of how many VMIs access volume
+- May be too coarse-grained for multi-volume VMIs
+
+Option B: Detect migration and lock both VMIs
+- Identify migration scenario from pod labels/ownership
+- Acquire locks on both source and destination VMI
+- More complex but more precise
+
+Option C: Separate migration coordination
+- Migration operations use different lock namespace
+- AttachmentManager handles migration coordination
+- VMI grouper continues to handle single-VMI case
+
+Recommended: Option C (cleanest separation of concerns)
+```
+
+**Detection:**
+- Metrics show concurrent ControllerPublishVolume for same volume during migration
+- VMI serialization locks don't prevent dual-attachment
+- Race conditions reappear despite serialization being enabled
+
+**Warning signs during implementation:**
+- No review of VMI grouper behavior during migration
+- Tests only cover single-VMI scenarios
+
+**Phase to address:** Implementation - Migration-aware locking
+
+**Related:** Current implementation at driver.go:203-211 only handles single VMI case.
+
+---
+
+### Pitfall 12: CSI Idempotency Violations During Migration
+
+**What goes wrong:** During migration, kubelet retries CSI calls. Driver assumes it's a duplicate call for same operation, returns success, but parameters have changed (different target node).
+
+**Why it happens:** CSI spec requires idempotency, but "same operation" is ambiguous during migration.
+
+**Prevention:**
 ```go
-// In node service - ensure unmount completes quickly
-func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-    // Use shorter timeouts to avoid hitting 6-minute limit
-    unmountCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-    defer cancel()
+func ControllerPublishVolume(req) {
+    // Check for existing attachment
+    existing := getAttachment(req.VolumeId)
 
-    if err := ns.mounter.UnmountWithContext(unmountCtx, stagingPath); err != nil {
-        // Try lazy unmount as fallback
-        klog.Warningf("Normal unmount failed, trying lazy unmount: %v", err)
-        if err := ns.mounter.LazyUnmount(stagingPath); err != nil {
-            return nil, status.Errorf(codes.Internal, "unmount failed: %v", err)
+    if existing != nil {
+        if existing.NodeID == req.NodeID {
+            // TRUE idempotency: same volume, same node
+            return existingResponse()
         }
+
+        // Different node - NOT idempotent, this is new operation
+        // Must validate migration is allowed
+        if !isMigrationAllowed(existing, req) {
+            return FAILED_PRECONDITION
+        }
+        // Process as migration
     }
 
-    // Ensure NVMe disconnect completes before returning
-    if err := ns.nvmeConn.DisconnectWithContext(unmountCtx, nqn); err != nil {
-        klog.Warningf("NVMe disconnect failed (may be force-detached): %v", err)
-        // Don't fail - volume may already be detached by force
-    }
-
-    return &csi.NodeUnstageVolumeResponse{}, nil
+    // No existing attachment, process normally
 }
 ```
 
-**Phase to address:**
-Phase 2: Robustness. Important for production reliability.
+**Detection:**
+- Same request retried returns different results
+- Attachment state inconsistent after retries
+- Kubelet logs show unexpected responses
 
-**Sources:**
-- [Longhorn Issue #3584](https://github.com/longhorn/longhorn/issues/3584) - Configurable detach timeout
-- [Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/5562994/failedattachvolume-kubernetes-pods-not-reattaching) - Force detach behavior
+**Warning signs during implementation:**
+- Idempotency check only looks at volume ID, not node ID
+- No test cases for retry during migration
 
----
-
-### Pitfall 9: VolumeAttachment Finalizer Stuck
-
-**What goes wrong:**
-VolumeAttachment has finalizer `external-attacher/rds.csi.srvlab.io`. If ControllerUnpublishVolume fails repeatedly:
-
-1. VolumeAttachment stuck in Terminating
-2. PV stuck in Terminating (has finalizer referencing VolumeAttachment)
-3. PVC stuck in Terminating
-4. Namespace stuck in Terminating (if PVC has finalizer)
-5. Manual intervention required
-
-**Prevention strategy:**
-
-```go
-func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
-    volumeID := req.GetVolumeId()
-    nodeID := req.GetNodeId()
-
-    // ALWAYS return success if volume not attached
-    // This allows finalizer removal even if state is inconsistent
-    cs.attachmentsLock.RLock()
-    existingNode, exists := cs.attachments[volumeID]
-    cs.attachmentsLock.RUnlock()
-
-    if !exists {
-        klog.V(4).Infof("Volume %s not in attachment state, returning success (idempotent)", volumeID)
-        return &csi.ControllerUnpublishVolumeResponse{}, nil
-    }
-
-    if existingNode != nodeID && nodeID != "" {
-        // Volume attached to different node - still return success
-        // The nodeID might be stale, and we need to allow cleanup
-        klog.Warningf("Unpublish request for volume %s from node %s, but attached to %s. Allowing unpublish.",
-            volumeID, nodeID, existingNode)
-    }
-
-    // Clear state
-    cs.attachmentsLock.Lock()
-    delete(cs.attachments, volumeID)
-    cs.attachmentsLock.Unlock()
-
-    // Clear PV annotation (best effort - don't fail on this)
-    if err := cs.clearPVAnnotation(volumeID); err != nil {
-        klog.Warningf("Failed to clear PV annotation for %s: %v (continuing)", volumeID, err)
-    }
-
-    return &csi.ControllerUnpublishVolumeResponse{}, nil
-}
-```
-
-**Phase to address:**
-Phase 1: Core implementation. Must be idempotent from the start.
-
-**Sources:**
-- [External-Attacher Issue #66](https://github.com/kubernetes-csi/external-attacher/issues/66) - Failing to delete PV after attach failure
-- [External-Attacher csi_handler.go](https://github.com/kubernetes-csi/external-attacher/blob/master/pkg/controller/csi_handler.go) - Finalizer handling
+**Phase to address:** Implementation - ControllerPublishVolume
 
 ---
 
 ## Minor Pitfalls
 
-### Pitfall 10: No NVMe-Level Fencing (Storage-Level SCSI-3 PR Equivalent)
+These cause annoyance or confusion but are easily fixable.
 
-**What goes wrong:**
-Controller-level fencing (tracking which node has volume) is "soft fencing". It relies on the CSI driver being the only path to the storage. If:
+### Pitfall 13: Migration Events Not Posted
 
-1. Direct NVMe connection made outside CSI (debugging, manual recovery)
-2. Controller state corrupted
-3. Split-brain scenario
+**What goes wrong:** Migration starts, runs, completes, but no events posted to PVC. Operators have no visibility into what happened.
 
-Then storage-level protection is bypassed.
+**Why it happens:** Developer focuses on functionality, forgets observability.
 
-**Current state:**
-MikroTik RDS NVMe/TCP does not support NVMe Reservations (equivalent to SCSI-3 Persistent Reservations). AWS EBS added NVMe Reservations support in 2023, but this is not available on RDS.
+**Prevention:**
+```
+Add migration-specific events:
 
-**Mitigation:**
-Document this limitation. For mission-critical workloads, consider using SCSI-based storage with fence_scsi support.
+1. MigrationStarted - ControllerPublishVolume for second node
+2. SourceDetachInitiated - KubeVirt starts cleanup
+3. SourceDetachCompleted - ControllerUnpublishVolume for source
+4. MigrationCompleted - Successfully attached to destination only
+5. MigrationFailed - Migration rolled back or timed out
 
-**Phase to address:**
-Document in Phase 1. Hardware limitation, not software.
-
-**Sources:**
-- [AWS EBS NVMe Reservations](https://www.infoq.com/news/2023/10/aws-ebs-fencing-nvme/) - Storage-level fencing with NVMe
-- [Red Hat fence_scsi](https://access.redhat.com/articles/530533) - SCSI PR fencing
-
----
-
-### Pitfall 11: Not Handling Volume Not Found in Unpublish
-
-**What goes wrong:**
-`ControllerUnpublishVolume` called for volume that was never created or already deleted:
-
-```go
-// Bad
-func (cs *ControllerServer) ControllerUnpublishVolume(...) {
-    pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, ...)
-    if err != nil {
-        return nil, status.Errorf(codes.Internal, "failed to get PV: %v", err)
-    }
-}
+Event posting (example):
+poster.PostEvent(ctx, pvc, corev1.EventTypeNormal, "MigrationStarted",
+    fmt.Sprintf("Volume %s migration started: %s -> %s", volumeID, sourceNode, destNode))
 ```
 
-This causes VolumeAttachment stuck in Terminating.
+**Detection:**
+- No events on PVC during migration
+- Operators can't tell if migration is in progress
 
-**Prevention strategy:**
+**Warning signs during implementation:**
+- No event posting in migration code paths
+- Events only posted for errors
 
-```go
-// Good - return success if PV doesn't exist
-func (cs *ControllerServer) ControllerUnpublishVolume(...) {
-    pv, err := cs.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, ...)
-    if err != nil {
-        if errors.IsNotFound(err) {
-            // Volume doesn't exist, nothing to unpublish
-            return &csi.ControllerUnpublishVolumeResponse{}, nil
-        }
-        return nil, status.Errorf(codes.Internal, "failed to get PV: %v", err)
-    }
-}
+**Phase to address:** Implementation - Observability
+
+---
+
+### Pitfall 14: Metrics Don't Distinguish Migration
+
+**What goes wrong:** `attachment_conflicts_total` metric increases during migrations. Alerts fire. Operators think there's a problem when there isn't.
+
+**Why it happens:** Same metric used for conflicts and migrations.
+
+**Prevention:**
+```
+Separate metrics for migration:
+
+# Conflicts (bad)
+rds_csi_attachment_conflicts_total{reason="rwo_violation"}
+
+# Migrations (expected)
+rds_csi_migrations_total{status="started|completed|failed"}
+rds_csi_migration_duration_seconds{phase="attach|detach|total"}
+rds_csi_migration_grace_period_usage{used="true|false"}
 ```
 
-**Phase to address:**
-Phase 1: Core implementation.
+**Detection:**
+- Alerts during known maintenance windows
+- Metrics dashboard shows "conflicts" during migrations
+
+**Warning signs during implementation:**
+- Reusing conflict metric for migration tracking
+- No migration-specific metrics
+
+**Phase to address:** Implementation - Metrics
 
 ---
 
-## KubeVirt-Specific Pitfalls
+### Pitfall 15: Testing Only Fast Migrations
 
-### Pitfall 12: Live Migration Volume Handoff
+**What goes wrong:** Tests pass with small VMs that migrate in seconds. Production has VMs with large memory that take minutes. Timing bugs only appear in production.
 
-**What goes wrong:**
-KubeVirt live migration requires both source and target nodes to access volume simultaneously during memory copy phase. RWO access mode blocks this.
+**Why it happens:** Test VMs are minimal to speed up CI.
 
-**Why it happens:**
-Live migration is a multi-step process:
-1. Target VM starts on new node
-2. Memory copied from source to target (both VMs running)
-3. Final cutover (source stops, target becomes primary)
+**Prevention:**
+```
+Migration test scenarios:
 
-During step 2, both nodes need volume access.
+1. Fast migration (baseline): Small VM, completes in <10s
+2. Slow migration: Throttle network to 10MB/s, 2GB VM = 200s
+3. Very slow migration: Throttle to 1MB/s, exceeds grace period
+4. Failed migration: Inject error mid-migration
+5. Node failure during migration: Kill source node process
+6. Network partition during migration: iptables DROP
 
-**Current limitation:**
-RDS-CSI with RWO volumes does not support live migration. Use RWX volumes or storage migration instead.
+Test validation:
+- Checksum VM disk before and after migration
+- Verify no I/O errors in VM during migration
+- Verify attachment state correct after all scenarios
+```
 
-**Mitigation:**
-- Document limitation clearly
-- Consider implementing RWX support for live migration use cases
-- Use [volume migration](https://kubevirt.io/user-guide/storage/volume_migration/) instead of live migration
+**Detection:**
+- Tests pass, production fails
+- Timing-related bugs only in logs, not test failures
 
-**Phase to address:**
-Future enhancement (post-v0.3.0). Document limitation in v0.3.0.
+**Warning signs during implementation:**
+- All test VMs are 256MB memory
+- No network throttling in tests
+- No fault injection testing
 
-**Sources:**
-- [KubeVirt Live Migration](https://kubevirt.io/user-guide/compute/live_migration/) - Requires RWX
-- [Longhorn Volume Live Migration](https://github.com/longhorn/longhorn/blob/master/enhancements/20210216-volume-live-migration.md) - Implementation approach
-
----
-
-## Phase-to-Pitfall Mapping
-
-| Pitfall | Severity | Phase | Verification |
-|---------|----------|-------|--------------|
-| 1. In-memory state loss | CRITICAL | Phase 1 | Controller restart test |
-| 2. Concurrent publish race | CRITICAL | Phase 1 | Parallel pod scheduling test |
-| 3. Dangling attachments | CRITICAL | Phase 2 | Node deletion test |
-| 4. Unpublish before unstage | HIGH | Phase 2 | Rapid reschedule test |
-| 5. Wrong error codes | HIGH | Phase 1 | CSI sanity tests |
-| 6. PV annotation conflicts | MEDIUM | Phase 1 | Concurrent update test |
-| 7. Missing publish context | MEDIUM | Phase 1 | Integration test |
-| 8. 6-minute force detach | MEDIUM | Phase 2 | Slow unmount test |
-| 9. Stuck finalizer | HIGH | Phase 1 | Unpublish failure test |
-| 10. No storage-level fencing | LOW | Document | N/A (hardware limitation) |
-| 11. Volume not found | MEDIUM | Phase 1 | Deleted volume unpublish test |
-| 12. Live migration | LOW | Document | N/A (RWX required) |
+**Phase to address:** Testing - E2E test scenarios
 
 ---
 
-## Testing Checklist
+## Phase-Specific Warnings
 
-### Unit Tests
-
-- [ ] `ControllerPublishVolume` with new volume returns success
-- [ ] `ControllerPublishVolume` to same node is idempotent (returns success, not error)
-- [ ] `ControllerPublishVolume` to different node returns `FAILED_PRECONDITION`
-- [ ] `ControllerUnpublishVolume` clears attachment state
-- [ ] `ControllerUnpublishVolume` for non-existent volume returns success
-- [ ] PV annotation persisted on publish
-- [ ] PV annotation cleared on unpublish
-- [ ] State rebuilt from PV annotations on controller init
-
-### Integration Tests
-
-- [ ] Controller restart doesn't lose attachment state
-- [ ] Concurrent `ControllerPublishVolume` calls are serialized
-- [ ] Node deletion allows volume reattachment
-- [ ] Full volume lifecycle with fencing enabled
-
-### E2E Tests
-
-- [ ] Pod rescheduling after node drain works
-- [ ] Pod fails to schedule if volume attached elsewhere
-- [ ] Volume cleanup after PVC deletion
+| Phase | Topic | Likely Pitfall | Mitigation |
+|-------|-------|----------------|------------|
+| Research | Live migration requirements | Assuming RWX filesystem is only option | Verify KubeVirt supports RWX block mode migration |
+| Research | Storage capabilities | Not investigating RDS multi-initiator support | SSH to RDS, test concurrent nvme connect from 2 nodes |
+| Planning | Capability advertisement | Adding RWX for both block and filesystem | Only advertise MULTI_NODE_MULTI_WRITER for block volumes |
+| Planning | State machine | Missing failure transitions | Design ALL state transitions including failures |
+| Implementation | Dual-attachment | Using single grace period for migration + conflict | Separate grace period logic from conflict detection |
+| Implementation | VMI serialization | Not handling two-VMI migration scenario | Extend or bypass VMI grouper for migration |
+| Implementation | NodeUnstageVolume | Not checking for open file descriptors | Verify device not in use before nvme disconnect |
+| Testing | Migration timing | Testing only fast migrations | Test slow, failed, and fault-injected migrations |
+| Testing | Corruption detection | Assuming corruption is obvious | Add checksum verification, fsck after migration |
+| Deployment | CSIDriver manifest | Wrong attachRequired setting | Validate CSIDriver has attachRequired: true |
+| Deployment | NVMe multipath | Not disabling multipath | Document and validate kernel parameter |
+| Production | Monitoring | Only monitoring CSI metrics | Monitor actual NVMe connection state on nodes |
 
 ---
 
-## Implementation Order
+## Common Mistakes Summary
 
-Based on pitfall severity and dependencies:
-
-1. **Phase 1: Foundation** (must-have for any release)
-   - Per-volume locking (Pitfall 2)
-   - PV annotation persistence (Pitfall 1)
-   - State rebuild on startup (Pitfall 1)
-   - Correct error codes (Pitfall 5)
-   - Idempotent unpublish (Pitfall 9, 11)
-   - Conflict retry for annotations (Pitfall 6)
-   - Publish context (Pitfall 7)
-
-2. **Phase 2: Robustness** (before production use)
-   - Node existence validation (Pitfall 3)
-   - Background stale attachment cleanup (Pitfall 3)
-   - Reattachment grace period (Pitfall 4)
-   - Unmount timeout handling (Pitfall 8)
-
-3. **Documentation** (at release)
-   - No storage-level fencing (Pitfall 10)
-   - Live migration limitation (Pitfall 12)
+1. **Allowing dual filesystem mounts** - Always fatal for mounted filesystems; block mode is different
+2. **Advertising RWX without proper validation** - Must restrict to block volumes only
+3. **Trusting attachment state without connection verification** - Race conditions between CSI calls
+4. **Disconnecting NVMe while in use** - Node crashes or I/O errors
+5. **Single grace period for migration + conflict** - Conflicts should fail immediately
+6. **No split-brain protection** - Network partitions cause silent corruption
+7. **State machine missing failure paths** - Volume stuck in migration state
+8. **Idempotency violations during migration** - Same volume, different node is NOT idempotent
+9. **VMI serialization unaware of migration** - Concurrent operations bypass locks
+10. **Poor observability** - Can't debug migration failures
 
 ---
 
-## Sources
+## Success Criteria for Avoiding These Pitfalls
 
-**CSI Specification:**
-- [CSI Spec v1.7.0](https://github.com/container-storage-interface/spec/blob/v1.7.0/spec.md) - ControllerPublishVolume/ControllerUnpublishVolume requirements
-- [CSI Spec v1.3.0](https://github.com/container-storage-interface/spec/blob/v1.3.0/spec.md) - Error code definitions
-
-**Kubernetes Issues:**
-- [Issue #67853](https://github.com/kubernetes/kubernetes/issues/67853) - VolumeAttachment not recreated after node deletion
-- [Issue #77324](https://github.com/kubernetes/kubernetes/issues/77324) - Garbage collect VolumeAttachment objects
-- [Issue #106710](https://github.com/kubernetes/kubernetes/issues/106710) - Volumes detached while still mounted
-- [Issue #65392](https://github.com/kubernetes/kubernetes/issues/65392) - Force detach on pod deletion
-
-**CSI Driver Issues:**
-- [Azure Disk CSI #1648](https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/1648) - CRI Recovery Enhancement
-- [vSphere CSI #580](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/580) - ControllerPublishVolume called twice
-- [vSphere CSI #221](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/221) - Volume can't be detached from deleted node
-- [AWS EBS CSI #833](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/issues/833) - VolumeAttachment not deleted for 20+ minutes
-- [Longhorn #3584](https://github.com/longhorn/longhorn/issues/3584) - Configurable detach timeout
-- [Longhorn #7258](https://github.com/longhorn/longhorn/issues/7258) - Volumes stuck on attachment deletion
-
-**External-Attacher:**
-- [Issue #66](https://github.com/kubernetes-csi/external-attacher/issues/66) - Failing to delete PV after attach failure
-- [Issue #416](https://github.com/kubernetes-csi/external-attacher/issues/416) - VolumeAttachment status mismatch
-- [PR #184](https://github.com/kubernetes-csi/external-attacher/pull/184) - Reconcile with ListVolumes
-
-**Multi-Attach Analysis:**
-- [Medium: Multi-Attach Error Explained](https://medium.com/@golusstyle/demystifying-the-multi-attach-error-for-volume-causes-and-solutions-595a19316a0c)
-- [KodeKloud: Multi-Attach Volume Errors](https://notes.kodekloud.com/docs/Kubernetes-Troubleshooting-for-Application-Developers/Troubleshooting-Scenarios/Multi-Attach-Volume-Errors)
-- [Portworx: Volume Exclusively Attached](https://portworx.com/knowledge-hub/volume-is-already-exclusively-attached-to-one-node-and-cant-be-attached-to-another/)
-
-**KubeVirt:**
-- [KubeVirt Live Migration](https://kubevirt.io/user-guide/compute/live_migration/)
-- [KubeVirt Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/)
-- [Longhorn Volume Live Migration Enhancement](https://github.com/longhorn/longhorn/blob/master/enhancements/20210216-volume-live-migration.md)
-
-**NVMe Reservations/Fencing:**
-- [AWS EBS NVMe Reservations](https://www.infoq.com/news/2023/10/aws-ebs-fencing-nvme/)
-- [Red Hat fence_scsi](https://access.redhat.com/articles/530533)
-- [SCSI SPC-3 Persistent Reservations](https://grimoire.carcano.ch/blog/spc-3-persistent-reservations-and-fencing/)
+- [ ] **RWX only for block volumes** - Capability validation enforces this
+- [ ] **Zero dual filesystem mounts** - Verified via monitoring on both nodes
+- [ ] **Grace period separation** - Migration handoff (5m) separate from conflict detection (immediate)
+- [ ] **Device-in-use check** - NodeUnstageVolume verifies no open FDs before disconnect
+- [ ] **Split-brain protection** - Manual intervention required for NotReady node migrations
+- [ ] **Complete state machine** - All transitions including failures documented and implemented
+- [ ] **Idempotency tests** - Retry scenarios during migration produce correct results
+- [ ] **Migration state cleanup** - Reconciler resolves stale migration markers
+- [ ] **Multipath disabled** - Kernel parameter documented and validated
+- [ ] **Migration-specific metrics** - Separate from conflict metrics
+- [ ] **Slow migration tests** - E2E tests with network throttling
+- [ ] **Checksum verification** - Test suite validates data integrity post-migration
 
 ---
 
-*Confidence Level: HIGH*
-- Critical pitfalls derived from CSI specification requirements
-- Race conditions verified against Kubernetes controller behavior
-- Production issues cross-referenced from 5+ CSI driver implementations
-- KubeVirt limitations verified against official documentation
+## References
+
+### Data Corruption & Filesystem Safety
+- [Red Hat: Mounting Ext2/3/4 or XFS Filesystem from Multiple Systems Causes Corruption](https://access.redhat.com/solutions/353833)
+- [Longhorn Issue #3597: XFS Corruption After Node Restart](https://github.com/longhorn/longhorn/issues/3597)
+
+### KubeVirt Live Migration
+- [KubeVirt User Guide: Live Migration](https://kubevirt.io/user-guide/compute/live_migration/)
+- [KubeVirt Issue #10642: Allow block live migration of PVCs without RWX](https://github.com/kubevirt/kubevirt/issues/10642)
+- [KubeVirt: Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/)
+- [Red Hat: Storage considerations for OpenShift Virtualization](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization)
+
+### CSI Driver Implementation
+- [Kubernetes CSI: Developing a CSI Driver](https://kubernetes-csi.github.io/docs/developing.html)
+- [Kubernetes CSI: CSIDriver Object](https://kubernetes-csi.github.io/docs/csi-driver-object.html)
+- [CSI Spec: MULTI_NODE_MULTI_WRITER](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+
+### Multi-Attach Error and Recovery
+- [Medium: Demystifying the Multi-Attach Error for Volume](https://medium.com/@golusstyle/demystifying-the-multi-attach-error-for-volume-causes-and-solutions-595a19316a0c)
+- [Dell CSI: Block Volumes Cannot be Attached After Node Goes Down](https://www.dell.com/support/kbdoc/en-us/000200778/)
+- [Portworx: Volume Already Exclusively Attached](https://portworx.com/knowledge-hub/volume-is-already-exclusively-attached-to-one-node-and-cant-be-attached-to-another/)
+
+### Block Storage for KubeVirt
+- [Portworx: Raw Block for Live Migration](https://docs.portworx.com/portworx-csi/operations/raw-block-for-live-migration)
+- [HPE CSI: KubeVirt Integration](https://scod.hpedev.io/csi_driver/using.html)
+- [OpenEBS: KubeVirt VM Live Migration](https://openebs.io/docs/Solutioning/read-write-many/kubevirt)
+
+### Split-Brain and Fencing
+- [AIStore: Split-brain is Inevitable](https://aistore.nvidia.com/blog/2025/02/16/split-brain-blog)
+- [Kubernetes on SAN Storage: Highly-Available Stateful Workloads](https://datamattsson.tumblr.com/post/182297931146/highly-available-stateful-workloads-on-kubernetes)
+
+### NVMe/TCP
+- [SUSE: NVMe-oF Storage Administration](https://documentation.suse.com/sles/15-SP7/html/SLES-all/cha-nvmeof.html)
+- [Linux Kernel: NVMe Multipath](https://docs.kernel.org/admin-guide/nvme-multipath.html)
+
+---
+
+**Confidence Level:** HIGH for critical pitfalls (verified via official documentation and real-world issues), MEDIUM for moderate pitfalls (implementation details based on CSI spec), LOW for minor pitfalls (based on general CSI development experience).
+
+**Research gaps:**
+- Exact RDS multi-initiator behavior needs testing (can two nodes connect to same NQN simultaneously?)
+- KubeVirt virt-launcher pod lifecycle timing during migration (source code review needed)
+- Whether RDS supports any form of namespace reservation for fencing
