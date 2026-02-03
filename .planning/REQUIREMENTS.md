@@ -1,55 +1,64 @@
-# Requirements - v0.5.0 KubeVirt Live Migration
+# Requirements - v0.6.0 Block Volume Support
+
+**Defined:** 2026-02-03
+**Core Value:** Volumes remain accessible after NVMe-oF reconnections
 
 ## v1 Requirements
 
-### RWX Capability
+### Block Volume Operations
 
-- [x] **RWX-01**: User can create PVC with `accessModes: [ReadWriteMany]` and `volumeMode: Block` that is accepted by the driver
-- [x] **RWX-02**: User receives an error when creating PVC with `accessModes: [ReadWriteMany]` and `volumeMode: Filesystem` (explicitly rejected to prevent corruption)
-- [x] **RWX-03**: Volume can be attached to exactly 2 nodes simultaneously during migration (not unlimited multi-attach)
+- [ ] **BLOCK-01**: NodeStageVolume skips filesystem formatting when `volumeMode: Block`
+- [ ] **BLOCK-02**: NodeStageVolume stores device path metadata in staging directory for block volumes
+- [ ] **BLOCK-03**: NodePublishVolume creates block device file at target path using mknod
+- [ ] **BLOCK-04**: NodeUnpublishVolume unmounts and removes block device file
+- [ ] **BLOCK-05**: NodeUnstageVolume handles both filesystem and block volumes correctly
 
-### Migration Safety
+### Quality and Compatibility
 
-- [x] **SAFETY-01**: Migration timeout (5 min default, configurable) allows dual-attachment window without triggering RWO conflict
-- [x] **SAFETY-02**: Non-migration dual-attach attempts fail immediately with FAILED_PRECONDITION (not delayed by grace period)
-- [x] **SAFETY-03**: AttachmentState tracks secondary attachment with migration timestamp for cleanup
-- [x] **SAFETY-04**: NodeUnstageVolume verifies no open file descriptors before issuing NVMe disconnect
+- [ ] **BLOCK-06**: Existing filesystem volume functionality works without regression
+- [ ] **BLOCK-07**: Clear error messages for invalid volume mode combinations
 
-### Observability
+### Hardware Validation
 
-- [x] **OBS-01**: Prometheus metrics expose migrations_total, migration_duration_seconds, active_migrations gauge
-- [x] **OBS-02**: Kubernetes events posted to PVC: MigrationStarted, MigrationCompleted, MigrationFailed
-- [x] **OBS-03**: User documentation explains RWX is safe only for KubeVirt live migration (not general RWX workloads)
+- [ ] **VAL-01**: KubeVirt VM boots successfully with RDS block volume on metal cluster
+- [ ] **VAL-02**: KubeVirt live migration completes end-to-end (VM migrates between nodes)
+- [ ] **VAL-03**: Migration metrics and events are emitted correctly during validation
 
 ## Future Requirements
 
 (Deferred to later milestones)
 
+- CSI volume snapshots for block volumes
+- Volume cloning support
+- Volume expansion for block volumes
 - Cluster filesystem support (GFS2/OCFS2) for true RWX filesystem volumes
-- RDS-level namespace reservations/fencing for split-brain protection
-- KubeVirt API client integration for richer migration awareness
 
 ## Out of Scope
 
-- **NFS wrapper**: Defeats NVMe/TCP latency benefits; user should use NFS CSI if they need NFS
-- **Unlimited multi-attach**: 2-node limit is sufficient for migration; more would enable unsafe usage
-- **Automatic pod restart**: CSI spec says drivers report issues; orchestrators (kubelet/scheduler) act on them
+- **Filesystem-mode RWX volumes**: v0.5.0 explicitly rejects these to prevent data corruption; block-only RWX is the correct approach for KubeVirt
+- **Volume encryption**: Separate concern, not related to block vs filesystem mode
+- **NFS wrapper**: Defeats NVMe/TCP latency benefits; users should use NFS CSI if needed
 
 ## Traceability
 
-| Requirement | Phase | Verified |
-|-------------|-------|----------|
-| RWX-01 | Phase 8 | [x] |
-| RWX-02 | Phase 8 | [x] |
-| RWX-03 | Phase 8 | [x] |
-| SAFETY-01 | Phase 9 | [x] |
-| SAFETY-02 | Phase 9 | [x] |
-| SAFETY-03 | Phase 9 | [x] |
-| SAFETY-04 | Phase 9 | [x] |
-| OBS-01 | Phase 10 | [x] |
-| OBS-02 | Phase 10 | [x] |
-| OBS-03 | Phase 10 | [x] |
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| BLOCK-01 | TBD | Pending |
+| BLOCK-02 | TBD | Pending |
+| BLOCK-03 | TBD | Pending |
+| BLOCK-04 | TBD | Pending |
+| BLOCK-05 | TBD | Pending |
+| BLOCK-06 | TBD | Pending |
+| BLOCK-07 | TBD | Pending |
+| VAL-01 | TBD | Pending |
+| VAL-02 | TBD | Pending |
+| VAL-03 | TBD | Pending |
+
+**Coverage:**
+- v1 requirements: 10 total
+- Mapped to phases: 0 (roadmap pending)
+- Unmapped: 10 ⚠️
 
 ---
 *Requirements defined: 2026-02-03*
-*Traceability updated: 2026-02-03*
+*Last updated: 2026-02-03 after initial definition*
