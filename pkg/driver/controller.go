@@ -543,6 +543,27 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				elapsed := time.Since(*existing.MigrationStartedAt)
 				klog.Warningf("RWX volume %s migration timed out (%v elapsed, %v max), rejecting new secondary attachment",
 					volumeID, elapsed, existing.MigrationTimeout)
+
+				// Record timeout metric
+				if cs.driver.metrics != nil {
+					cs.driver.metrics.RecordMigrationResult("timeout", elapsed)
+				}
+
+				// Post migration failed event
+				if cs.driver.k8sClient != nil {
+					volCtx := req.GetVolumeContext()
+					pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+					pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+					if pvcNamespace != "" && pvcName != "" && len(existing.Nodes) >= 2 {
+						sourceNode := existing.Nodes[0].NodeID
+						targetNode := existing.Nodes[1].NodeID
+						eventPoster := NewEventPoster(cs.driver.k8sClient)
+						if err := eventPoster.PostMigrationFailed(ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, "timeout", elapsed); err != nil {
+							klog.Warningf("Failed to post migration failed event: %v", err)
+						}
+					}
+				}
+
 				return nil, status.Errorf(codes.FailedPrecondition,
 					"Volume %s migration timeout exceeded (%v elapsed, %v max). "+
 					"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
@@ -558,6 +579,10 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 
 			// Allow second attachment for migration
 			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target, timeout=%v)", volumeID, nodeID, migrationTimeout)
+
+			// Capture source node before adding secondary attachment
+			sourceNode := existing.Nodes[0].NodeID
+
 			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID, migrationTimeout); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to track secondary attachment: %v", err)
 			}
@@ -565,6 +590,18 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			// Record RWX dual-attach (distinct from RWO conflict)
 			if cs.driver.metrics != nil {
 				cs.driver.metrics.RecordAttachmentOp("attach_secondary", nil, time.Since(startTime))
+			}
+
+			// Post migration started event
+			if cs.driver.k8sClient != nil {
+				pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+				pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+				if pvcNamespace != "" && pvcName != "" {
+					eventPoster := NewEventPoster(cs.driver.k8sClient)
+					if err := eventPoster.PostMigrationStarted(ctx, pvcNamespace, pvcName, volumeID, sourceNode, nodeID, migrationTimeout); err != nil {
+						klog.Warningf("Failed to post migration started event: %v", err)
+					}
+				}
 			}
 
 			return &csi.ControllerPublishVolumeResponse{
