@@ -337,7 +337,22 @@ func (c *connector) isConnectedLegacy(nqn string) (bool, error) {
 	return strings.Contains(string(output), nqn), nil
 }
 
-// GetDevicePath returns the block device path for a connected NVMe target
+// GetDevicePath returns the block device path for a connected NVMe target.
+//
+// Contract:
+//   - Returns (devicePath, nil) when device is connected and found
+//   - Returns ("", error) when device is NOT connected or lookup fails
+//   - Never returns ("", nil) - empty path always comes with an error
+//
+// Callers should check error first, not empty string:
+//
+//	devicePath, err := conn.GetDevicePath(nqn)
+//	if err != nil {
+//	    // Device not connected or lookup failed
+//	}
+//
+// The error will be from DeviceResolver.ResolveDevicePath which returns
+// "device not found for NQN" when the NQN is not connected.
 func (c *connector) GetDevicePath(nqn string) (string, error) {
 	return c.resolver.ResolveDevicePath(nqn)
 }
