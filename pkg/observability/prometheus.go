@@ -370,3 +370,18 @@ func (m *Metrics) RecordStaleAttachmentCleared() {
 func (m *Metrics) RecordReconcileAction(action string) {
 	m.attachmentReconcileTotal.WithLabelValues(action).Inc()
 }
+
+// RecordMigrationStarted records the start of a KubeVirt live migration.
+// Increments the active migrations gauge.
+func (m *Metrics) RecordMigrationStarted() {
+	m.activeMigrations.Inc()
+}
+
+// RecordMigrationResult records the completion of a KubeVirt live migration.
+// result must be one of: "success", "failed", "timeout".
+// Increments the migrations counter, observes duration, and decrements active gauge.
+func (m *Metrics) RecordMigrationResult(result string, duration time.Duration) {
+	m.migrationsTotal.WithLabelValues(result).Inc()
+	m.migrationDuration.Observe(duration.Seconds())
+	m.activeMigrations.Dec()
+}
