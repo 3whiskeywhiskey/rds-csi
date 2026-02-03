@@ -219,9 +219,22 @@ func (m *mounter) Mount(source, target, fsType string, options []string) error {
 
 	klog.V(4).Infof("Sanitized mount options: %v", options)
 
-	// Create target directory if it doesn't exist
-	if err := os.MkdirAll(target, 0750); err != nil {
-		return fmt.Errorf("failed to create target directory: %w", err)
+	// Create target directory if it doesn't exist (unless target is already a file for block volumes)
+	if stat, err := os.Stat(target); err != nil {
+		// Target doesn't exist - create directory
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(target, 0750); err != nil {
+				return fmt.Errorf("failed to create target directory: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to stat target: %w", err)
+		}
+	} else if stat.IsDir() {
+		// Target exists and is a directory - this is fine
+		klog.V(4).Infof("Target %s is an existing directory", target)
+	} else {
+		// Target exists and is a file - this is expected for block volumes
+		klog.V(4).Infof("Target %s is an existing file (block volume)", target)
 	}
 
 	// Build mount command arguments
