@@ -30,13 +30,53 @@ var dangerousCharacters = []string{
 	"\x00", // Null byte
 }
 
-// AllowedBasePaths defines the whitelist of allowed base paths for volumes
-// In production, this should be configurable via environment or config file
-var AllowedBasePaths = []string{
-	"/storage-pool/kubernetes-volumes",
-	"/storage-pool/metal-csi",
-	"/storage-pool/metal-csi/volumes",
-	// Add more allowed paths as needed
+// AllowedBasePaths defines the whitelist of allowed base paths for volumes.
+// This starts empty and must be initialized via SetAllowedBasePath() during driver startup.
+var AllowedBasePaths []string
+
+// SetAllowedBasePath sets the allowed base path for volume validation.
+// This replaces any existing paths and should be called during driver initialization.
+func SetAllowedBasePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("base path cannot be empty")
+	}
+
+	cleanPath, err := SanitizeBasePath(path)
+	if err != nil {
+		return fmt.Errorf("invalid base path: %w", err)
+	}
+
+	AllowedBasePaths = []string{cleanPath}
+	return nil
+}
+
+// AddAllowedBasePath adds an additional path to the allowed base paths whitelist.
+// Use SetAllowedBasePath() for initial configuration; this is for adding secondary paths.
+func AddAllowedBasePath(path string) error {
+	if path == "" {
+		return nil // No path to add
+	}
+
+	cleanPath, err := SanitizeBasePath(path)
+	if err != nil {
+		return fmt.Errorf("invalid base path: %w", err)
+	}
+
+	// Check if already in list
+	for _, existing := range AllowedBasePaths {
+		if existing == cleanPath {
+			return nil // Already exists
+		}
+	}
+
+	AllowedBasePaths = append(AllowedBasePaths, cleanPath)
+	return nil
+}
+
+// ResetAllowedBasePaths clears the allowed base paths list.
+// This is primarily for testing to ensure test isolation.
+func ResetAllowedBasePaths() {
+	AllowedBasePaths = nil
 }
 
 // ValidateFilePath validates that a file path is safe for use in shell commands

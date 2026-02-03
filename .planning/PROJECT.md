@@ -8,17 +8,17 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current Milestone: v0.3.0 Volume Fencing
+## Current Milestone: v0.5.0 KubeVirt Live Migration
 
-**Goal:** Prevent volume ping-pong between nodes by implementing proper CSI attachment tracking.
+**Goal:** Enable KubeVirt VM live migration with RDS CSI volumes.
 
 **Target features:**
-- ControllerPublishVolume/ControllerUnpublishVolume implementation
-- Attachment state tracking (in-memory + PV annotations)
-- PUBLISH_UNPUBLISH_VOLUME capability declaration
-- Rejection of conflicting attachments for ReadWriteOnce volumes
+- Investigate why VMs show "Live Migration: false"
+- Implement whatever CSI capabilities KubeVirt requires for live migration
+- Allow temporary dual-node attachment during migration window
+- Ensure data integrity during migration handoff
 
-**Problem being solved:** Without ControllerPublish/Unpublish, multiple nodes can connect to the same NVMe/TCP volume simultaneously, causing I/O errors and VM pauses in KubeVirt workloads.
+**Problem being solved:** KubeVirt VMs using RDS CSI volumes cannot live migrate between nodes. VMs show "Live Migration: false" and migration attempts fail.
 
 ## Current State
 
@@ -67,11 +67,10 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 ### Active
 
-- [ ] ControllerPublishVolume tracks which node owns each volume attachment
-- [ ] ControllerUnpublishVolume releases attachment before new node can attach
-- [ ] Attachment state persisted to PV annotations (survives controller restart)
-- [ ] PUBLISH_UNPUBLISH_VOLUME capability declared
-- [ ] Conflicting attachments rejected for ReadWriteOnce volumes
+- [ ] KubeVirt live migration works with RDS CSI volumes
+- [ ] VMs no longer show "Live Migration: false"
+- [ ] Dual-node attachment allowed during migration window
+- [ ] Data integrity maintained during migration handoff
 
 ### Out of Scope
 
@@ -100,4 +99,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-01-31 after starting v0.3.0 milestone*
+*Last updated: 2026-02-03 after starting v0.5.0 milestone*
