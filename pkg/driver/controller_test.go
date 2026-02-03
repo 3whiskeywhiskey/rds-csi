@@ -792,3 +792,315 @@ func TestControllerUnpublishVolume_EmptyNodeID(t *testing.T) {
 		t.Fatalf("Unpublish with empty nodeID should succeed, got: %v", err)
 	}
 }
+
+// ========================================
+// RWX Capability Tests (Phase 08-03)
+// ========================================
+
+func TestValidateVolumeCapabilities_RWX(t *testing.T) {
+	tests := []struct {
+		name          string
+		caps          []*csi.VolumeCapability
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "RWX block - should succeed",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "RWX filesystem - should fail with actionable error",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+					},
+				},
+			},
+			expectError:   true,
+			errorContains: "volumeMode: Block",
+		},
+		{
+			name: "RWO block - should succeed",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "RWO filesystem - should succeed",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create controller with driver that has RWX capability
+			cs, _ := testControllerServer(t)
+
+			err := cs.validateVolumeCapabilities(tc.caps)
+
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+				} else if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
+					t.Errorf("expected error containing %q, got %q", tc.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCreateVolume_RWXFilesystemRejected(t *testing.T) {
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-vol",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	_, err := cs.CreateVolume(context.Background(), req)
+
+	if err == nil {
+		t.Fatal("expected error for RWX filesystem, got nil")
+	}
+
+	// Check it's an InvalidArgument error
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "volumeMode: Block") {
+		t.Errorf("expected error to mention volumeMode: Block, got %q", st.Message())
+	}
+}
+
+func TestDriverVolumeCapabilities_IncludesRWX(t *testing.T) {
+	cs, _ := testControllerServer(t)
+	driver := cs.driver
+
+	found := false
+	for _, vcap := range driver.vcaps {
+		if vcap.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Error("expected MULTI_NODE_MULTI_WRITER in vcaps, not found")
+	}
+}
+
+func TestControllerPublishVolume_RWXDualAttach(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	node2 := testNode("node-2")
+	node3 := testNode("node-3")
+	cs, mockRDS := testControllerServer(t, node1, node2, node3)
+
+	volumeID := testVolumeID1
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        volumeID,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + volumeID,
+		NVMETCPPort: 4420,
+	})
+
+	rwxCap := &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+	}
+
+	// First attach should succeed
+	req1 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-1",
+		VolumeCapability: rwxCap,
+	}
+	_, err := cs.ControllerPublishVolume(ctx, req1)
+	if err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Second attach (migration target) should succeed
+	req2 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-2",
+		VolumeCapability: rwxCap,
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req2)
+	if err != nil {
+		t.Fatalf("second attach failed: %v", err)
+	}
+
+	// Third attach should fail with migration limit
+	req3 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-3",
+		VolumeCapability: rwxCap,
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req3)
+	if err == nil {
+		t.Fatal("expected error for 3rd attach, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "migration limit") {
+		t.Errorf("expected 'migration limit' in error, got %q", st.Message())
+	}
+}
+
+func TestControllerPublishVolume_RWOConflictHintsRWX(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	node2 := testNode("node-2")
+	cs, mockRDS := testControllerServer(t, node1, node2)
+
+	volumeID := testVolumeID2
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        volumeID,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + volumeID,
+		NVMETCPPort: 4420,
+	})
+
+	rwoCap := &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+	}
+
+	// First attach should succeed
+	req1 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-1",
+		VolumeCapability: rwoCap,
+	}
+	_, err := cs.ControllerPublishVolume(ctx, req1)
+	if err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Second attach should fail with RWX hint
+	req2 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-2",
+		VolumeCapability: rwoCap,
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req2)
+	if err == nil {
+		t.Fatal("expected error for RWO conflict, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "RWX") {
+		t.Errorf("expected RWX hint in error message, got %q", st.Message())
+	}
+}
+
+func TestControllerPublishVolume_RWXIdempotent(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, mockRDS := testControllerServer(t, node1)
+
+	volumeID := testVolumeID3
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        volumeID,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + volumeID,
+		NVMETCPPort: 4420,
+	})
+
+	rwxCap := &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+	}
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-1",
+		VolumeCapability: rwxCap,
+	}
+
+	// First call
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Second call (idempotent) - should succeed
+	_, err = cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("idempotent attach failed: %v", err)
+	}
+}
