@@ -8,17 +8,17 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current Milestone: v0.5.0 KubeVirt Live Migration
+## Current Milestone: v0.6.0 Block Volume Support
 
-**Goal:** Enable KubeVirt VM live migration with RDS CSI volumes.
+**Goal:** Implement CSI block volume support to enable KubeVirt VMs with RDS storage.
 
 **Target features:**
-- Investigate why VMs show "Live Migration: false"
-- Implement whatever CSI capabilities KubeVirt requires for live migration
-- Allow temporary dual-node attachment during migration window
-- Ensure data integrity during migration handoff
+- NodeStageVolume handles block volumes (skip filesystem formatting)
+- NodePublishVolume creates block device files for VMs
+- NodeUnpublishVolume/NodeUnstageVolume clean up block mounts
+- Hardware validation: VM boots and live migrates on metal cluster
 
-**Problem being solved:** KubeVirt VMs using RDS CSI volumes cannot live migrate between nodes. VMs show "Live Migration: false" and migration attempts fail.
+**Problem being solved:** v0.5.0 added RWX capability for live migration, but the node plugin only supports filesystem volumes. KubeVirt VMs fail to start because NodeStageVolume formats the device as ext4 instead of leaving it as a raw block device.
 
 ## Current State
 
@@ -67,10 +67,11 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 ### Active
 
-- [ ] KubeVirt live migration works with RDS CSI volumes
-- [ ] VMs no longer show "Live Migration: false"
-- [ ] Dual-node attachment allowed during migration window
-- [ ] Data integrity maintained during migration handoff
+- [ ] NodeStageVolume handles block volumes without formatting
+- [ ] NodePublishVolume creates block device files at target path
+- [ ] NodeUnpublishVolume/NodeUnstageVolume clean up block mounts
+- [ ] KubeVirt VMs boot successfully with RDS block volumes
+- [ ] KubeVirt live migration works end-to-end on metal cluster
 
 ### Out of Scope
 
@@ -99,4 +100,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-02-03 after starting v0.5.0 milestone*
+*Last updated: 2026-02-03 after starting v0.6.0 milestone (block volume support)*

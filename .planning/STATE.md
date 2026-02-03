@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 10 of 10 (Observability)
-Plan: 5/5 complete (10-05-PLAN.md)
-Status: Phase complete - v0.5.0 KubeVirt Live Migration COMPLETE
-Last activity: 2026-02-03 - Completed 10-05 (Gap Closure: MigrationCompleted Event Wiring)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining v0.6.0 requirements
+Last activity: 2026-02-03 - Started v0.6.0 Block Volume Support milestone
 
-Progress: [██████████] 100% (11/11 plans complete - v0.5.0 milestone)
+Progress: Milestone initialization
 
 ## Milestone History
 
@@ -26,11 +26,12 @@ Progress: [██████████] 100% (11/11 plans complete - v0.5.0 m
   - Phases 5-7, 12 plans
   - ControllerPublish/Unpublish implementation
 
-- **v0.5.0 KubeVirt Live Migration** - COMPLETE 2026-02-03
-  - Phases 8-10, 11 plans
+- **v0.5.0 KubeVirt Live Migration** - VALIDATING 2026-02-03
+  - Phases 8-10, 11 plans (implementation complete)
   - Phase 8: Core RWX Capability (RWX-01, RWX-02, RWX-03) ✅
   - Phase 9: Migration Safety (SAFETY-01-04) ✅
   - Phase 10: Observability (OBS-01-05) ✅
+  - Hardware validation: Fixing deployment issues on metal cluster
 
 ## Accumulated Context
 
@@ -87,18 +88,63 @@ None
 
 ### Blockers/Concerns
 
-Research identified concerns addressed during implementation:
-- RDS multi-initiator behavior needs testing on actual hardware (Phase 10 complete, hardware testing deferred to v0.5.0 validation)
-- Optimal migration timeout (5 min default) may need tuning (documented with tuning guidelines in kubevirt-migration.md)
+**Active (Hardware Validation):**
+- r740xd node: OOM-killed node plugin due to insufficient memory limits
+  - Fixed: Increased limits 256Mi→512Mi, requests 64Mi→128Mi
+  - Status: Pending reboot to apply DaemonSet changes
+  - Impact: Test VM stuck in Scheduling, blocking migration validation
+
+**Hardware Testing Progress:**
+1. ✅ Missing csi-attacher sidecar (commit 0bccf4d)
+2. ✅ CSIDriver attachRequired=false → true (commit e7291be)
+3. ✅ Missing RBAC permission for PV updates (commit e7291be)
+4. ✅ Node plugin memory limits too low (deploy/kubernetes/node.yaml modified)
+5. ⏳ Waiting for r740xd reboot to test VM creation and live migration
+
+**Previously Identified:**
+- RDS multi-initiator behavior needs testing on actual hardware (IN PROGRESS on metal cluster)
+- Optimal migration timeout (5 min default) may need tuning (pending validation results)
 - Non-KubeVirt RWX usage risk requires clear documentation (✅ ADDRESSED: comprehensive docs/kubevirt-migration.md with prominent warnings)
+
+## Validation Session
+
+**Test Environment:** Metal cluster (Kubernetes, 7 nodes, r740xd with KubeVirt)
+**Test Resources:**
+- PVC: `kubevirt-migration-test` - Bound, RWX, Block, 10Gi ✅
+- VolumeAttachment: Created and attached to r740xd ✅
+- VM: `migration-test-vm` - Stuck in Scheduling (OOM-killed node plugin)
+
+**Commits Made:**
+- `38f56cc` - docs: add metal cluster deployment guide for csi-attacher fix
+- `0bccf4d` - fix: add csi-attacher sidecar to controller deployment
+- `e7291be` - fix: enable ControllerPublishVolume for RWX block volumes
+
+**Files Modified:**
+- `deploy/kubernetes/controller.yaml` - Added csi-attacher v4.5.0 sidecar
+- `deploy/kubernetes/csidriver.yaml` - Set attachRequired=true (immutable field)
+- `deploy/kubernetes/rbac.yaml` - Added PV update permission
+- `deploy/kubernetes/node.yaml` - Increased memory limits to 512Mi
+
+**Current State:**
+- Controller v0.5.1: Running with all 5 containers (including csi-attacher) ✅
+- Node plugins: 6/7 running, r740xd pending reboot
+- VolumeAttachment workflow: Working correctly ✅
+- ControllerPublishVolume: Being called correctly ✅
+
+**Next Steps After r740xd Reboot:**
+1. Verify node plugin starts without OOM
+2. Check if VM starts successfully
+3. Test live migration with `virtctl migrate migration-test-vm`
+4. Verify migration metrics and events
+5. Push commits to remote (currently blocked: permission denied)
 
 ## Session Continuity
 
 Last session: 2026-02-03T16:45:12Z
-Stopped at: Completed 10-05-PLAN.md (Gap Closure: MigrationCompleted Event Wiring)
+Stopped at: Awaiting r740xd reboot - 4 deployment fixes committed
 Resume file: None
-Next: v0.5.0 KubeVirt Live Migration COMPLETE - ready for hardware validation and production deployment
+Next: Complete hardware validation after r740xd recovers from OOM issue
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-02-03 - Completed 10-05 (Gap Closure: MigrationCompleted Event Wiring) - v0.5.0 KubeVirt Live Migration COMPLETE*
+*Last updated: 2026-02-03 - Hardware validation in progress - Fixed 4 deployment issues, awaiting r740xd reboot*
