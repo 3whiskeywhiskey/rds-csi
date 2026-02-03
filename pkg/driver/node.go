@@ -592,6 +592,14 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 
 	klog.V(2).Infof("Successfully unpublished volume %s from %s", volumeID, targetPath)
 
+	// Clean up target path after unmount
+	// For block volumes, target is a file; for filesystem volumes, target is a directory
+	// Use os.RemoveAll which handles both cases
+	if err := os.RemoveAll(targetPath); err != nil {
+		// Log but don't fail - unmount succeeded, cleanup is best-effort
+		klog.Warningf("Failed to remove target path %s: %v", targetPath, err)
+	}
+
 	// Log volume unpublish success
 	secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
 
