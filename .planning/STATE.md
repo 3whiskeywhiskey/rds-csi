@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 8 of 10 (Core RWX Capability)
-Plan: 2 of 3 (estimated)
-Status: In progress
-Last activity: 2026-02-03 - Completed 08-02-PLAN.md
+Plan: 3 of 3 (complete)
+Status: Phase complete
+Last activity: 2026-02-03 - Completed 08-03-PLAN.md (RWX validation tests)
 
-Progress: [██########] 20% (2/10 plans estimated)
+Progress: [███#######] 30% (3/10 plans estimated)
 
 ## Milestone History
 
@@ -48,6 +48,9 @@ Progress: [██########] 20% (2/10 plans estimated)
 | 08-02-02  | TrackAttachment unchanged (delegates)       | 08-02 | Preserve API compatibility for callers |
 | 08-02-03  | Inline access mode detection                | 08-02 | VolumeCapability available in request |
 | 08-02-04  | RemoveNodeAttachment returns bool           | 08-02 | Distinguish full vs partial detach |
+| 08-03-01  | Table-driven tests for capability coverage  | 08-03 | Easy to add scenarios, clear test names |
+| 08-03-02  | Test error messages for user guidance       | 08-03 | Verify actionable help in errors |
+| 08-03-03  | Comprehensive dual-attach scenario tests    | 08-03 | Success, idempotent, limits, edge cases |
 
 ### Pending Todos
 
@@ -63,9 +66,9 @@ Research identified concerns to address during implementation:
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 08-02-PLAN.md - RWX dual-attach support
+Stopped at: Completed 08-03-PLAN.md - RWX validation tests (Phase 8 complete)
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-02-03 - Completed plan 08-02: RWX dual-attach with 2-node migration limit*
+*Last updated: 2026-02-03 - Completed Phase 8: Core RWX Capability with comprehensive test coverage*
