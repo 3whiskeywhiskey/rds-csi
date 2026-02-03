@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 14 of 14 (Error Resilience and Mount Storm Prevention)
-Plan: 2 of 3 in current phase
+Plan: 1 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-03 — Completed 14-02-PLAN.md (Safe procmounts parsing)
+Last activity: 2026-02-03 — Completed 14-01-PLAN.md (NQN prefix validation)
 
-Progress: [█████████████████████████████░░░░] 87% (47/54 plans completed across all phases)
+Progress: [█████████████████████████████░░░░] 85% (46/54 plans completed across all phases)
 
 ## Performance Metrics
 
@@ -48,11 +48,14 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
+- Phase 14-01: Driver refuses to start if CSI_MANAGED_NQN_PREFIX not set or invalid (fail-fast safety)
+- Phase 14-01: NQN prefix validation checks NVMe spec compliance (nqn. prefix, colon, 223 byte limit)
+- Phase 14-01: OrphanCleaner requires prefix at construction (no default, explicit configuration)
+- Phase 14-01: Environment variable over flag for NQN prefix configuration
 - Phase 14-02: Use moby/sys/mountinfo for production-ready mount parsing (Docker/containerd standard)
 - Phase 14-02: 10 second timeout for procmounts parsing prevents hangs
 - Phase 14-02: 100 mount threshold for duplicate detection catches mount storms
 - Phase 14-02: Deprecate GetMounts in favor of GetMountsWithTimeout
-- Phase 14-01: Configurable NQN prefix via Helm value (defaults to "pvc-")
 - Phase 13: Critical bug fix in Mount() - skip MkdirAll when target is file (block volumes)
 - Phase 13: Orphan cleaner NQN filtering bug documented (not active, but blocker for future use)
 - Phase 13: All worker nodes recovered, CSI driver deployed with fix (commit 3807645)
@@ -83,8 +86,8 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 
 **Active:**
 - Phase 13 hardware validation interrupted due to node r640 instability
-- Driver lacks configurable NQN prefix (hardcoded to pvc-*, needs Helm value for Phase 14)
-- Need to redeploy driver with NQN filtering fix before resuming validation
+- Need to redeploy driver with NQN filtering feature before resuming validation
+- Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value
 
 **Critical Discovery:**
 - Diskless nodes mount /var from RDS via NVMe-oF (NQN pattern: nixos-*)
@@ -94,6 +97,6 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 14-02-PLAN.md (Safe procmounts parsing with timeout and mount storm detection)
+Stopped at: Completed 14-01-PLAN.md (NQN prefix validation and configurable filtering)
 Resume file: None
-Next action: Continue Phase 14 with plan 14-03 (Stale mount detection integration)
+Next action: Continue Phase 14 with plan 14-02 (Safe procmounts parsing with timeout and mount storm detection)
