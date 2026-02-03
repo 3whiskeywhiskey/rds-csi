@@ -89,6 +89,10 @@ type Mounter interface {
 	// IsMountInUse checks if any processes have open file handles under the mount path
 	// Returns (inUse bool, pids []int, err error)
 	IsMountInUse(path string) (bool, []int, error)
+
+	// MakeFile creates an empty file at the given path
+	// Used for block volume target paths where target must be a file, not directory
+	MakeFile(pathname string) error
 }
 
 // DeviceStats represents filesystem statistics
@@ -520,6 +524,33 @@ func (m *mounter) IsMountInUse(path string) (bool, []int, error) {
 	}
 
 	return inUse, pidsWithOpenFiles, nil
+}
+
+// MakeFile creates an empty file at the given path
+// Used for block volume target paths where target must be a file, not directory
+func (m *mounter) MakeFile(pathname string) error {
+	klog.V(4).Infof("Creating file at %s", pathname)
+
+	// Create parent directory if needed
+	parent := filepath.Dir(pathname)
+	if err := os.MkdirAll(parent, 0750); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+
+	// Create empty file - use O_CREATE|O_EXCL for atomic creation
+	f, err := os.OpenFile(pathname, os.O_CREATE|os.O_EXCL, 0640)
+	if err != nil {
+		if os.IsExist(err) {
+			// File already exists - this is OK for idempotency
+			klog.V(4).Infof("File %s already exists", pathname)
+			return nil
+		}
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	f.Close()
+
+	klog.V(4).Infof("Successfully created file at %s", pathname)
+	return nil
 }
 
 // ForceUnmount attempts normal unmount, then escalates to lazy unmount if needed

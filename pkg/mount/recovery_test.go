@@ -69,6 +69,10 @@ func (m *mockMounter) GetDeviceStats(path string) (*DeviceStats, error) {
 	return nil, nil
 }
 
+func (m *mockMounter) MakeFile(pathname string) error {
+	return nil
+}
+
 // TestRecover_SucceedsFirstAttempt tests successful recovery on first try
 func TestRecover_SucceedsFirstAttempt(t *testing.T) {
 	nqn := "nqn.2000-02.com.mikrotik:pvc-test"
@@ -234,6 +238,7 @@ func (m *mockMounterWithRetry) Format(device, fsType string) error              
 func (m *mockMounterWithRetry) IsFormatted(device string) (bool, error)          { return true, nil }
 func (m *mockMounterWithRetry) ResizeFilesystem(device, volumePath string) error { return nil }
 func (m *mockMounterWithRetry) GetDeviceStats(path string) (*DeviceStats, error) { return nil, nil }
+func (m *mockMounterWithRetry) MakeFile(pathname string) error                   { return nil }
 
 // TestRecover_FailsAllAttempts tests that recovery fails after max attempts
 func TestRecover_FailsAllAttempts(t *testing.T) {

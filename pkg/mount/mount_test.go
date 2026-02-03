@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -630,6 +631,98 @@ func TestMountWithValidation(t *testing.T) {
 				} else if !strings.Contains(err.Error(), tt.errString) {
 					t.Errorf("Mount() error = %v, expected to contain %q", err, tt.errString)
 				}
+			}
+		})
+	}
+}
+
+func TestMakeFile(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) string
+		expectError bool
+		validate    func(t *testing.T, path string)
+	}{
+		{
+			name: "create new file",
+			setup: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				return tmpDir + "/testfile"
+			},
+			expectError: false,
+			validate: func(t *testing.T, path string) {
+				// Verify file exists and is regular file
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Errorf("File was not created: %v", err)
+				}
+				if !info.Mode().IsRegular() {
+					t.Errorf("Path is not a regular file")
+				}
+			},
+		},
+		{
+			name: "idempotent - file already exists",
+			setup: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := tmpDir + "/existing"
+				// Create file first
+				f, err := os.Create(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.Close()
+				return path
+			},
+			expectError: false,
+			validate: func(t *testing.T, path string) {
+				// Verify file still exists
+				if _, err := os.Stat(path); err != nil {
+					t.Errorf("File should still exist: %v", err)
+				}
+			},
+		},
+		{
+			name: "create with nested parent directories",
+			setup: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				return tmpDir + "/level1/level2/level3/testfile"
+			},
+			expectError: false,
+			validate: func(t *testing.T, path string) {
+				// Verify file exists
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Errorf("File was not created: %v", err)
+				}
+				if !info.Mode().IsRegular() {
+					t.Errorf("Path is not a regular file")
+				}
+				// Verify parent directories were created
+				parent := filepath.Dir(path)
+				if _, err := os.Stat(parent); err != nil {
+					t.Errorf("Parent directory was not created: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewMounter()
+			path := tt.setup(t)
+
+			err := m.MakeFile(path)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+
+			if !tt.expectError && tt.validate != nil {
+				tt.validate(t, path)
 			}
 		})
 	}
