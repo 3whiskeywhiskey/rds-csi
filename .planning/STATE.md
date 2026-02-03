@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 10 of 10 (Observability)
-Plan: 4/4 complete (10-04-PLAN.md)
-Status: Phase complete
-Last activity: 2026-02-03 - Completed 10-04 (KubeVirt Migration Documentation)
+Plan: 5/5 complete (10-05-PLAN.md)
+Status: Phase complete - v0.5.0 KubeVirt Live Migration COMPLETE
+Last activity: 2026-02-03 - Completed 10-05 (Gap Closure: MigrationCompleted Event Wiring)
 
-Progress: [██████████] 100% (10/10 plans complete)
+Progress: [██████████] 100% (11/11 plans complete - v0.5.0 milestone)
 
 ## Milestone History
 
@@ -26,11 +26,11 @@ Progress: [██████████] 100% (10/10 plans complete)
   - Phases 5-7, 12 plans
   - ControllerPublish/Unpublish implementation
 
-- **v0.5.0 KubeVirt Live Migration** - in progress
-  - Phases 8-10
-  - Phase 8: Core RWX Capability (RWX-01, RWX-02, RWX-03)
-  - Phase 9: Migration Safety (SAFETY-01-04)
-  - Phase 10: Observability (OBS-01-03)
+- **v0.5.0 KubeVirt Live Migration** - COMPLETE 2026-02-03
+  - Phases 8-10, 11 plans
+  - Phase 8: Core RWX Capability (RWX-01, RWX-02, RWX-03) ✅
+  - Phase 9: Migration Safety (SAFETY-01-04) ✅
+  - Phase 10: Observability (OBS-01-05) ✅
 
 ## Accumulated Context
 
@@ -77,6 +77,9 @@ Progress: [██████████] 100% (10/10 plans complete)
 | 10-04-01  | Prominent safety warnings using ✅/❌ symbols for visual clarity | 10-04 | Users must immediately understand RWX is safe ONLY for KubeVirt, not general workloads |
 | 10-04-02  | Include complete code examples of both safe and unsafe usage | 10-04 | Show exact YAML to avoid ambiguity about what NOT to do |
 | 10-04-03  | Document data corruption as unrecoverable - restore from backup | 10-04 | Set realistic expectations, prevent futile recovery attempts |
+| 10-05-01  | Query PV to get PVC namespace/name in ControllerUnpublishVolume | 10-05 | Best-effort event posting, avoids storing PVC info in state |
+| 10-05-02  | Capture migration state before RemoveNodeAttachment | 10-05 | Preserve source/target nodes and start time before state cleared |
+| 10-05-03  | Post event only on partial detach | 10-05 | Partial detach = migration completion, full detach = normal unpublish |
 
 ### Pending Todos
 
@@ -91,11 +94,11 @@ Research identified concerns addressed during implementation:
 
 ## Session Continuity
 
-Last session: 2026-02-03T16:12:41Z
-Stopped at: Completed 10-04-PLAN.md (KubeVirt Migration Documentation)
+Last session: 2026-02-03T16:45:12Z
+Stopped at: Completed 10-05-PLAN.md (Gap Closure: MigrationCompleted Event Wiring)
 Resume file: None
-Next: Phase 10 Observability COMPLETE - v0.5.0 KubeVirt Live Migration milestone ready for validation
+Next: v0.5.0 KubeVirt Live Migration COMPLETE - ready for hardware validation and production deployment
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-02-03 - Completed 10-04 (KubeVirt Migration Documentation) - Phase 10 Observability COMPLETE*
+*Last updated: 2026-02-03 - Completed 10-05 (Gap Closure: MigrationCompleted Event Wiring) - v0.5.0 KubeVirt Live Migration COMPLETE*
