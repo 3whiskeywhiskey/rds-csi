@@ -102,8 +102,9 @@ func (am *AttachmentManager) TrackAttachmentWithMode(ctx context.Context, volume
 }
 
 // AddSecondaryAttachment adds a second node attachment for RWX volumes during migration.
+// Records migration start time for timeout tracking.
 // Returns error if volume not attached, not RWX, or already has 2 nodes.
-func (am *AttachmentManager) AddSecondaryAttachment(ctx context.Context, volumeID, nodeID string) error {
+func (am *AttachmentManager) AddSecondaryAttachment(ctx context.Context, volumeID, nodeID string, migrationTimeout time.Duration) error {
 	am.volumeLocks.Lock(volumeID)
 	defer am.volumeLocks.Unlock(volumeID)
 
@@ -132,7 +133,13 @@ func (am *AttachmentManager) AddSecondaryAttachment(ctx context.Context, volumeI
 		AttachedAt: time.Now(),
 	})
 
-	klog.V(2).Infof("Tracked secondary attachment: volume=%s, node=%s (migration target)", volumeID, nodeID)
+	// Track migration start time for timeout enforcement
+	now := time.Now()
+	existing.MigrationStartedAt = &now
+	existing.MigrationTimeout = migrationTimeout
+
+	klog.V(2).Infof("Tracked secondary attachment: volume=%s, node=%s, timeout=%v (migration target)",
+		volumeID, nodeID, migrationTimeout)
 	return nil
 }
 
@@ -264,6 +271,18 @@ func (am *AttachmentManager) GetAccessMode(volumeID string) string {
 	return ""
 }
 
+// ClearMigrationState clears migration tracking fields.
+// Called when source node detaches, completing migration.
+func (am *AttachmentManager) ClearMigrationState(volumeID string) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	if state, exists := am.attachments[volumeID]; exists {
+		state.MigrationStartedAt = nil
+		state.MigrationTimeout = 0
+	}
+}
+
 // RemoveNodeAttachment removes a specific node's attachment from a volume.
 // For RWX during migration, this removes one node while keeping the other.
 // Returns true if this was the last node (volume now fully detached).
@@ -302,6 +321,14 @@ func (am *AttachmentManager) RemoveNodeAttachment(ctx context.Context, volumeID,
 		delete(am.attachments, volumeID)
 		klog.V(2).Infof("Removed last node attachment for volume %s, volume now detached", volumeID)
 		return true, nil
+	}
+
+	// If removing primary node (migration source), clear migration state
+	// Down to 1 node - migration completed, clear migration state
+	if found && len(newNodes) == 1 {
+		existing.MigrationStartedAt = nil
+		existing.MigrationTimeout = 0
+		klog.V(2).Infof("Migration completed for volume %s, cleared migration state", volumeID)
 	}
 
 	// Update with remaining nodes
