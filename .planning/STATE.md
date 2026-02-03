@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 8 of 10 (Core RWX Capability)
-Plan: 1 of 3 (estimated)
+Plan: 2 of 3 (estimated)
 Status: In progress
-Last activity: 2026-02-03 - Completed 08-01-PLAN.md
+Last activity: 2026-02-03 - Completed 08-02-PLAN.md
 
-Progress: [█#########] 10% (1/10 plans estimated)
+Progress: [██########] 20% (2/10 plans estimated)
 
 ## Milestone History
 
@@ -44,6 +44,10 @@ Progress: [█#########] 10% (1/10 plans estimated)
 | ROADMAP-4 | RWX block-only, reject RWX filesystem       | 08    | Prevent data corruption      |
 | ROADMAP-5 | 2-node limit during migration               | 08    | Sufficient for KubeVirt, prevents misuse |
 | ROADMAP-6 | Trust QEMU for I/O coordination             | 08    | Driver permits dual-attach, doesn't coordinate |
+| 08-02-01  | Keep deprecated NodeID for backward compat  | 08-02 | Existing PV annotations use NodeID field |
+| 08-02-02  | TrackAttachment unchanged (delegates)       | 08-02 | Preserve API compatibility for callers |
+| 08-02-03  | Inline access mode detection                | 08-02 | VolumeCapability available in request |
+| 08-02-04  | RemoveNodeAttachment returns bool           | 08-02 | Distinguish full vs partial detach |
 
 ### Pending Todos
 
@@ -59,9 +63,9 @@ Research identified concerns to address during implementation:
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 08-01-PLAN.md - RWX capability declaration
+Stopped at: Completed 08-02-PLAN.md - RWX dual-attach support
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-02-03 - Completed plan 08-01: Add MULTI_NODE_MULTI_WRITER capability*
+*Last updated: 2026-02-03 - Completed plan 08-02: RWX dual-attach with 2-node migration limit*
