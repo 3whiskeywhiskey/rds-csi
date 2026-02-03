@@ -11,6 +11,8 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
 // AttachmentManager tracks which volumes are attached to which nodes
@@ -30,6 +32,9 @@ type AttachmentManager struct {
 
 	// k8sClient is used for future PV annotation updates (can be nil initially)
 	k8sClient kubernetes.Interface
+
+	// metrics for recording migration operations (optional, can be nil)
+	metrics *observability.Metrics
 }
 
 // NewAttachmentManager creates a new AttachmentManager
@@ -281,6 +286,11 @@ func (am *AttachmentManager) ClearMigrationState(volumeID string) {
 		state.MigrationStartedAt = nil
 		state.MigrationTimeout = 0
 	}
+}
+
+// SetMetrics sets the Prometheus metrics for recording migration operations.
+func (am *AttachmentManager) SetMetrics(m *observability.Metrics) {
+	am.metrics = m
 }
 
 // RemoveNodeAttachment removes a specific node's attachment from a volume.
