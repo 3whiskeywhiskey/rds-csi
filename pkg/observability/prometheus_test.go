@@ -496,3 +496,148 @@ func TestHistogramBuckets(t *testing.T) {
 		t.Error("expected histogram count")
 	}
 }
+
+func TestRecordMigrationStarted(t *testing.T) {
+	m := NewMetrics()
+
+	// Record migration started
+	m.RecordMigrationStarted()
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check active migrations gauge incremented
+	if !strings.Contains(body, "rds_csi_migration_active_migrations 1") {
+		t.Errorf("expected active_migrations to be 1, got:\n%s", body)
+	}
+}
+
+func TestRecordMigrationResult_Success(t *testing.T) {
+	m := NewMetrics()
+
+	// Start migration first
+	m.RecordMigrationStarted()
+
+	// Record successful migration
+	m.RecordMigrationResult("success", 45*time.Second)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check counter incremented with success label
+	if !strings.Contains(body, `rds_csi_migration_migrations_total{result="success"} 1`) {
+		t.Error("expected migrations_total with result=success to be 1")
+	}
+
+	// Check histogram observed the duration
+	if !strings.Contains(body, "rds_csi_migration_duration_seconds_bucket") {
+		t.Error("expected migration_duration_seconds histogram bucket")
+	}
+
+	// Check active gauge decremented back to 0
+	if !strings.Contains(body, "rds_csi_migration_active_migrations 0") {
+		t.Errorf("expected active_migrations to be 0 after completion, got:\n%s", body)
+	}
+}
+
+func TestRecordMigrationResult_Timeout(t *testing.T) {
+	m := NewMetrics()
+
+	// Start migration first
+	m.RecordMigrationStarted()
+
+	// Record timeout migration
+	m.RecordMigrationResult("timeout", 300*time.Second)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check counter incremented with timeout label
+	if !strings.Contains(body, `rds_csi_migration_migrations_total{result="timeout"} 1`) {
+		t.Error("expected migrations_total with result=timeout to be 1")
+	}
+
+	// Check active gauge decremented
+	if !strings.Contains(body, "rds_csi_migration_active_migrations 0") {
+		t.Errorf("expected active_migrations to be 0 after timeout, got:\n%s", body)
+	}
+}
+
+func TestRecordMigrationResult_Failed(t *testing.T) {
+	m := NewMetrics()
+
+	// Start migration first
+	m.RecordMigrationStarted()
+
+	// Record failed migration
+	m.RecordMigrationResult("failed", 20*time.Second)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check counter incremented with failed label
+	if !strings.Contains(body, `rds_csi_migration_migrations_total{result="failed"} 1`) {
+		t.Error("expected migrations_total with result=failed to be 1")
+	}
+
+	// Check active gauge decremented
+	if !strings.Contains(body, "rds_csi_migration_active_migrations 0") {
+		t.Errorf("expected active_migrations to be 0 after failure, got:\n%s", body)
+	}
+}
+
+func TestMigrationDurationHistogram(t *testing.T) {
+	m := NewMetrics()
+
+	// Record migrations with different durations
+	// 30s should be in the 30 bucket, 120s should be in the 120 bucket
+	m.RecordMigrationStarted()
+	m.RecordMigrationResult("success", 30*time.Second)
+
+	m.RecordMigrationStarted()
+	m.RecordMigrationResult("success", 120*time.Second)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check histogram bucket labels exist
+	if !strings.Contains(body, "rds_csi_migration_duration_seconds_bucket") {
+		t.Error("expected duration_seconds histogram bucket")
+	}
+
+	// Check for expected buckets (15, 30, 60, 90, 120, 180, 300, 600)
+	expectedBuckets := []string{"15", "30", "60", "90", "120", "180", "300", "600"}
+	for _, bucket := range expectedBuckets {
+		if !strings.Contains(body, `le="`+bucket+`"`) {
+			t.Errorf("expected histogram bucket le=%q", bucket)
+		}
+	}
+
+	// Check histogram sum and count
+	if !strings.Contains(body, "rds_csi_migration_duration_seconds_sum") {
+		t.Error("expected histogram sum")
+	}
+	if !strings.Contains(body, "rds_csi_migration_duration_seconds_count 2") {
+		t.Error("expected histogram count to be 2")
+	}
+}
