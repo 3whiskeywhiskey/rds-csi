@@ -352,11 +352,16 @@ func (d *Driver) Run(endpoint string) error {
 
 	// Initialize attachment manager state
 	if d.attachmentManager != nil {
-		ctx := context.Background()
+		// Use a timeout context to avoid blocking indefinitely if Kubernetes API is slow
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
 		if err := d.attachmentManager.Initialize(ctx); err != nil {
-			return fmt.Errorf("failed to initialize attachment manager: %w", err)
+			// Log warning but don't fail - reconciler will rebuild state later
+			klog.Warningf("Failed to initialize attachment manager (will retry via reconciler): %v", err)
+		} else {
+			klog.Info("Attachment manager initialized")
 		}
-		klog.Info("Attachment manager initialized")
 	}
 
 	// Start attachment reconciler if configured
