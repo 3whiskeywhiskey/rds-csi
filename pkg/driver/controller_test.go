@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -1102,5 +1103,118 @@ func TestControllerPublishVolume_RWXIdempotent(t *testing.T) {
 	_, err = cs.ControllerPublishVolume(ctx, req)
 	if err != nil {
 		t.Fatalf("idempotent attach failed: %v", err)
+	}
+}
+
+func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
+	// Use valid UUID format for volume ID
+	testVolID := "pvc-11111111-2222-3333-4444-555555555555"
+
+	// Test that timed-out migrations reject new secondary attachments
+	tests := []struct {
+		name          string
+		setupState    func(am *attachment.AttachmentManager)
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "allow secondary attachment - migration not started",
+			setupState: func(am *attachment.AttachmentManager) {
+				// Primary attachment exists, no migration yet
+				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+			},
+			expectError: false,
+		},
+		{
+			name: "allow secondary attachment - migration within timeout",
+			setupState: func(am *attachment.AttachmentManager) {
+				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				// Simulate recent migration start (1 minute ago)
+				state, _ := am.GetAttachment(testVolID)
+				recentTime := time.Now().Add(-1 * time.Minute)
+				state.MigrationStartedAt = &recentTime
+				state.MigrationTimeout = 5 * time.Minute
+			},
+			expectError: false,
+		},
+		{
+			name: "reject secondary attachment - migration timed out",
+			setupState: func(am *attachment.AttachmentManager) {
+				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				// Simulate old migration start (10 minutes ago)
+				state, _ := am.GetAttachment(testVolID)
+				oldTime := time.Now().Add(-10 * time.Minute)
+				state.MigrationStartedAt = &oldTime
+				state.MigrationTimeout = 5 * time.Minute
+			},
+			expectError:   true,
+			errorContains: "migration timeout exceeded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			node1 := testNode("node-1")
+			node2 := testNode("node-2")
+
+			// Setup driver with attachment manager
+			k8sClient := fake.NewSimpleClientset(node1, node2)
+			mockRDS := rds.NewMockClient()
+			mockRDS.SetAddress("10.0.0.1")
+
+			am := attachment.NewAttachmentManager(k8sClient)
+			tt.setupState(am)
+
+			driver := &Driver{
+				name:              DriverName,
+				version:           "test",
+				rdsClient:         mockRDS,
+				k8sClient:         k8sClient,
+				attachmentManager: am,
+			}
+			driver.addVolumeCapabilities()
+			driver.addControllerServiceCapabilities()
+
+			cs := NewControllerServer(driver)
+
+			// Add volume to mock
+			mockRDS.AddVolume(&rds.VolumeInfo{
+				Slot:        testVolID,
+				NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + testVolID,
+				NVMETCPPort: 4420,
+			})
+
+			// Try to publish to a different node
+			req := &csi.ControllerPublishVolumeRequest{
+				VolumeId: testVolID,
+				NodeId:   "node-2", // Different from node-1
+				VolumeCapability: &csi.VolumeCapability{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+				VolumeContext: map[string]string{
+					"migrationTimeoutSeconds": "300",
+				},
+			}
+
+			_, err := cs.ControllerPublishVolume(ctx, req)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error but got nil")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("expected error containing %q, got %q", tt.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
 	}
 }
