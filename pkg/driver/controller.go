@@ -782,6 +782,18 @@ func (cs *ControllerServer) validateVolumeCapabilities(caps []*csi.VolumeCapabil
 		if cap.GetBlock() == nil && cap.GetMount() == nil {
 			return fmt.Errorf("volume capability must specify either block or mount")
 		}
+
+		// RWX block-only validation (ROADMAP-4)
+		// RWX with filesystem volumes risks data corruption - reject with actionable error
+		if accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			if cap.GetMount() != nil {
+				return fmt.Errorf("RWX access mode requires volumeMode: Block. " +
+					"Filesystem volumes risk data corruption with multi-node access. " +
+					"For KubeVirt VM live migration, use volumeMode: Block in your PVC")
+			}
+			// Log valid RWX block usage for debugging/auditing
+			klog.V(2).Info("RWX block volume capability validated (KubeVirt live migration use case)")
+		}
 	}
 
 	return nil
