@@ -728,6 +728,29 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
+	// Before removing attachment, capture migration state for event posting
+	var wasMigrating bool
+	var sourceNode, targetNode string
+	var migrationStartedAt time.Time
+	if existing, found := am.GetAttachment(volumeID); found && existing.IsMigrating() {
+		wasMigrating = true
+		// Identify which node is being removed (source) and which remains (target)
+		if len(existing.Nodes) == 2 {
+			// Node being removed is the source
+			if existing.Nodes[0].NodeID == nodeID {
+				sourceNode = existing.Nodes[0].NodeID
+				targetNode = existing.Nodes[1].NodeID
+			} else if existing.Nodes[1].NodeID == nodeID {
+				sourceNode = existing.Nodes[1].NodeID
+				targetNode = existing.Nodes[0].NodeID
+			}
+			// Copy migration start time before it's cleared by RemoveNodeAttachment
+			if existing.MigrationStartedAt != nil {
+				migrationStartedAt = *existing.MigrationStartedAt
+			}
+		}
+	}
+
 	// Remove this node's attachment (handles both RWO and RWX)
 	fullyDetached, err := am.RemoveNodeAttachment(ctx, volumeID, nodeID)
 	if err != nil {
@@ -745,6 +768,26 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 		klog.V(2).Infof("Volume %s partially detached from node %s, other node(s) still attached", volumeID, nodeID)
 		if cs.driver.metrics != nil {
 			cs.driver.metrics.RecordAttachmentOp("detach_partial", nil, time.Since(startTime))
+		}
+
+		// Check if this was a migration completion (partial detach = source node removed, target remains)
+		if wasMigrating && cs.driver.k8sClient != nil && sourceNode != "" && targetNode != "" {
+			duration := time.Since(migrationStartedAt)
+
+			// Look up PV to get PVC reference
+			pv, err := cs.driver.k8sClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+			if err == nil && pv.Spec.ClaimRef != nil {
+				pvcNamespace := pv.Spec.ClaimRef.Namespace
+				pvcName := pv.Spec.ClaimRef.Name
+				if pvcNamespace != "" && pvcName != "" {
+					eventPoster := NewEventPoster(cs.driver.k8sClient)
+					if err := eventPoster.PostMigrationCompleted(ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, duration); err != nil {
+						klog.Warningf("Failed to post migration completed event: %v", err)
+					}
+				}
+			} else {
+				klog.V(3).Infof("Could not get PVC for migration completed event: %v", err)
+			}
 		}
 	}
 
