@@ -39,16 +39,17 @@
 
 | Requirement | Phase | Verified |
 |-------------|-------|----------|
-| RWX-01 | TBD | [ ] |
-| RWX-02 | TBD | [ ] |
-| RWX-03 | TBD | [ ] |
-| SAFETY-01 | TBD | [ ] |
-| SAFETY-02 | TBD | [ ] |
-| SAFETY-03 | TBD | [ ] |
-| SAFETY-04 | TBD | [ ] |
-| OBS-01 | TBD | [ ] |
-| OBS-02 | TBD | [ ] |
-| OBS-03 | TBD | [ ] |
+| RWX-01 | Phase 8 | [ ] |
+| RWX-02 | Phase 8 | [ ] |
+| RWX-03 | Phase 8 | [ ] |
+| SAFETY-01 | Phase 9 | [ ] |
+| SAFETY-02 | Phase 9 | [ ] |
+| SAFETY-03 | Phase 9 | [ ] |
+| SAFETY-04 | Phase 9 | [ ] |
+| OBS-01 | Phase 10 | [ ] |
+| OBS-02 | Phase 10 | [ ] |
+| OBS-03 | Phase 10 | [ ] |
 
 ---
 *Requirements defined: 2026-02-03*
+*Traceability updated: 2026-02-03*
