@@ -39,6 +39,15 @@ type AttachmentState struct {
 	// AccessMode tracks whether this is RWO or RWX attachment
 	// Needed to determine if dual-attach is allowed
 	AccessMode string // "RWO" or "RWX"
+
+	// MigrationStartedAt is when dual-attach began (secondary node attached).
+	// nil if not currently in migration state. Used for timeout calculation.
+	MigrationStartedAt *time.Time
+
+	// MigrationTimeout is the maximum duration allowed for migration dual-attach.
+	// Parsed from StorageClass parameter migrationTimeoutSeconds.
+	// Zero value means use default (5 minutes).
+	MigrationTimeout time.Duration
 }
 
 // GetNodeIDs returns a slice of all attached node IDs.
@@ -63,4 +72,18 @@ func (as *AttachmentState) IsAttachedToNode(nodeID string) bool {
 // NodeCount returns the number of attached nodes.
 func (as *AttachmentState) NodeCount() int {
 	return len(as.Nodes)
+}
+
+// IsMigrating returns true if volume is in dual-attach migration state.
+func (as *AttachmentState) IsMigrating() bool {
+	return as.MigrationStartedAt != nil && len(as.Nodes) > 1
+}
+
+// IsMigrationTimedOut returns true if migration exceeded configured timeout.
+// Returns false if not migrating or timeout is zero (disabled).
+func (as *AttachmentState) IsMigrationTimedOut() bool {
+	if as.MigrationStartedAt == nil || as.MigrationTimeout == 0 {
+		return false
+	}
+	return time.Since(*as.MigrationStartedAt) > as.MigrationTimeout
 }
