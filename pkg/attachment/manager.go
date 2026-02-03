@@ -45,50 +45,94 @@ func NewAttachmentManager(k8sClient kubernetes.Interface) *AttachmentManager {
 // TrackAttachment records that a volume is attached to a node.
 // This method is idempotent - if the volume is already attached to the same node,
 // it returns nil. If the volume is attached to a different node, it returns an error.
+// For RWX dual-attach, use TrackAttachmentWithMode or AddSecondaryAttachment instead.
 func (am *AttachmentManager) TrackAttachment(ctx context.Context, volumeID, nodeID string) error {
-	// Acquire per-volume lock to serialize operations on this volume
+	// Call TrackAttachmentWithMode with default "RWO" for backward compatibility
+	return am.TrackAttachmentWithMode(ctx, volumeID, nodeID, "RWO")
+}
+
+// TrackAttachmentWithMode records that a volume is attached to a node with access mode awareness.
+// accessMode should be "RWO" or "RWX" to determine if dual-attach is allowed later.
+func (am *AttachmentManager) TrackAttachmentWithMode(ctx context.Context, volumeID, nodeID, accessMode string) error {
 	am.volumeLocks.Lock(volumeID)
 	defer am.volumeLocks.Unlock(volumeID)
 
-	// Check existing attachment under read lock
 	am.mu.RLock()
 	existing, exists := am.attachments[volumeID]
 	am.mu.RUnlock()
 
 	if exists {
-		// Idempotent: already attached to same node
-		if existing.NodeID == nodeID {
+		// Check if already attached to this node (idempotent)
+		if existing.IsAttachedToNode(nodeID) {
 			klog.V(2).Infof("Volume %s already attached to node %s (idempotent)", volumeID, nodeID)
 			return nil
 		}
 
-		// Error: attached to different node
+		// Different node - caller must handle via AddSecondaryAttachment for RWX
 		return fmt.Errorf("volume %s already attached to node %s", volumeID, existing.NodeID)
 	}
 
-	// Create new attachment state
+	// Create new attachment state with first node
+	now := time.Now()
 	state := &AttachmentState{
 		VolumeID:   volumeID,
-		NodeID:     nodeID,
-		AttachedAt: time.Now(),
+		NodeID:     nodeID, // Keep for backward compat
+		Nodes: []NodeAttachment{
+			{NodeID: nodeID, AttachedAt: now},
+		},
+		AttachedAt: now,
+		AccessMode: accessMode,
 	}
 
-	// Store under write lock
 	am.mu.Lock()
 	am.attachments[volumeID] = state
 	am.mu.Unlock()
 
-	klog.V(2).Infof("Tracked attachment: volume=%s, node=%s", volumeID, nodeID)
+	klog.V(2).Infof("Tracked attachment: volume=%s, node=%s, accessMode=%s (primary)", volumeID, nodeID, accessMode)
 
 	// Persist to PV annotations (outside of lock - I/O operation)
 	if err := am.persistAttachment(ctx, volumeID, nodeID); err != nil {
-		// Rollback in-memory state on persistence failure
 		am.mu.Lock()
 		delete(am.attachments, volumeID)
 		am.mu.Unlock()
 		return fmt.Errorf("failed to persist attachment: %w", err)
 	}
 
+	return nil
+}
+
+// AddSecondaryAttachment adds a second node attachment for RWX volumes during migration.
+// Returns error if volume not attached, not RWX, or already has 2 nodes.
+func (am *AttachmentManager) AddSecondaryAttachment(ctx context.Context, volumeID, nodeID string) error {
+	am.volumeLocks.Lock(volumeID)
+	defer am.volumeLocks.Unlock(volumeID)
+
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	existing, exists := am.attachments[volumeID]
+	if !exists {
+		return fmt.Errorf("volume %s not attached", volumeID)
+	}
+
+	// Check if already attached to this node (idempotent)
+	if existing.IsAttachedToNode(nodeID) {
+		klog.V(2).Infof("Volume %s already attached to node %s (idempotent)", volumeID, nodeID)
+		return nil
+	}
+
+	// ROADMAP-5: Enforce 2-node limit
+	if len(existing.Nodes) >= 2 {
+		return fmt.Errorf("volume %s already attached to 2 nodes (migration limit)", volumeID)
+	}
+
+	// Add secondary attachment
+	existing.Nodes = append(existing.Nodes, NodeAttachment{
+		NodeID:     nodeID,
+		AttachedAt: time.Now(),
+	})
+
+	klog.V(2).Infof("Tracked secondary attachment: volume=%s, node=%s (migration target)", volumeID, nodeID)
 	return nil
 }
 
@@ -185,4 +229,84 @@ func (am *AttachmentManager) ClearDetachTimestamp(volumeID string) {
 	defer am.mu.Unlock()
 
 	delete(am.detachTimestamps, volumeID)
+}
+
+// GetNodeCount returns the number of nodes a volume is attached to.
+func (am *AttachmentManager) GetNodeCount(volumeID string) int {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	if state, exists := am.attachments[volumeID]; exists {
+		return state.NodeCount()
+	}
+	return 0
+}
+
+// IsAttachedToNode checks if volume is attached to a specific node.
+func (am *AttachmentManager) IsAttachedToNode(volumeID, nodeID string) bool {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	if state, exists := am.attachments[volumeID]; exists {
+		return state.IsAttachedToNode(nodeID)
+	}
+	return false
+}
+
+// GetAccessMode returns the access mode for a tracked volume.
+func (am *AttachmentManager) GetAccessMode(volumeID string) string {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	if state, exists := am.attachments[volumeID]; exists {
+		return state.AccessMode
+	}
+	return ""
+}
+
+// RemoveNodeAttachment removes a specific node's attachment from a volume.
+// For RWX during migration, this removes one node while keeping the other.
+// Returns true if this was the last node (volume now fully detached).
+func (am *AttachmentManager) RemoveNodeAttachment(ctx context.Context, volumeID, nodeID string) (bool, error) {
+	am.volumeLocks.Lock(volumeID)
+	defer am.volumeLocks.Unlock(volumeID)
+
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	existing, exists := am.attachments[volumeID]
+	if !exists {
+		klog.V(2).Infof("Volume %s not tracked, nothing to remove (idempotent)", volumeID)
+		return false, nil
+	}
+
+	// Find and remove the node
+	newNodes := make([]NodeAttachment, 0, len(existing.Nodes))
+	found := false
+	for _, na := range existing.Nodes {
+		if na.NodeID == nodeID {
+			found = true
+			continue // Skip this node
+		}
+		newNodes = append(newNodes, na)
+	}
+
+	if !found {
+		klog.V(2).Infof("Volume %s not attached to node %s (idempotent)", volumeID, nodeID)
+		return false, nil
+	}
+
+	if len(newNodes) == 0 {
+		// Last node removed - fully detach
+		am.detachTimestamps[volumeID] = time.Now()
+		delete(am.attachments, volumeID)
+		klog.V(2).Infof("Removed last node attachment for volume %s, volume now detached", volumeID)
+		return true, nil
+	}
+
+	// Update with remaining nodes
+	existing.Nodes = newNodes
+	existing.NodeID = newNodes[0].NodeID // Update primary for backward compat
+	klog.V(2).Infof("Removed node %s from volume %s, %d node(s) remaining", nodeID, volumeID, len(newNodes))
+	return false, nil
 }
