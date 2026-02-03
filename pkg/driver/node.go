@@ -311,6 +311,50 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 
 	klog.V(2).Infof("Unmounted volume %s from %s", volumeID, stagingPath)
 
+	// SAFETY-04: Check device-in-use before NVMe disconnect
+	// This prevents data corruption if processes still have the device open
+	// (e.g., during forced pod termination or node failure scenarios)
+	if nqn != "" {
+		// GetDevicePath returns error (not empty string) if device not connected
+		// This is expected during recovery scenarios where device was already disconnected
+		devicePath, devErr := ns.nvmeConn.GetDevicePath(nqn)
+		if devErr != nil {
+			// Device not found/not connected - skip device-in-use check
+			// This can happen if:
+			// 1. Device was already disconnected (idempotent unstage)
+			// 2. Connection was lost (device unreachable)
+			// In both cases, proceed with disconnect attempt (which will be a no-op or cleanup)
+			klog.V(3).Infof("Could not get device path for NQN %s: %v (device may already be disconnected, proceeding)", nqn, devErr)
+		} else {
+			// Device path found - check if it's in use before disconnecting
+			result := nvme.CheckDeviceInUse(ctx, devicePath)
+
+			if result.TimedOut {
+				// Device check timed out - device may be unresponsive
+				// Log warning and proceed with disconnect (device likely dead anyway)
+				klog.Warningf("Device %s busy check timed out, proceeding with disconnect (device may be unresponsive)",
+					devicePath)
+			} else if result.InUse {
+				// Device has open file descriptors - unsafe to disconnect
+				klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+
+				// Log failure
+				secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
+					fmt.Errorf("device in use"), time.Since(startTime))
+
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Device %s has open file descriptors, cannot safely unstage. "+
+						"Ensure pod using volume has terminated. Processes: %v",
+					devicePath, result.Processes)
+			} else if result.Error != nil {
+				// Check failed but not critical - log and proceed
+				klog.Warningf("Device busy check failed for %s: %v (proceeding with disconnect)",
+					devicePath, result.Error)
+			}
+			// If InUse=false and no error, proceed normally
+		}
+	}
+
 	// Step 2: Disconnect from NVMe/TCP target
 	// Derive NQN from volume ID (same as what was used during CreateVolume)
 	if nqn == "" {
