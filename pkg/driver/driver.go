@@ -436,6 +436,29 @@ func (d *Driver) Stop() {
 	}
 }
 
+// ShutdownWithContext gracefully stops the driver within the given context timeout.
+// Returns error if shutdown does not complete within the timeout.
+func (d *Driver) ShutdownWithContext(ctx context.Context) error {
+	klog.Info("Initiating graceful shutdown")
+
+	// Create channel to signal shutdown complete
+	done := make(chan struct{})
+
+	go func() {
+		d.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		klog.Info("Graceful shutdown complete")
+		return nil
+	case <-ctx.Done():
+		klog.Warningf("Shutdown did not complete within timeout: %v", ctx.Err())
+		return ctx.Err()
+	}
+}
+
 // SetRDSClient sets the RDS client (for testing)
 func (d *Driver) SetRDSClient(client rds.RDSClient) {
 	d.rdsClient = client
