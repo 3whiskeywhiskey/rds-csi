@@ -10,6 +10,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
@@ -66,6 +67,9 @@ type Driver struct {
 	// VMI grouper for per-VMI operation serialization
 	vmiGrouper *VMIGrouper
 
+	// Managed NQN prefix for orphan cleaner filtering
+	managedNQNPrefix string
+
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
 	cscaps []*csi.ControllerServiceCapability
@@ -108,6 +112,9 @@ type DriverConfig struct {
 	EnableVMISerialization bool          // Enable per-VMI operation locks
 	VMICacheTTL            time.Duration // Cache TTL for PVC->VMI mapping (default: 60s)
 
+	// NQN prefix for orphan cleaner filtering (required for node mode)
+	ManagedNQNPrefix string
+
 	// Mode flags
 	EnableController bool
 	EnableNode       bool
@@ -132,12 +139,24 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		klog.Infof("Volume base path configured: %s", config.RDSVolumeBasePath)
 	}
 
+	// Validate NQN prefix for node plugin (required for orphan cleaner safety)
+	if config.EnableNode {
+		if config.ManagedNQNPrefix == "" {
+			return nil, fmt.Errorf("managed NQN prefix is required for node plugin (set %s)", nvme.EnvManagedNQNPrefix)
+		}
+		if err := nvme.ValidateNQNPrefix(config.ManagedNQNPrefix); err != nil {
+			return nil, fmt.Errorf("invalid NQN prefix: %w", err)
+		}
+		klog.Infof("Driver managing volumes with NQN prefix: %s", config.ManagedNQNPrefix)
+	}
+
 	driver := &Driver{
-		name:      config.DriverName,
-		version:   config.Version,
-		nodeID:    config.NodeID,
-		k8sClient: config.K8sClient,
-		metrics:   config.Metrics,
+		name:             config.DriverName,
+		version:          config.Version,
+		nodeID:           config.NodeID,
+		k8sClient:        config.K8sClient,
+		metrics:          config.Metrics,
+		managedNQNPrefix: config.ManagedNQNPrefix,
 	}
 
 	// Initialize RDS client if controller is enabled

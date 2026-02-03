@@ -132,6 +132,9 @@ func main() {
 		klog.Infof("Prometheus metrics enabled on %s", *metricsAddr)
 	}
 
+	// Read managed NQN prefix for node plugin
+	managedNQNPrefix := os.Getenv(nvme.EnvManagedNQNPrefix)
+
 	// Create driver configuration
 	config := driver.DriverConfig{
 		DriverName:             *driverName,
@@ -154,6 +157,7 @@ func main() {
 		AttachmentReconcileInterval: *attachmentReconcileInterval,
 		EnableVMISerialization:      *enableVMISerialization,
 		VMICacheTTL:                 *vmiCacheTTL,
+		ManagedNQNPrefix:            managedNQNPrefix,
 		EnableController:            *controllerMode,
 		EnableNode:                  *nodeMode,
 	}
@@ -165,7 +169,7 @@ func main() {
 
 		// Create a connector for cleanup (same as node server uses internally)
 		cleanupConnector := nvme.NewConnector()
-		cleaner := nvme.NewOrphanCleaner(cleanupConnector)
+		cleaner := nvme.NewOrphanCleaner(cleanupConnector, managedNQNPrefix)
 
 		// Pass metrics to cleaner for recording orphan cleanup
 		if promMetrics != nil {
