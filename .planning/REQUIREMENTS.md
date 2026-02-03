@@ -4,9 +4,9 @@
 
 ### RWX Capability
 
-- [ ] **RWX-01**: User can create PVC with `accessModes: [ReadWriteMany]` and `volumeMode: Block` that is accepted by the driver
-- [ ] **RWX-02**: User receives an error when creating PVC with `accessModes: [ReadWriteMany]` and `volumeMode: Filesystem` (explicitly rejected to prevent corruption)
-- [ ] **RWX-03**: Volume can be attached to exactly 2 nodes simultaneously during migration (not unlimited multi-attach)
+- [x] **RWX-01**: User can create PVC with `accessModes: [ReadWriteMany]` and `volumeMode: Block` that is accepted by the driver
+- [x] **RWX-02**: User receives an error when creating PVC with `accessModes: [ReadWriteMany]` and `volumeMode: Filesystem` (explicitly rejected to prevent corruption)
+- [x] **RWX-03**: Volume can be attached to exactly 2 nodes simultaneously during migration (not unlimited multi-attach)
 
 ### Migration Safety
 
@@ -39,9 +39,9 @@
 
 | Requirement | Phase | Verified |
 |-------------|-------|----------|
-| RWX-01 | Phase 8 | [ ] |
-| RWX-02 | Phase 8 | [ ] |
-| RWX-03 | Phase 8 | [ ] |
+| RWX-01 | Phase 8 | [x] |
+| RWX-02 | Phase 8 | [x] |
+| RWX-03 | Phase 8 | [x] |
 | SAFETY-01 | Phase 9 | [ ] |
 | SAFETY-02 | Phase 9 | [ ] |
 | SAFETY-03 | Phase 9 | [ ] |
