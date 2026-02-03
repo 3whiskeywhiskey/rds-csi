@@ -40,6 +40,10 @@ Progress: [███████████████████████
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 14 added: Error Resilience and Mount Storm Prevention (discovered mount storm issue during Phase 13 execution - corrupted filesystem caused thousands of duplicate mounts)
+
 ### Decisions
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
@@ -70,14 +74,21 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ Critical Mount() bug fixed (commit 3807645) - block volumes now work
 - ✓ Worker nodes recovered and healthy
 - ✓ Fixed driver deployed to all nodes
+- ✓ NQN filtering bug fixed (commit 6d7cece) - prevents system volume disconnect
 
 **Active:**
-- Orphan cleaner has NQN filtering bug (documented in docs/ORPHAN_CLEANER_BUG.md)
-- Not currently active, but blocker for enabling orphan cleanup feature
+- Phase 13 hardware validation interrupted due to node r640 instability
+- Driver lacks configurable NQN prefix (hardcoded to pvc-*, needs Helm value for Phase 14)
+- Need to redeploy driver with NQN filtering fix before resuming validation
+
+**Critical Discovery:**
+- Diskless nodes mount /var from RDS via NVMe-oF (NQN pattern: nixos-*)
+- Without NQN filtering, orphan cleaner or disconnect operations can brick nodes
+- Fixed in commit 6d7cece with hardcoded filter, Phase 14 will make it configurable
 
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 13 execution started, bug discovered and fixed, ready for hardware validation
+Stopped at: Phase 13 hardware validation interrupted, NQN filtering hotfix applied
 Resume file: None
-Next action: Execute hardware validation on metal cluster (/gsd:execute-phase 13 or manual testing)
+Next action: Redeploy driver with fix (commit 6d7cece), then retry Phase 13 validation
