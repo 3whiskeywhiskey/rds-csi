@@ -3,7 +3,6 @@ package nvme
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"k8s.io/klog/v2"
 
@@ -12,9 +11,10 @@ import (
 
 // OrphanCleaner detects and removes orphaned NVMe subsystem connections
 type OrphanCleaner struct {
-	connector Connector
-	resolver  *DeviceResolver
-	metrics   *observability.Metrics
+	connector        Connector
+	resolver         *DeviceResolver
+	metrics          *observability.Metrics
+	managedNQNPrefix string
 }
 
 // SetMetrics sets the Prometheus metrics for recording orphan cleanup
@@ -23,10 +23,12 @@ func (oc *OrphanCleaner) SetMetrics(m *observability.Metrics) {
 }
 
 // NewOrphanCleaner creates an OrphanCleaner using the connector's resolver
-func NewOrphanCleaner(connector Connector) *OrphanCleaner {
+// and the given managed NQN prefix for filtering which volumes to manage.
+func NewOrphanCleaner(connector Connector, managedNQNPrefix string) *OrphanCleaner {
 	return &OrphanCleaner{
-		connector: connector,
-		resolver:  connector.GetResolver(),
+		connector:        connector,
+		resolver:         connector.GetResolver(),
+		managedNQNPrefix: managedNQNPrefix,
 	}
 }
 
@@ -46,11 +48,11 @@ func (oc *OrphanCleaner) CleanupOrphanedConnections(ctx context.Context) error {
 
 	orphanCount := 0
 	for _, nqn := range nqns {
-		// CRITICAL: Only manage CSI volumes (pvc-*), skip system volumes (nixos-*, etc.)
-		// This prevents accidentally disconnecting system mounts like /var that use NVMe-oF
-		// TODO: Make this prefix configurable via driver flag for flexibility
-		if !strings.HasPrefix(nqn, "nqn.2000-02.com.mikrotik:pvc-") {
-			klog.V(4).Infof("Skipping non-CSI volume (system or non-managed): %s", nqn)
+		// CRITICAL: Only manage volumes matching configured NQN prefix
+		// This prevents accidentally disconnecting system volumes (nixos-*, etc.)
+		// that use NVMe-oF for critical mounts like /var
+		if !NQNMatchesPrefix(nqn, oc.managedNQNPrefix) {
+			klog.V(4).Infof("Skipping non-managed volume (NQN %s doesn't match prefix %s)", nqn, oc.managedNQNPrefix)
 			continue
 		}
 
