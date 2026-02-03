@@ -38,6 +38,11 @@ const (
 	EventReasonVolumeAttached         = "VolumeAttached"
 	EventReasonVolumeDetached         = "VolumeDetached"
 	EventReasonStaleAttachmentCleared = "StaleAttachmentCleared"
+
+	// Migration lifecycle events
+	EventReasonMigrationStarted   = "MigrationStarted"
+	EventReasonMigrationCompleted = "MigrationCompleted"
+	EventReasonMigrationFailed    = "MigrationFailed"
 )
 
 // EventPoster posts Kubernetes events for mount operations
