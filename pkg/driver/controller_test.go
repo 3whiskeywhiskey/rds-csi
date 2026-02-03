@@ -1228,14 +1228,14 @@ func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
 			name: "allow secondary attachment - migration not started",
 			setupState: func(am *attachment.AttachmentManager) {
 				// Primary attachment exists, no migration yet
-				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				_ = am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
 			},
 			expectError: false,
 		},
 		{
 			name: "allow secondary attachment - migration within timeout",
 			setupState: func(am *attachment.AttachmentManager) {
-				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				_ = am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
 				// Simulate recent migration start (1 minute ago)
 				state, _ := am.GetAttachment(testVolID)
 				recentTime := time.Now().Add(-1 * time.Minute)
@@ -1247,7 +1247,7 @@ func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
 		{
 			name: "reject secondary attachment - migration timed out",
 			setupState: func(am *attachment.AttachmentManager) {
-				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				_ = am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
 				// Simulate old migration start (10 minutes ago)
 				state, _ := am.GetAttachment(testVolID)
 				oldTime := time.Now().Add(-10 * time.Minute)
