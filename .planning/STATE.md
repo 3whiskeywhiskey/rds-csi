@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** v0.3.0 Volume Fencing — prevent multi-node attachment conflicts
+**Current focus:** v0.5.0 KubeVirt Live Migration — enable VM live migration with RDS volumes
 
 ## Current Position
 
-Phase: 7 of 7 (Robustness and Observability)
-Plan: 4 of 4 complete
-Status: Phase complete
-Last activity: 2026-01-31 — Phase 7 complete, all goals verified
+Phase: Not started (researching requirements)
+Plan: —
+Status: Researching
+Last activity: 2026-02-03 — Milestone v0.5.0 started
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
 ## Milestone History
 
@@ -22,9 +22,13 @@ Progress: [██████████] 100%
   - Phases 1-4, 17 plans
   - NVMe-oF reconnection reliability
 
-- **v0.3.0 Volume Fencing** — in progress (all phases complete, pending audit)
+- **v0.3.0 Volume Fencing** — shipped 2026-02-03
   - Phases 5-7, 12 plans
   - ControllerPublish/Unpublish implementation
+
+- **v0.5.0 KubeVirt Live Migration** — in progress
+  - Phases TBD
+  - Enable VM live migration with RDS volumes
 
 ## Accumulated Context
 
@@ -76,10 +80,10 @@ Production issue motivating this milestone:
 
 ## Session Continuity
 
-Last session: 2026-01-31
-Stopped at: Phase 7 complete, milestone ready for audit
+Last session: 2026-02-03
+Stopped at: Starting v0.5.0 milestone, researching requirements
 Resume file: None
 
 ---
 *State initialized: 2026-01-30*
-*Last updated: 2026-01-31 — Phase 7 complete, milestone ready for audit*
+*Last updated: 2026-02-03 — Starting v0.5.0 KubeVirt Live Migration milestone*
