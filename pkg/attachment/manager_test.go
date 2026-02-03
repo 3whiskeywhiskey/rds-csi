@@ -862,3 +862,117 @@ func TestAttachmentState_NodeCount(t *testing.T) {
 	}
 }
 
+func TestAddSecondaryAttachment_MigrationTracking(t *testing.T) {
+	ctx := context.Background()
+	am := NewAttachmentManager(nil)
+
+	// Setup: create primary attachment
+	volumeID := "pvc-test-migration"
+	primaryNode := "node-primary"
+	secondaryNode := "node-secondary"
+	migrationTimeout := 5 * time.Minute
+
+	err := am.TrackAttachmentWithMode(ctx, volumeID, primaryNode, "RWX")
+	if err != nil {
+		t.Fatalf("Failed to track primary attachment: %v", err)
+	}
+
+	// Verify no migration state initially
+	state, _ := am.GetAttachment(volumeID)
+	if state.MigrationStartedAt != nil {
+		t.Error("MigrationStartedAt should be nil before secondary attachment")
+	}
+
+	// Add secondary attachment
+	beforeAdd := time.Now()
+	err = am.AddSecondaryAttachment(ctx, volumeID, secondaryNode, migrationTimeout)
+	if err != nil {
+		t.Fatalf("Failed to add secondary attachment: %v", err)
+	}
+	afterAdd := time.Now()
+
+	// Verify migration tracking
+	state, _ = am.GetAttachment(volumeID)
+
+	if state.MigrationStartedAt == nil {
+		t.Fatal("MigrationStartedAt should be set after secondary attachment")
+	}
+
+	if state.MigrationStartedAt.Before(beforeAdd) || state.MigrationStartedAt.After(afterAdd) {
+		t.Errorf("MigrationStartedAt %v not in expected range [%v, %v]",
+			state.MigrationStartedAt, beforeAdd, afterAdd)
+	}
+
+	if state.MigrationTimeout != migrationTimeout {
+		t.Errorf("MigrationTimeout = %v, want %v", state.MigrationTimeout, migrationTimeout)
+	}
+
+	// Verify IsMigrating returns true
+	if !state.IsMigrating() {
+		t.Error("IsMigrating() should return true after secondary attachment")
+	}
+}
+
+func TestRemoveNodeAttachment_ClearsMigrationState(t *testing.T) {
+	ctx := context.Background()
+	am := NewAttachmentManager(nil)
+
+	// Setup: create dual-attach migration scenario
+	volumeID := "pvc-test-clear-migration"
+	primaryNode := "node-primary"
+	secondaryNode := "node-secondary"
+
+	err := am.TrackAttachmentWithMode(ctx, volumeID, primaryNode, "RWX")
+	if err != nil {
+		t.Fatalf("Failed to track primary attachment: %v", err)
+	}
+
+	err = am.AddSecondaryAttachment(ctx, volumeID, secondaryNode, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to add secondary attachment: %v", err)
+	}
+
+	// Verify migration is active
+	state, _ := am.GetAttachment(volumeID)
+	if !state.IsMigrating() {
+		t.Fatal("Should be migrating after secondary attachment")
+	}
+
+	// Remove primary node (migration source) - simulates migration completion
+	fullyDetached, err := am.RemoveNodeAttachment(ctx, volumeID, primaryNode)
+	if err != nil {
+		t.Fatalf("Failed to remove primary attachment: %v", err)
+	}
+
+	if fullyDetached {
+		t.Error("Should not be fully detached - secondary still attached")
+	}
+
+	// Verify migration state cleared
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Volume should still be tracked")
+	}
+
+	if state.MigrationStartedAt != nil {
+		t.Error("MigrationStartedAt should be nil after migration completes")
+	}
+
+	if state.MigrationTimeout != 0 {
+		t.Error("MigrationTimeout should be 0 after migration completes")
+	}
+
+	if state.IsMigrating() {
+		t.Error("IsMigrating() should return false after migration completes")
+	}
+
+	// Verify secondary node is now the only attached node
+	if len(state.Nodes) != 1 {
+		t.Errorf("Should have 1 node, got %d", len(state.Nodes))
+	}
+
+	if state.Nodes[0].NodeID != secondaryNode {
+		t.Errorf("Remaining node should be %s, got %s", secondaryNode, state.Nodes[0].NodeID)
+	}
+}
+
