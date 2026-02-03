@@ -15,8 +15,8 @@
 
 ### Quality and Compatibility
 
-- [ ] **BLOCK-06**: Existing filesystem volume functionality works without regression
-- [ ] **BLOCK-07**: Clear error messages for invalid volume mode combinations
+- [x] **BLOCK-06**: Existing filesystem volume functionality works without regression
+- [x] **BLOCK-07**: Clear error messages for invalid volume mode combinations
 
 ### Hardware Validation
 
@@ -48,8 +48,8 @@
 | BLOCK-03 | Phase 11 | Complete |
 | BLOCK-04 | Phase 11 | Complete |
 | BLOCK-05 | Phase 11 | Complete |
-| BLOCK-06 | Phase 12 | Pending |
-| BLOCK-07 | Phase 12 | Pending |
+| BLOCK-06 | Phase 12 | Complete |
+| BLOCK-07 | Phase 12 | Complete |
 | VAL-01 | Phase 13 | Pending |
 | VAL-02 | Phase 13 | Pending |
 | VAL-03 | Phase 13 | Pending |
