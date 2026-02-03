@@ -4,7 +4,22 @@ import (
 	"testing"
 )
 
+// setupTestBasePaths configures allowed base paths for testing
+func setupTestBasePaths(t *testing.T) {
+	t.Helper()
+	ResetAllowedBasePaths()
+	// Add test paths that match our test cases
+	if err := SetAllowedBasePath("/storage-pool/metal-csi"); err != nil {
+		t.Fatalf("failed to set test base path: %v", err)
+	}
+	if err := AddAllowedBasePath("/storage-pool/kubernetes-volumes"); err != nil {
+		t.Fatalf("failed to add test base path: %v", err)
+	}
+	t.Cleanup(ResetAllowedBasePaths)
+}
+
 func TestValidateFilePath(t *testing.T) {
+	setupTestBasePaths(t)
 	tests := []struct {
 		name    string
 		path    string
@@ -150,6 +165,7 @@ func TestValidateFilePath(t *testing.T) {
 }
 
 func TestValidateFilePathWithBase(t *testing.T) {
+	setupTestBasePaths(t)
 	tests := []struct {
 		name     string
 		path     string
@@ -245,7 +261,75 @@ func TestSanitizeBasePath(t *testing.T) {
 	}
 }
 
+func TestSetAllowedBasePath(t *testing.T) {
+	t.Cleanup(ResetAllowedBasePaths)
+
+	// Test setting a valid path
+	ResetAllowedBasePaths()
+	err := SetAllowedBasePath("/storage-pool/test")
+	if err != nil {
+		t.Errorf("SetAllowedBasePath() unexpected error: %v", err)
+	}
+	if len(AllowedBasePaths) != 1 || AllowedBasePaths[0] != "/storage-pool/test" {
+		t.Errorf("SetAllowedBasePath() did not set path correctly: %v", AllowedBasePaths)
+	}
+
+	// Test that it replaces existing paths
+	err = SetAllowedBasePath("/storage-pool/new")
+	if err != nil {
+		t.Errorf("SetAllowedBasePath() unexpected error: %v", err)
+	}
+	if len(AllowedBasePaths) != 1 || AllowedBasePaths[0] != "/storage-pool/new" {
+		t.Errorf("SetAllowedBasePath() did not replace path: %v", AllowedBasePaths)
+	}
+
+	// Test empty path
+	err = SetAllowedBasePath("")
+	if err == nil {
+		t.Error("SetAllowedBasePath() should error on empty path")
+	}
+
+	// Test invalid path
+	err = SetAllowedBasePath("/storage-pool/test; rm -rf /")
+	if err == nil {
+		t.Error("SetAllowedBasePath() should error on dangerous path")
+	}
+}
+
+func TestAddAllowedBasePath(t *testing.T) {
+	t.Cleanup(ResetAllowedBasePaths)
+
+	ResetAllowedBasePaths()
+	// Set initial path
+	_ = SetAllowedBasePath("/storage-pool/base")
+
+	// Add another path
+	err := AddAllowedBasePath("/storage-pool/extra")
+	if err != nil {
+		t.Errorf("AddAllowedBasePath() unexpected error: %v", err)
+	}
+	if len(AllowedBasePaths) != 2 {
+		t.Errorf("AddAllowedBasePath() did not add path: %v", AllowedBasePaths)
+	}
+
+	// Adding duplicate should be no-op
+	err = AddAllowedBasePath("/storage-pool/extra")
+	if err != nil {
+		t.Errorf("AddAllowedBasePath() unexpected error on duplicate: %v", err)
+	}
+	if len(AllowedBasePaths) != 2 {
+		t.Errorf("AddAllowedBasePath() should not duplicate: %v", AllowedBasePaths)
+	}
+
+	// Empty path should be no-op
+	err = AddAllowedBasePath("")
+	if err != nil {
+		t.Errorf("AddAllowedBasePath() unexpected error on empty: %v", err)
+	}
+}
+
 func TestValidateCreateVolumeOptions(t *testing.T) {
+	setupTestBasePaths(t)
 	tests := []struct {
 		name      string
 		filePath  string
@@ -301,6 +385,7 @@ func TestValidateCreateVolumeOptions(t *testing.T) {
 }
 
 func TestIsPathSafe(t *testing.T) {
+	setupTestBasePaths(t)
 	tests := []struct {
 		name string
 		path string
@@ -334,6 +419,10 @@ func TestIsPathSafe(t *testing.T) {
 
 // Benchmark tests
 func BenchmarkValidateFilePath(b *testing.B) {
+	ResetAllowedBasePaths()
+	_ = SetAllowedBasePath("/storage-pool/kubernetes-volumes")
+	b.Cleanup(ResetAllowedBasePaths)
+
 	path := "/storage-pool/kubernetes-volumes/pvc-12345678-1234-1234-1234-123456789abc.img"
 	for i := 0; i < b.N; i++ {
 		_ = ValidateFilePath(path)
@@ -341,6 +430,10 @@ func BenchmarkValidateFilePath(b *testing.B) {
 }
 
 func BenchmarkValidateFilePathMalicious(b *testing.B) {
+	ResetAllowedBasePaths()
+	_ = SetAllowedBasePath("/storage-pool/kubernetes-volumes")
+	b.Cleanup(ResetAllowedBasePaths)
+
 	path := "/storage-pool/kubernetes-volumes/pvc-123; rm -rf /"
 	for i := 0; i < b.N; i++ {
 		_ = ValidateFilePath(path)

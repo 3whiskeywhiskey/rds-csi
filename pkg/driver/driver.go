@@ -124,12 +124,12 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 
 	klog.Infof("Driver: %s Version: %s GitCommit: %s BuildDate: %s", config.DriverName, config.Version, gitCommit, buildDate)
 
-	// Add configured base path to security allowlist
+	// Set configured base path as the allowed path for volume validation
 	if config.RDSVolumeBasePath != "" {
-		if err := utils.AddAllowedBasePath(config.RDSVolumeBasePath); err != nil {
-			return nil, fmt.Errorf("failed to add base path to allowlist: %w", err)
+		if err := utils.SetAllowedBasePath(config.RDSVolumeBasePath); err != nil {
+			return nil, fmt.Errorf("failed to set allowed base path: %w", err)
 		}
-		klog.Infof("Added volume base path to security allowlist: %s", config.RDSVolumeBasePath)
+		klog.Infof("Volume base path configured: %s", config.RDSVolumeBasePath)
 	}
 
 	driver := &Driver{

@@ -2,7 +2,19 @@ package rds
 
 import (
 	"testing"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
+
+// setupTestBasePaths configures allowed base paths for testing
+func setupTestBasePaths(t *testing.T) {
+	t.Helper()
+	utils.ResetAllowedBasePaths()
+	if err := utils.SetAllowedBasePath("/storage-pool/metal-csi"); err != nil {
+		t.Fatalf("failed to set test base path: %v", err)
+	}
+	t.Cleanup(utils.ResetAllowedBasePaths)
+}
 
 func TestParseVolumeInfo(t *testing.T) {
 	// Real RouterOS output format (multi-line)
@@ -276,6 +288,7 @@ func TestParseFileInfo(t *testing.T) {
 }
 
 func TestValidateCreateVolumeOptions(t *testing.T) {
+	setupTestBasePaths(t)
 	tests := []struct {
 		name      string
 		opts      CreateVolumeOptions
