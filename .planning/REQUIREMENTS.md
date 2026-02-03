@@ -7,11 +7,11 @@
 
 ### Block Volume Operations
 
-- [ ] **BLOCK-01**: NodeStageVolume skips filesystem formatting when `volumeMode: Block`
-- [ ] **BLOCK-02**: NodeStageVolume stores device path metadata in staging directory for block volumes
-- [ ] **BLOCK-03**: NodePublishVolume creates block device file at target path using mknod
-- [ ] **BLOCK-04**: NodeUnpublishVolume unmounts and removes block device file
-- [ ] **BLOCK-05**: NodeUnstageVolume handles both filesystem and block volumes correctly
+- [x] **BLOCK-01**: NodeStageVolume skips filesystem formatting when `volumeMode: Block`
+- [x] **BLOCK-02**: NodeStageVolume stores device path metadata in staging directory for block volumes
+- [x] **BLOCK-03**: NodePublishVolume creates block device file at target path using mknod
+- [x] **BLOCK-04**: NodeUnpublishVolume unmounts and removes block device file
+- [x] **BLOCK-05**: NodeUnstageVolume handles both filesystem and block volumes correctly
 
 ### Quality and Compatibility
 
@@ -43,11 +43,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BLOCK-01 | Phase 11 | Pending |
-| BLOCK-02 | Phase 11 | Pending |
-| BLOCK-03 | Phase 11 | Pending |
-| BLOCK-04 | Phase 11 | Pending |
-| BLOCK-05 | Phase 11 | Pending |
+| BLOCK-01 | Phase 11 | Complete |
+| BLOCK-02 | Phase 11 | Complete |
+| BLOCK-03 | Phase 11 | Complete |
+| BLOCK-04 | Phase 11 | Complete |
+| BLOCK-05 | Phase 11 | Complete |
 | BLOCK-06 | Phase 12 | Pending |
 | BLOCK-07 | Phase 12 | Pending |
 | VAL-01 | Phase 13 | Pending |
