@@ -3,6 +3,7 @@ package attachment
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -630,3 +631,234 @@ func TestGracePeriod_LiveMigrationScenario(t *testing.T) {
 		t.Errorf("Expected attachment to node %s, got %s", node2, state.NodeID)
 	}
 }
+
+// ========================================
+// RWX Dual-Attach Tests (Phase 08-03)
+// ========================================
+
+func TestAttachmentManager_AddSecondaryAttachment(t *testing.T) {
+	tests := []struct {
+		name          string
+		setup         func(am *AttachmentManager)
+		volumeID      string
+		nodeID        string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "add secondary to existing RWX volume",
+			setup: func(am *AttachmentManager) {
+				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
+			},
+			volumeID:    "vol-1",
+			nodeID:      "node-2",
+			expectError: false,
+		},
+		{
+			name: "idempotent - same node already attached",
+			setup: func(am *AttachmentManager) {
+				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+			},
+			volumeID:    "vol-1",
+			nodeID:      "node-2",
+			expectError: false,
+		},
+		{
+			name: "reject 3rd attachment - migration limit",
+			setup: func(am *AttachmentManager) {
+				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+			},
+			volumeID:      "vol-1",
+			nodeID:        "node-3",
+			expectError:   true,
+			errorContains: "migration limit",
+		},
+		{
+			name:          "fail if volume not attached",
+			setup:         func(am *AttachmentManager) {},
+			volumeID:      "vol-not-exist",
+			nodeID:        "node-1",
+			expectError:   true,
+			errorContains: "not attached",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			am := NewAttachmentManager(nil)
+			tc.setup(am)
+
+			err := am.AddSecondaryAttachment(context.Background(), tc.volumeID, tc.nodeID)
+
+			if tc.expectError {
+				if err == nil {
+					t.Error("expected error but got nil")
+				} else if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
+					t.Errorf("expected error containing %q, got %q", tc.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestAttachmentManager_RemoveNodeAttachment(t *testing.T) {
+	tests := []struct {
+		name             string
+		setup            func(am *AttachmentManager)
+		volumeID         string
+		nodeID           string
+		expectDetached   bool
+		expectRemaining  int
+	}{
+		{
+			name: "remove only node - fully detached",
+			setup: func(am *AttachmentManager) {
+				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWO")
+			},
+			volumeID:        "vol-1",
+			nodeID:          "node-1",
+			expectDetached:  true,
+			expectRemaining: 0,
+		},
+		{
+			name: "remove secondary node - one remaining",
+			setup: func(am *AttachmentManager) {
+				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+			},
+			volumeID:        "vol-1",
+			nodeID:          "node-2",
+			expectDetached:  false,
+			expectRemaining: 1,
+		},
+		{
+			name: "remove primary node - secondary promoted",
+			setup: func(am *AttachmentManager) {
+				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+			},
+			volumeID:        "vol-1",
+			nodeID:          "node-1",
+			expectDetached:  false,
+			expectRemaining: 1,
+		},
+		{
+			name:            "idempotent - volume not tracked",
+			setup:           func(am *AttachmentManager) {},
+			volumeID:        "vol-not-exist",
+			nodeID:          "node-1",
+			expectDetached:  false,
+			expectRemaining: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			am := NewAttachmentManager(nil)
+			tc.setup(am)
+
+			fullyDetached, err := am.RemoveNodeAttachment(context.Background(), tc.volumeID, tc.nodeID)
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+
+			if fullyDetached != tc.expectDetached {
+				t.Errorf("expected fullyDetached=%v, got %v", tc.expectDetached, fullyDetached)
+			}
+
+			nodeCount := am.GetNodeCount(tc.volumeID)
+			if nodeCount != tc.expectRemaining {
+				t.Errorf("expected %d remaining nodes, got %d", tc.expectRemaining, nodeCount)
+			}
+		})
+	}
+}
+
+func TestAttachmentState_GetNodeIDs(t *testing.T) {
+	state := &AttachmentState{
+		VolumeID: "vol-1",
+		Nodes: []NodeAttachment{
+			{NodeID: "node-1"},
+			{NodeID: "node-2"},
+		},
+	}
+
+	ids := state.GetNodeIDs()
+	if len(ids) != 2 {
+		t.Errorf("expected 2 node IDs, got %d", len(ids))
+	}
+	if ids[0] != "node-1" || ids[1] != "node-2" {
+		t.Errorf("unexpected node IDs: %v", ids)
+	}
+}
+
+func TestAttachmentState_IsAttachedToNode(t *testing.T) {
+	state := &AttachmentState{
+		VolumeID: "vol-1",
+		Nodes: []NodeAttachment{
+			{NodeID: "node-1"},
+		},
+	}
+
+	if !state.IsAttachedToNode("node-1") {
+		t.Error("expected IsAttachedToNode(node-1) = true")
+	}
+	if state.IsAttachedToNode("node-2") {
+		t.Error("expected IsAttachedToNode(node-2) = false")
+	}
+}
+
+func TestAttachmentState_NodeCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     *AttachmentState
+		wantCount int
+	}{
+		{
+			name: "no nodes",
+			state: &AttachmentState{
+				VolumeID: "vol-1",
+				Nodes:    []NodeAttachment{},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "one node",
+			state: &AttachmentState{
+				VolumeID: "vol-1",
+				Nodes: []NodeAttachment{
+					{NodeID: "node-1"},
+				},
+			},
+			wantCount: 1,
+		},
+		{
+			name: "two nodes",
+			state: &AttachmentState{
+				VolumeID: "vol-1",
+				Nodes: []NodeAttachment{
+					{NodeID: "node-1"},
+					{NodeID: "node-2"},
+				},
+			},
+			wantCount: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			count := tc.state.NodeCount()
+			if count != tc.wantCount {
+				t.Errorf("expected NodeCount=%d, got %d", tc.wantCount, count)
+			}
+		})
+	}
+}
+
