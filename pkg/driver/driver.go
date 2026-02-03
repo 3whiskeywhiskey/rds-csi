@@ -257,6 +257,9 @@ func (d *Driver) addVolumeCapabilities() {
 		{
 			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
 		},
+		{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER, // NEW: for KubeVirt live migration
+		},
 	}
 }
 

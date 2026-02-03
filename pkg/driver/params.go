@@ -3,6 +3,9 @@ package driver
 import (
 	"fmt"
 	"strconv"
+	"time"
+
+	"k8s.io/klog/v2"
 )
 
 // NVMe connection parameter keys for StorageClass
@@ -99,4 +102,53 @@ func ToVolumeContext(params NVMEConnectionParams) map[string]string {
 		paramReconnectDelay: fmt.Sprintf("%d", params.ReconnectDelay),
 		paramKeepAliveTmo:   fmt.Sprintf("%d", params.KeepAliveTmo),
 	}
+}
+
+const (
+	// Default migration timeout (5 minutes)
+	DefaultMigrationTimeout = 5 * time.Minute
+	// Minimum allowed timeout (30 seconds - anything less is unrealistic)
+	MinMigrationTimeout = 30 * time.Second
+	// Maximum allowed timeout (1 hour - prevent indefinite dual-attach)
+	MaxMigrationTimeout = 1 * time.Hour
+)
+
+// ParseMigrationTimeout extracts and validates migrationTimeoutSeconds from parameters.
+// Returns DefaultMigrationTimeout if not specified or invalid.
+// Clamps value to [MinMigrationTimeout, MaxMigrationTimeout] range.
+func ParseMigrationTimeout(params map[string]string) time.Duration {
+	timeoutStr, ok := params["migrationTimeoutSeconds"]
+	if !ok || timeoutStr == "" {
+		return DefaultMigrationTimeout
+	}
+
+	seconds, err := strconv.Atoi(timeoutStr)
+	if err != nil {
+		klog.Warningf("Invalid migrationTimeoutSeconds '%s' (not an integer), using default %v",
+			timeoutStr, DefaultMigrationTimeout)
+		return DefaultMigrationTimeout
+	}
+
+	if seconds <= 0 {
+		klog.Warningf("Invalid migrationTimeoutSeconds '%d' (must be positive), using default %v",
+			seconds, DefaultMigrationTimeout)
+		return DefaultMigrationTimeout
+	}
+
+	timeout := time.Duration(seconds) * time.Second
+
+	// Clamp to valid range
+	if timeout < MinMigrationTimeout {
+		klog.Warningf("migrationTimeoutSeconds %v too short (min %v), using minimum",
+			timeout, MinMigrationTimeout)
+		return MinMigrationTimeout
+	}
+
+	if timeout > MaxMigrationTimeout {
+		klog.Warningf("migrationTimeoutSeconds %v too long (max %v), using maximum",
+			timeout, MaxMigrationTimeout)
+		return MaxMigrationTimeout
+	}
+
+	return timeout
 }

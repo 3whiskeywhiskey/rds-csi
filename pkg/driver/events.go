@@ -38,6 +38,11 @@ const (
 	EventReasonVolumeAttached         = "VolumeAttached"
 	EventReasonVolumeDetached         = "VolumeDetached"
 	EventReasonStaleAttachmentCleared = "StaleAttachmentCleared"
+
+	// Migration lifecycle events
+	EventReasonMigrationStarted   = "MigrationStarted"
+	EventReasonMigrationCompleted = "MigrationCompleted"
+	EventReasonMigrationFailed    = "MigrationFailed"
 )
 
 // EventPoster posts Kubernetes events for mount operations
@@ -326,5 +331,65 @@ func (ep *EventPoster) PostStaleAttachmentCleared(ctx context.Context, pvcNamesp
 	}
 
 	klog.V(2).Infof("Posted stale attachment cleared event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostMigrationStarted posts a Normal event when a KubeVirt live migration starts.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, timeout
+func (ep *EventPoster) PostMigrationStarted(ctx context.Context, pvcNamespace, pvcName, volumeID, sourceNode, targetNode string, timeout time.Duration) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to get PVC %s/%s for migration started event: %v", pvcNamespace, pvcName, err)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s]: KubeVirt live migration started - source: %s, target: %s, timeout: %s", volumeID, sourceNode, targetNode, timeout.Round(time.Second))
+	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonMigrationStarted, eventMessage)
+
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonMigrationStarted)
+	}
+
+	klog.V(2).Infof("Posted migration started event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostMigrationCompleted posts a Normal event when a KubeVirt live migration completes successfully.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, duration
+func (ep *EventPoster) PostMigrationCompleted(ctx context.Context, pvcNamespace, pvcName, volumeID, sourceNode, targetNode string, duration time.Duration) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to get PVC %s/%s for migration completed event: %v", pvcNamespace, pvcName, err)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s]: KubeVirt live migration completed - source: %s -> target: %s (duration: %s)", volumeID, sourceNode, targetNode, duration.Round(time.Second))
+	ep.recorder.Event(pvc, corev1.EventTypeNormal, EventReasonMigrationCompleted, eventMessage)
+
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonMigrationCompleted)
+	}
+
+	klog.V(2).Infof("Posted migration completed event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
+	return nil
+}
+
+// PostMigrationFailed posts a Warning event when a KubeVirt live migration fails.
+// Parameters: ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, reason, duration
+func (ep *EventPoster) PostMigrationFailed(ctx context.Context, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, reason string, duration time.Duration) error {
+	pvc, err := ep.clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to get PVC %s/%s for migration failed event: %v", pvcNamespace, pvcName, err)
+		return nil
+	}
+
+	eventMessage := fmt.Sprintf("[%s]: KubeVirt live migration failed - source: %s, attempted target: %s, reason: %s, elapsed: %s", volumeID, sourceNode, targetNode, reason, duration.Round(time.Second))
+	ep.recorder.Event(pvc, corev1.EventTypeWarning, EventReasonMigrationFailed, eventMessage)
+
+	if ep.metrics != nil {
+		ep.metrics.RecordEventPosted(EventReasonMigrationFailed)
+	}
+
+	klog.V(2).Infof("Posted migration failed event to PVC %s/%s: %s", pvcNamespace, pvcName, eventMessage)
 	return nil
 }

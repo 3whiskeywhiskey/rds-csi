@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -790,5 +791,537 @@ func TestControllerUnpublishVolume_EmptyNodeID(t *testing.T) {
 	_, err := cs.ControllerUnpublishVolume(ctx, req)
 	if err != nil {
 		t.Fatalf("Unpublish with empty nodeID should succeed, got: %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_MigrationCompleted(t *testing.T) {
+	// Test that ControllerUnpublishVolume posts MigrationCompleted event
+	// when source node detaches during an active migration
+	ctx := context.Background()
+
+	// Create PV with ClaimRef for event posting
+	volumeID := testVolumeID8
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: volumeID,
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef: &corev1.ObjectReference{
+				Namespace: "default",
+				Name:      "test-pvc",
+			},
+		},
+	}
+
+	// Create PVC for event posting
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+		},
+	}
+
+	// Create controller with PV and PVC
+	cs, mockRDS := testControllerServer(t)
+	// Add PV and PVC to fake clientset
+	_, err := cs.driver.k8sClient.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to create test PV: %v", err)
+	}
+	_, err = cs.driver.k8sClient.CoreV1().PersistentVolumeClaims("default").Create(ctx, pvc, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to create test PVC: %v", err)
+	}
+
+	// Add volume to mock RDS
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot: volumeID,
+	})
+
+	// Set up migration scenario: volume attached to two nodes (RWX migration)
+	am := cs.driver.GetAttachmentManager()
+
+	// Add primary attachment (source node) with RWX mode
+	err = am.TrackAttachmentWithMode(ctx, volumeID, "node-1", "RWX")
+	if err != nil {
+		t.Fatalf("Failed to track primary attachment: %v", err)
+	}
+
+	// Add secondary attachment (migration target)
+	err = am.AddSecondaryAttachment(ctx, volumeID, "node-2", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to add secondary attachment: %v", err)
+	}
+
+	// Verify migration state is active
+	state, found := am.GetAttachment(volumeID)
+	if !found {
+		t.Fatal("Volume should have attachment state")
+	}
+	if !state.IsMigrating() {
+		t.Fatal("Volume should be in migration state")
+	}
+	if len(state.Nodes) != 2 {
+		t.Fatalf("Expected 2 nodes, got %d", len(state.Nodes))
+	}
+
+	// Sleep briefly to ensure migration duration is measurable
+	time.Sleep(100 * time.Millisecond)
+
+	// Unpublish from source node (completes migration)
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1", // Remove source node
+	}
+
+	_, err = cs.ControllerUnpublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("ControllerUnpublishVolume failed: %v", err)
+	}
+
+	// Verify partial detach (target node remains)
+	state, found = am.GetAttachment(volumeID)
+	if !found {
+		t.Fatal("Volume should still have attachment state")
+	}
+	if len(state.Nodes) != 1 {
+		t.Fatalf("Expected 1 node after partial detach, got %d", len(state.Nodes))
+	}
+	if state.Nodes[0].NodeID != "node-2" {
+		t.Errorf("Expected target node-2 to remain, got %s", state.Nodes[0].NodeID)
+	}
+
+	// Verify migration state is cleared
+	if state.IsMigrating() {
+		t.Error("Migration state should be cleared after unpublish")
+	}
+
+	// Event posting is best-effort, so we just verify the code path executed
+	// without error. The event itself is tested in events_test.go
+	t.Log("Migration completed event code path executed successfully")
+}
+
+// ========================================
+// RWX Capability Tests (Phase 08-03)
+// ========================================
+
+func TestValidateVolumeCapabilities_RWX(t *testing.T) {
+	tests := []struct {
+		name          string
+		caps          []*csi.VolumeCapability
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "RWX block - should succeed",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "RWX filesystem - should fail with actionable error",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+					},
+				},
+			},
+			expectError:   true,
+			errorContains: "volumeMode: Block",
+		},
+		{
+			name: "RWO block - should succeed",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "RWO filesystem - should succeed",
+			caps: []*csi.VolumeCapability{
+				{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create controller with driver that has RWX capability
+			cs, _ := testControllerServer(t)
+
+			err := cs.validateVolumeCapabilities(tc.caps)
+
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+				} else if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
+					t.Errorf("expected error containing %q, got %q", tc.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCreateVolume_RWXFilesystemRejected(t *testing.T) {
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-vol",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{FsType: "ext4"},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	_, err := cs.CreateVolume(context.Background(), req)
+
+	if err == nil {
+		t.Fatal("expected error for RWX filesystem, got nil")
+	}
+
+	// Check it's an InvalidArgument error
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "volumeMode: Block") {
+		t.Errorf("expected error to mention volumeMode: Block, got %q", st.Message())
+	}
+}
+
+func TestDriverVolumeCapabilities_IncludesRWX(t *testing.T) {
+	cs, _ := testControllerServer(t)
+	driver := cs.driver
+
+	found := false
+	for _, vcap := range driver.vcaps {
+		if vcap.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Error("expected MULTI_NODE_MULTI_WRITER in vcaps, not found")
+	}
+}
+
+func TestControllerPublishVolume_RWXDualAttach(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	node2 := testNode("node-2")
+	node3 := testNode("node-3")
+	cs, mockRDS := testControllerServer(t, node1, node2, node3)
+
+	volumeID := testVolumeID1
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        volumeID,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + volumeID,
+		NVMETCPPort: 4420,
+	})
+
+	rwxCap := &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+	}
+
+	// First attach should succeed
+	req1 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-1",
+		VolumeCapability: rwxCap,
+	}
+	_, err := cs.ControllerPublishVolume(ctx, req1)
+	if err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Second attach (migration target) should succeed
+	req2 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-2",
+		VolumeCapability: rwxCap,
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req2)
+	if err != nil {
+		t.Fatalf("second attach failed: %v", err)
+	}
+
+	// Third attach should fail with migration limit
+	req3 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-3",
+		VolumeCapability: rwxCap,
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req3)
+	if err == nil {
+		t.Fatal("expected error for 3rd attach, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "migration limit") {
+		t.Errorf("expected 'migration limit' in error, got %q", st.Message())
+	}
+}
+
+func TestControllerPublishVolume_RWOConflictHintsRWX(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	node2 := testNode("node-2")
+	cs, mockRDS := testControllerServer(t, node1, node2)
+
+	volumeID := testVolumeID2
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        volumeID,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + volumeID,
+		NVMETCPPort: 4420,
+	})
+
+	rwoCap := &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+	}
+
+	// First attach should succeed
+	req1 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-1",
+		VolumeCapability: rwoCap,
+	}
+	_, err := cs.ControllerPublishVolume(ctx, req1)
+	if err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Second attach should fail with RWX hint
+	req2 := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-2",
+		VolumeCapability: rwoCap,
+	}
+	_, err = cs.ControllerPublishVolume(ctx, req2)
+	if err == nil {
+		t.Fatal("expected error for RWO conflict, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got %v", st.Code())
+	}
+	if !strings.Contains(st.Message(), "RWX") {
+		t.Errorf("expected RWX hint in error message, got %q", st.Message())
+	}
+}
+
+func TestControllerPublishVolume_RWXIdempotent(t *testing.T) {
+	ctx := context.Background()
+	node1 := testNode("node-1")
+	cs, mockRDS := testControllerServer(t, node1)
+
+	volumeID := testVolumeID3
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:        volumeID,
+		NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + volumeID,
+		NVMETCPPort: 4420,
+	})
+
+	rwxCap := &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+	}
+
+	req := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         volumeID,
+		NodeId:           "node-1",
+		VolumeCapability: rwxCap,
+	}
+
+	// First call
+	_, err := cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Second call (idempotent) - should succeed
+	_, err = cs.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("idempotent attach failed: %v", err)
+	}
+}
+
+func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
+	// Use valid UUID format for volume ID
+	testVolID := "pvc-11111111-2222-3333-4444-555555555555"
+
+	// Test that timed-out migrations reject new secondary attachments
+	tests := []struct {
+		name          string
+		setupState    func(am *attachment.AttachmentManager)
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "allow secondary attachment - migration not started",
+			setupState: func(am *attachment.AttachmentManager) {
+				// Primary attachment exists, no migration yet
+				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+			},
+			expectError: false,
+		},
+		{
+			name: "allow secondary attachment - migration within timeout",
+			setupState: func(am *attachment.AttachmentManager) {
+				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				// Simulate recent migration start (1 minute ago)
+				state, _ := am.GetAttachment(testVolID)
+				recentTime := time.Now().Add(-1 * time.Minute)
+				state.MigrationStartedAt = &recentTime
+				state.MigrationTimeout = 5 * time.Minute
+			},
+			expectError: false,
+		},
+		{
+			name: "reject secondary attachment - migration timed out",
+			setupState: func(am *attachment.AttachmentManager) {
+				am.TrackAttachmentWithMode(context.Background(), testVolID, "node-1", "RWX")
+				// Simulate old migration start (10 minutes ago)
+				state, _ := am.GetAttachment(testVolID)
+				oldTime := time.Now().Add(-10 * time.Minute)
+				state.MigrationStartedAt = &oldTime
+				state.MigrationTimeout = 5 * time.Minute
+			},
+			expectError:   true,
+			errorContains: "migration timeout exceeded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			node1 := testNode("node-1")
+			node2 := testNode("node-2")
+
+			// Setup driver with attachment manager
+			k8sClient := fake.NewSimpleClientset(node1, node2)
+			mockRDS := rds.NewMockClient()
+			mockRDS.SetAddress("10.0.0.1")
+
+			am := attachment.NewAttachmentManager(k8sClient)
+			tt.setupState(am)
+
+			driver := &Driver{
+				name:              DriverName,
+				version:           "test",
+				rdsClient:         mockRDS,
+				k8sClient:         k8sClient,
+				attachmentManager: am,
+			}
+			driver.addVolumeCapabilities()
+			driver.addControllerServiceCapabilities()
+
+			cs := NewControllerServer(driver)
+
+			// Add volume to mock
+			mockRDS.AddVolume(&rds.VolumeInfo{
+				Slot:        testVolID,
+				NVMETCPNQN:  "nqn.2000-02.com.mikrotik:" + testVolID,
+				NVMETCPPort: 4420,
+			})
+
+			// Try to publish to a different node
+			req := &csi.ControllerPublishVolumeRequest{
+				VolumeId: testVolID,
+				NodeId:   "node-2", // Different from node-1
+				VolumeCapability: &csi.VolumeCapability{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+				VolumeContext: map[string]string{
+					"migrationTimeoutSeconds": "300",
+				},
+			}
+
+			_, err := cs.ControllerPublishVolume(ctx, req)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error but got nil")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("expected error containing %q, got %q", tt.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
 	}
 }

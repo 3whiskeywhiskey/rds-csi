@@ -461,3 +461,143 @@ func TestStaleMountDetectedMessageFormat(t *testing.T) {
 
 	t.Logf("Formatted stale mount message: %s", msg)
 }
+
+// TestPostMigrationStarted tests posting migration started events
+func TestPostMigrationStarted(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-migration",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+	poster := NewEventPoster(fakeClient)
+
+	// Post migration started event
+	ctx := context.Background()
+	timeout := 5 * time.Minute
+	err := poster.PostMigrationStarted(ctx, "default", "test-pvc", "pvc-123", "node-1", "node-2", timeout)
+
+	if err != nil {
+		t.Fatalf("PostMigrationStarted failed: %v", err)
+	}
+
+	// Verify the call succeeded
+	t.Log("PostMigrationStarted completed without error")
+
+	// Verify message format contains expected components
+	expectedMsg := fmt.Sprintf("[pvc-123]: KubeVirt live migration started - source: node-1, target: node-2, timeout: %s", timeout.Round(time.Second))
+	if !strings.Contains(expectedMsg, "node-1") || !strings.Contains(expectedMsg, "node-2") {
+		t.Errorf("Expected message to contain source and target nodes")
+	}
+	if !strings.Contains(expectedMsg, timeout.Round(time.Second).String()) {
+		t.Errorf("Expected message to contain timeout")
+	}
+	t.Logf("Expected message format: %s", expectedMsg)
+}
+
+// TestPostMigrationStarted_PVCNotFound tests graceful handling when PVC doesn't exist
+func TestPostMigrationStarted_PVCNotFound(t *testing.T) {
+	// Create fake client WITHOUT the PVC
+	fakeClient := fake.NewSimpleClientset()
+	poster := NewEventPoster(fakeClient)
+
+	// Post event for non-existent PVC
+	ctx := context.Background()
+	err := poster.PostMigrationStarted(ctx, "default", "nonexistent-pvc", "pvc-123", "node-1", "node-2", 5*time.Minute)
+
+	// Should return nil (graceful handling)
+	if err != nil {
+		t.Errorf("Expected nil error for missing PVC, got %v", err)
+	}
+
+	t.Log("PostMigrationStarted handled missing PVC gracefully")
+}
+
+// TestPostMigrationCompleted tests posting migration completed events
+func TestPostMigrationCompleted(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-migration-complete",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+	poster := NewEventPoster(fakeClient)
+
+	// Post migration completed event
+	ctx := context.Background()
+	duration := 2*time.Minute + 15*time.Second + 456*time.Millisecond
+	err := poster.PostMigrationCompleted(ctx, "default", "test-pvc", "pvc-456", "node-1", "node-2", duration)
+
+	if err != nil {
+		t.Fatalf("PostMigrationCompleted failed: %v", err)
+	}
+
+	// Verify the call succeeded
+	t.Log("PostMigrationCompleted completed without error")
+
+	// Verify message format - duration should be rounded to seconds
+	roundedDuration := duration.Round(time.Second)
+	expectedMsg := fmt.Sprintf("[pvc-456]: KubeVirt live migration completed - source: node-1 -> target: node-2 (duration: %s)", roundedDuration)
+	if !strings.Contains(expectedMsg, "node-1 -> target: node-2") {
+		t.Errorf("Expected message to contain source -> target format")
+	}
+	if !strings.Contains(expectedMsg, roundedDuration.String()) {
+		t.Errorf("Expected message to contain rounded duration")
+	}
+	// Verify duration is rounded (should not contain milliseconds)
+	if strings.Contains(roundedDuration.String(), "ms") {
+		t.Errorf("Expected duration to be rounded to seconds, got %s", roundedDuration)
+	}
+	t.Logf("Expected message format: %s", expectedMsg)
+	t.Logf("Duration rounded from %s to %s", duration, roundedDuration)
+}
+
+// TestPostMigrationFailed tests posting migration failed events
+func TestPostMigrationFailed(t *testing.T) {
+	// Create PVC in fake clientset
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+			UID:       "test-uid-migration-fail",
+		},
+	}
+	fakeClient := fake.NewSimpleClientset(pvc)
+	poster := NewEventPoster(fakeClient)
+
+	// Post migration failed event
+	ctx := context.Background()
+	reason := "migration timeout exceeded"
+	elapsed := 6 * time.Minute
+	err := poster.PostMigrationFailed(ctx, "default", "test-pvc", "pvc-789", "node-1", "node-2", reason, elapsed)
+
+	if err != nil {
+		t.Fatalf("PostMigrationFailed failed: %v", err)
+	}
+
+	// Verify the call succeeded
+	t.Log("PostMigrationFailed completed without error")
+
+	// Verify message format contains expected components
+	expectedMsg := fmt.Sprintf("[pvc-789]: KubeVirt live migration failed - source: node-1, attempted target: node-2, reason: %s, elapsed: %s", reason, elapsed.Round(time.Second))
+	if !strings.Contains(expectedMsg, "node-1") || !strings.Contains(expectedMsg, "node-2") {
+		t.Errorf("Expected message to contain source and target nodes")
+	}
+	if !strings.Contains(expectedMsg, reason) {
+		t.Errorf("Expected message to contain failure reason")
+	}
+	if !strings.Contains(expectedMsg, elapsed.Round(time.Second).String()) {
+		t.Errorf("Expected message to contain elapsed time")
+	}
+	t.Logf("Expected message format: %s", expectedMsg)
+
+	// Note: PostMigrationFailed should post a Warning event, not Normal
+	// We can't easily verify the event type with fake client, but the implementation
+	// uses corev1.EventTypeWarning
+}

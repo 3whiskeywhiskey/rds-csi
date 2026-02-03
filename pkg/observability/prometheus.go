@@ -48,6 +48,11 @@ type Metrics struct {
 	attachmentOpDuration      *prometheus.HistogramVec
 	attachmentGracePeriodUsed prometheus.Counter
 	attachmentStaleCleared    prometheus.Counter
+
+	// Migration operation metrics
+	migrationsTotal    *prometheus.CounterVec
+	migrationDuration  prometheus.Histogram
+	activeMigrations   prometheus.Gauge
 }
 
 // NewMetrics creates a new Metrics instance with all metrics registered.
@@ -199,6 +204,31 @@ func NewMetrics() *Metrics {
 			Name:      "stale_cleared_total",
 			Help:      "Total stale attachments cleared by reconciler",
 		}),
+
+		migrationsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Subsystem: "migration",
+				Name:      "migrations_total",
+				Help:      "Total number of KubeVirt live migrations by result",
+			},
+			[]string{"result"}, // success, failed, timeout
+		),
+
+		migrationDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "migration",
+			Name:      "duration_seconds",
+			Help:      "Duration of KubeVirt live migrations in seconds",
+			Buckets:   []float64{15, 30, 60, 90, 120, 180, 300, 600},
+		}),
+
+		activeMigrations: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: "migration",
+			Name:      "active_migrations",
+			Help:      "Number of currently in-progress KubeVirt live migrations",
+		}),
 	}
 
 	// Register all metrics with the custom registry
@@ -220,6 +250,9 @@ func NewMetrics() *Metrics {
 		m.attachmentOpDuration,
 		m.attachmentGracePeriodUsed,
 		m.attachmentStaleCleared,
+		m.migrationsTotal,
+		m.migrationDuration,
+		m.activeMigrations,
 	)
 
 	return m
@@ -336,4 +369,19 @@ func (m *Metrics) RecordStaleAttachmentCleared() {
 // action should be "clear_stale" or "sync_annotation".
 func (m *Metrics) RecordReconcileAction(action string) {
 	m.attachmentReconcileTotal.WithLabelValues(action).Inc()
+}
+
+// RecordMigrationStarted records the start of a KubeVirt live migration.
+// Increments the active migrations gauge.
+func (m *Metrics) RecordMigrationStarted() {
+	m.activeMigrations.Inc()
+}
+
+// RecordMigrationResult records the completion of a KubeVirt live migration.
+// result must be one of: "success", "failed", "timeout".
+// Increments the migrations counter, observes duration, and decrements active gauge.
+func (m *Metrics) RecordMigrationResult(result string, duration time.Duration) {
+	m.migrationsTotal.WithLabelValues(result).Inc()
+	m.migrationDuration.Observe(duration.Seconds())
+	m.activeMigrations.Dec()
 }

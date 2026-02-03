@@ -3,6 +3,7 @@ package driver
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseNVMEConnectionParams_Defaults(t *testing.T) {
@@ -221,5 +222,103 @@ func TestDefaultNVMEConnectionParams(t *testing.T) {
 	}
 	if params.KeepAliveTmo != 0 {
 		t.Errorf("Expected KeepAliveTmo=0, got %d", params.KeepAliveTmo)
+	}
+}
+
+func TestParseMigrationTimeout(t *testing.T) {
+	tests := []struct {
+		name           string
+		params         map[string]string
+		expectedMin    time.Duration
+		expectedMax    time.Duration
+		expectDefault  bool
+	}{
+		{
+			name:          "not specified - returns default",
+			params:        map[string]string{},
+			expectedMin:   DefaultMigrationTimeout,
+			expectedMax:   DefaultMigrationTimeout,
+			expectDefault: true,
+		},
+		{
+			name:          "empty string - returns default",
+			params:        map[string]string{"migrationTimeoutSeconds": ""},
+			expectedMin:   DefaultMigrationTimeout,
+			expectedMax:   DefaultMigrationTimeout,
+			expectDefault: true,
+		},
+		{
+			name:        "valid value - 300 seconds",
+			params:      map[string]string{"migrationTimeoutSeconds": "300"},
+			expectedMin: 300 * time.Second,
+			expectedMax: 300 * time.Second,
+		},
+		{
+			name:        "valid value - 600 seconds",
+			params:      map[string]string{"migrationTimeoutSeconds": "600"},
+			expectedMin: 600 * time.Second,
+			expectedMax: 600 * time.Second,
+		},
+		{
+			name:          "invalid - not a number",
+			params:        map[string]string{"migrationTimeoutSeconds": "abc"},
+			expectedMin:   DefaultMigrationTimeout,
+			expectedMax:   DefaultMigrationTimeout,
+			expectDefault: true,
+		},
+		{
+			name:          "invalid - negative",
+			params:        map[string]string{"migrationTimeoutSeconds": "-300"},
+			expectedMin:   DefaultMigrationTimeout,
+			expectedMax:   DefaultMigrationTimeout,
+			expectDefault: true,
+		},
+		{
+			name:          "invalid - zero",
+			params:        map[string]string{"migrationTimeoutSeconds": "0"},
+			expectedMin:   DefaultMigrationTimeout,
+			expectedMax:   DefaultMigrationTimeout,
+			expectDefault: true,
+		},
+		{
+			name:        "clamped - too short (10s -> 30s min)",
+			params:      map[string]string{"migrationTimeoutSeconds": "10"},
+			expectedMin: MinMigrationTimeout,
+			expectedMax: MinMigrationTimeout,
+		},
+		{
+			name:        "clamped - too long (7200s -> 3600s max)",
+			params:      map[string]string{"migrationTimeoutSeconds": "7200"},
+			expectedMin: MaxMigrationTimeout,
+			expectedMax: MaxMigrationTimeout,
+		},
+		{
+			name:        "boundary - exactly min (30s)",
+			params:      map[string]string{"migrationTimeoutSeconds": "30"},
+			expectedMin: 30 * time.Second,
+			expectedMax: 30 * time.Second,
+		},
+		{
+			name:        "boundary - exactly max (3600s)",
+			params:      map[string]string{"migrationTimeoutSeconds": "3600"},
+			expectedMin: 3600 * time.Second,
+			expectedMax: 3600 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ParseMigrationTimeout(tt.params)
+
+			if result < tt.expectedMin || result > tt.expectedMax {
+				t.Errorf("ParseMigrationTimeout() = %v, want between %v and %v",
+					result, tt.expectedMin, tt.expectedMax)
+			}
+
+			if tt.expectDefault && result != DefaultMigrationTimeout {
+				t.Errorf("ParseMigrationTimeout() = %v, want default %v",
+					result, DefaultMigrationTimeout)
+			}
+		})
 	}
 }

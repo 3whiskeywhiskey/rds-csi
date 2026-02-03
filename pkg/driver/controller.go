@@ -112,19 +112,23 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
 		}
 
+		// Parse migration timeout
+		migrationTimeout := ParseMigrationTimeout(params)
+
 		return &csi.CreateVolumeResponse{
 			Volume: &csi.Volume{
 				VolumeId:      volumeID,
 				CapacityBytes: existingVolume.FileSizeBytes,
 				VolumeContext: map[string]string{
-					"rdsAddress":     cs.getRDSAddress(params),
-					"nvmeAddress":    cs.getNVMEAddress(params),
-					"nvmePort":       fmt.Sprintf("%d", existingVolume.NVMETCPPort),
-					"nqn":            existingVolume.NVMETCPNQN,
-					"volumePath":     existingVolume.FilePath,
-					"ctrlLossTmo":    fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
-					"reconnectDelay": fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
-					"keepAliveTmo":   fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+					"rdsAddress":              cs.getRDSAddress(params),
+					"nvmeAddress":             cs.getNVMEAddress(params),
+					"nvmePort":                fmt.Sprintf("%d", existingVolume.NVMETCPPort),
+					"nqn":                     existingVolume.NVMETCPNQN,
+					"volumePath":              existingVolume.FilePath,
+					"ctrlLossTmo":             fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+					"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+					"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+					"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
 				},
 			},
 		}, nil
@@ -152,6 +156,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
 	}
+
+	// Parse migration timeout
+	migrationTimeout := ParseMigrationTimeout(params)
 
 	// Generate NQN
 	nqn, err := utils.VolumeIDToNQN(volumeID)
@@ -203,14 +210,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			VolumeId:      volumeID,
 			CapacityBytes: requiredBytes,
 			VolumeContext: map[string]string{
-				"rdsAddress":     cs.getRDSAddress(params),
-				"nvmeAddress":    cs.getNVMEAddress(params),
-				"nvmePort":       fmt.Sprintf("%d", nvmePort),
-				"nqn":            nqn,
-				"volumePath":     filePath,
-				"ctrlLossTmo":    fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
-				"reconnectDelay": fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
-				"keepAliveTmo":   fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+				"rdsAddress":              cs.getRDSAddress(params),
+				"nvmeAddress":             cs.getNVMEAddress(params),
+				"nvmePort":                fmt.Sprintf("%d", nvmePort),
+				"nqn":                     nqn,
+				"volumePath":              filePath,
+				"ctrlLossTmo":             fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+				"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+				"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+				"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
 			},
 		},
 	}, nil
@@ -463,6 +471,17 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Determine access mode from VolumeCapability (singular, not slice)
+	// ControllerPublishVolume uses GetVolumeCapability() which returns a single capability
+	accessMode := "RWO"
+	isRWX := false
+	if cap := req.GetVolumeCapability(); cap != nil {
+		if cap.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			accessMode = "RWX"
+			isRWX = true
+		}
+	}
+
 	// Acquire per-VMI lock if serialization is enabled
 	// This prevents concurrent volume operations on the same VMI from racing
 	if vmiGrouper := cs.driver.GetVMIGrouper(); vmiGrouper != nil {
@@ -497,15 +516,107 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	// Check existing attachment
 	existing, exists := am.GetAttachment(volumeID)
 	if exists {
-		if existing.NodeID == nodeID {
-			// CSI-01: Idempotent - already attached to same node
+		// Check if already attached to requesting node (idempotent)
+		if am.IsAttachedToNode(volumeID, nodeID) {
 			klog.V(2).Infof("Volume %s already attached to node %s (idempotent)", volumeID, nodeID)
 			return &csi.ControllerPublishVolumeResponse{
 				PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
 			}, nil
 		}
 
-		// Different node - check grace period FIRST
+		// Different node - behavior depends on access mode
+		if isRWX {
+			// RWX: Allow second attachment if within limit
+			nodeCount := am.GetNodeCount(volumeID)
+			if nodeCount >= 2 {
+				// ROADMAP-5: 2-node migration limit reached
+				klog.Warningf("RWX volume %s already attached to 2 nodes, rejecting 3rd attachment to %s",
+					volumeID, nodeID)
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Volume %s already attached to 2 nodes (migration limit). Wait for migration to complete. Attached nodes: %v",
+					volumeID, existing.GetNodeIDs())
+			}
+
+			// SAFETY-01: Check if existing migration has timed out
+			// This prevents indefinite dual-attach if migration fails
+			if existing.IsMigrationTimedOut() {
+				elapsed := time.Since(*existing.MigrationStartedAt)
+				klog.Warningf("RWX volume %s migration timed out (%v elapsed, %v max), rejecting new secondary attachment",
+					volumeID, elapsed, existing.MigrationTimeout)
+
+				// Record timeout metric
+				if cs.driver.metrics != nil {
+					cs.driver.metrics.RecordMigrationResult("timeout", elapsed)
+				}
+
+				// Post migration failed event
+				if cs.driver.k8sClient != nil {
+					volCtx := req.GetVolumeContext()
+					pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+					pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+					if pvcNamespace != "" && pvcName != "" && len(existing.Nodes) >= 2 {
+						sourceNode := existing.Nodes[0].NodeID
+						targetNode := existing.Nodes[1].NodeID
+						eventPoster := NewEventPoster(cs.driver.k8sClient)
+						if err := eventPoster.PostMigrationFailed(ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, "timeout", elapsed); err != nil {
+							klog.Warningf("Failed to post migration failed event: %v", err)
+						}
+					}
+				}
+
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Volume %s migration timeout exceeded (%v elapsed, %v max). "+
+					"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
+					volumeID, elapsed.Round(time.Second), existing.MigrationTimeout)
+			}
+
+			// Parse migration timeout from VolumeContext
+			volCtx := req.GetVolumeContext()
+			migrationTimeoutParams := map[string]string{
+				"migrationTimeoutSeconds": volCtx["migrationTimeoutSeconds"],
+			}
+			migrationTimeout := ParseMigrationTimeout(migrationTimeoutParams)
+
+			// Allow second attachment for migration
+			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target, timeout=%v)", volumeID, nodeID, migrationTimeout)
+
+			// Capture source node before adding secondary attachment
+			sourceNode := existing.Nodes[0].NodeID
+
+			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID, migrationTimeout); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to track secondary attachment: %v", err)
+			}
+
+			// Record RWX dual-attach (distinct from RWO conflict)
+			if cs.driver.metrics != nil {
+				cs.driver.metrics.RecordAttachmentOp("attach_secondary", nil, time.Since(startTime))
+			}
+
+			// Post migration started event
+			if cs.driver.k8sClient != nil {
+				pvcNamespace := volCtx["csi.storage.k8s.io/pvc/namespace"]
+				pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
+				if pvcNamespace != "" && pvcName != "" {
+					eventPoster := NewEventPoster(cs.driver.k8sClient)
+					if err := eventPoster.PostMigrationStarted(ctx, pvcNamespace, pvcName, volumeID, sourceNode, nodeID, migrationTimeout); err != nil {
+						klog.Warningf("Failed to post migration started event: %v", err)
+					}
+				}
+			}
+
+			return &csi.ControllerPublishVolumeResponse{
+				PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
+			}, nil
+		}
+
+		// RWO: Fail immediately for dual-attach attempts
+		// SAFETY-02: Grace period is ONLY for reattachment AFTER detach
+		// It does NOT allow concurrent multi-node attachment like RWX
+		// This distinction is critical: grace period tolerates network blips during
+		// pod migration where old pod dies before new pod starts. It does NOT
+		// enable live migration where both nodes need simultaneous access.
+
+		// RWO: Check grace period first
 		gracePeriod := cs.driver.GetAttachmentGracePeriod()
 		if gracePeriod > 0 && am.IsWithinGracePeriod(volumeID, gracePeriod) {
 			klog.V(2).Infof("Volume %s within grace period, allowing attachment handoff from %s to %s",
@@ -540,8 +651,8 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				}
 				// Fall through to allow new attachment
 			} else {
-				// CSI-02: Node exists - genuine RWO conflict
-				klog.Warningf("Volume %s already attached to node %s, rejecting attachment to node %s",
+				// CSI-02: Node exists - genuine RWO conflict - hint about RWX
+				klog.Warningf("RWO volume %s already attached to node %s, rejecting attachment to node %s",
 					volumeID, existing.NodeID, nodeID)
 
 				// Post event for operator visibility (best effort)
@@ -553,16 +664,16 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 				}
 
 				return nil, status.Errorf(codes.FailedPrecondition,
-					"volume %s already attached to node %s, cannot attach to %s",
-					volumeID, existing.NodeID, nodeID)
+					"Volume %s already attached to node %s. For multi-node access, use RWX with block volumes.",
+					volumeID, existing.NodeID)
 			}
 		}
 	}
 
-	// Track new attachment (uses per-volume lock internally)
-	if err := am.TrackAttachment(ctx, volumeID, nodeID); err != nil {
+	// No existing attachment - track new primary attachment with access mode
+	if err := am.TrackAttachmentWithMode(ctx, volumeID, nodeID, accessMode); err != nil {
 		// Check if this is a conflict (race condition - another request won)
-		if existing, exists := am.GetAttachment(volumeID); exists && existing.NodeID != nodeID {
+		if existing, exists := am.GetAttachment(volumeID); exists && !am.IsAttachedToNode(volumeID, nodeID) {
 			if cs.driver.metrics != nil {
 				cs.driver.metrics.RecordAttachmentConflict()
 			}
@@ -617,22 +728,70 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
-	// CSI-03: Untrack attachment (idempotent - succeeds even if not tracked)
-	if err := am.UntrackAttachment(ctx, volumeID); err != nil {
-		// Log but don't fail - unpublish must be idempotent (CONTEXT.md decision)
-		klog.Warningf("Error untracking attachment for volume %s: %v (returning success)", volumeID, err)
+	// Before removing attachment, capture migration state for event posting
+	var wasMigrating bool
+	var sourceNode, targetNode string
+	var migrationStartedAt time.Time
+	if existing, found := am.GetAttachment(volumeID); found && existing.IsMigrating() {
+		wasMigrating = true
+		// Identify which node is being removed (source) and which remains (target)
+		if len(existing.Nodes) == 2 {
+			// Node being removed is the source
+			if existing.Nodes[0].NodeID == nodeID {
+				sourceNode = existing.Nodes[0].NodeID
+				targetNode = existing.Nodes[1].NodeID
+			} else if existing.Nodes[1].NodeID == nodeID {
+				sourceNode = existing.Nodes[1].NodeID
+				targetNode = existing.Nodes[0].NodeID
+			}
+			// Copy migration start time before it's cleared by RemoveNodeAttachment
+			if existing.MigrationStartedAt != nil {
+				migrationStartedAt = *existing.MigrationStartedAt
+			}
+		}
 	}
 
-	// Record detachment metric
-	if cs.driver.metrics != nil {
-		cs.driver.metrics.RecordAttachmentOp("detach", nil, time.Since(startTime))
+	// Remove this node's attachment (handles both RWO and RWX)
+	fullyDetached, err := am.RemoveNodeAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		klog.Warningf("Error removing node attachment for volume %s: %v (returning success)", volumeID, err)
 	}
 
-	// Post detachment event (best effort)
-	cs.postVolumeDetachedEvent(ctx, req)
+	if fullyDetached {
+		// Record detachment metric
+		if cs.driver.metrics != nil {
+			cs.driver.metrics.RecordAttachmentOp("detach", nil, time.Since(startTime))
+		}
+		cs.postVolumeDetachedEvent(ctx, req)
+	} else {
+		// Partial detach (RWX migration - one node still attached)
+		klog.V(2).Infof("Volume %s partially detached from node %s, other node(s) still attached", volumeID, nodeID)
+		if cs.driver.metrics != nil {
+			cs.driver.metrics.RecordAttachmentOp("detach_partial", nil, time.Since(startTime))
+		}
 
-	klog.V(2).Infof("Successfully unpublished volume %s", volumeID)
+		// Check if this was a migration completion (partial detach = source node removed, target remains)
+		if wasMigrating && cs.driver.k8sClient != nil && sourceNode != "" && targetNode != "" {
+			duration := time.Since(migrationStartedAt)
 
+			// Look up PV to get PVC reference
+			pv, err := cs.driver.k8sClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+			if err == nil && pv.Spec.ClaimRef != nil {
+				pvcNamespace := pv.Spec.ClaimRef.Namespace
+				pvcName := pv.Spec.ClaimRef.Name
+				if pvcNamespace != "" && pvcName != "" {
+					eventPoster := NewEventPoster(cs.driver.k8sClient)
+					if err := eventPoster.PostMigrationCompleted(ctx, pvcNamespace, pvcName, volumeID, sourceNode, targetNode, duration); err != nil {
+						klog.Warningf("Failed to post migration completed event: %v", err)
+					}
+				}
+			} else {
+				klog.V(3).Infof("Could not get PVC for migration completed event: %v", err)
+			}
+		}
+	}
+
+	klog.V(2).Infof("Successfully unpublished volume %s from node %s", volumeID, nodeID)
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
@@ -781,6 +940,18 @@ func (cs *ControllerServer) validateVolumeCapabilities(caps []*csi.VolumeCapabil
 		// Check access type (must be block or mount)
 		if cap.GetBlock() == nil && cap.GetMount() == nil {
 			return fmt.Errorf("volume capability must specify either block or mount")
+		}
+
+		// RWX block-only validation (ROADMAP-4)
+		// RWX with filesystem volumes risks data corruption - reject with actionable error
+		if accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			if cap.GetMount() != nil {
+				return fmt.Errorf("RWX access mode requires volumeMode: Block. " +
+					"Filesystem volumes risk data corruption with multi-node access. " +
+					"For KubeVirt VM live migration, use volumeMode: Block in your PVC")
+			}
+			// Log valid RWX block usage for debugging/auditing
+			klog.V(2).Info("RWX block volume capability validated (KubeVirt live migration use case)")
 		}
 	}
 
