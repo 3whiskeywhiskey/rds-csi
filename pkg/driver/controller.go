@@ -112,19 +112,23 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
 		}
 
+		// Parse migration timeout
+		migrationTimeout := ParseMigrationTimeout(params)
+
 		return &csi.CreateVolumeResponse{
 			Volume: &csi.Volume{
 				VolumeId:      volumeID,
 				CapacityBytes: existingVolume.FileSizeBytes,
 				VolumeContext: map[string]string{
-					"rdsAddress":     cs.getRDSAddress(params),
-					"nvmeAddress":    cs.getNVMEAddress(params),
-					"nvmePort":       fmt.Sprintf("%d", existingVolume.NVMETCPPort),
-					"nqn":            existingVolume.NVMETCPNQN,
-					"volumePath":     existingVolume.FilePath,
-					"ctrlLossTmo":    fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
-					"reconnectDelay": fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
-					"keepAliveTmo":   fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+					"rdsAddress":              cs.getRDSAddress(params),
+					"nvmeAddress":             cs.getNVMEAddress(params),
+					"nvmePort":                fmt.Sprintf("%d", existingVolume.NVMETCPPort),
+					"nqn":                     existingVolume.NVMETCPNQN,
+					"volumePath":              existingVolume.FilePath,
+					"ctrlLossTmo":             fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+					"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+					"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+					"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
 				},
 			},
 		}, nil
@@ -152,6 +156,9 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
 	}
+
+	// Parse migration timeout
+	migrationTimeout := ParseMigrationTimeout(params)
 
 	// Generate NQN
 	nqn, err := utils.VolumeIDToNQN(volumeID)
@@ -203,14 +210,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			VolumeId:      volumeID,
 			CapacityBytes: requiredBytes,
 			VolumeContext: map[string]string{
-				"rdsAddress":     cs.getRDSAddress(params),
-				"nvmeAddress":    cs.getNVMEAddress(params),
-				"nvmePort":       fmt.Sprintf("%d", nvmePort),
-				"nqn":            nqn,
-				"volumePath":     filePath,
-				"ctrlLossTmo":    fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
-				"reconnectDelay": fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
-				"keepAliveTmo":   fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+				"rdsAddress":              cs.getRDSAddress(params),
+				"nvmeAddress":             cs.getNVMEAddress(params),
+				"nvmePort":                fmt.Sprintf("%d", nvmePort),
+				"nqn":                     nqn,
+				"volumePath":              filePath,
+				"ctrlLossTmo":             fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+				"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+				"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+				"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
 			},
 		},
 	}, nil
@@ -529,9 +537,16 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 					volumeID, existing.GetNodeIDs())
 			}
 
+			// Parse migration timeout from VolumeContext
+			volCtx := req.GetVolumeContext()
+			migrationTimeoutParams := map[string]string{
+				"migrationTimeoutSeconds": volCtx["migrationTimeoutSeconds"],
+			}
+			migrationTimeout := ParseMigrationTimeout(migrationTimeoutParams)
+
 			// Allow second attachment for migration
 			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target)", volumeID, nodeID)
-			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID); err != nil {
+			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID, migrationTimeout); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to track secondary attachment: %v", err)
 			}
 

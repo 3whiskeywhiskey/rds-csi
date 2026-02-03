@@ -658,7 +658,7 @@ func TestAttachmentManager_AddSecondaryAttachment(t *testing.T) {
 			name: "idempotent - same node already attached",
 			setup: func(am *AttachmentManager) {
 				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
-				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2", 5*time.Minute)
 			},
 			volumeID:    "vol-1",
 			nodeID:      "node-2",
@@ -668,7 +668,7 @@ func TestAttachmentManager_AddSecondaryAttachment(t *testing.T) {
 			name: "reject 3rd attachment - migration limit",
 			setup: func(am *AttachmentManager) {
 				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
-				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2", 5*time.Minute)
 			},
 			volumeID:      "vol-1",
 			nodeID:        "node-3",
@@ -690,7 +690,7 @@ func TestAttachmentManager_AddSecondaryAttachment(t *testing.T) {
 			am := NewAttachmentManager(nil)
 			tc.setup(am)
 
-			err := am.AddSecondaryAttachment(context.Background(), tc.volumeID, tc.nodeID)
+			err := am.AddSecondaryAttachment(context.Background(), tc.volumeID, tc.nodeID, 5*time.Minute)
 
 			if tc.expectError {
 				if err == nil {
@@ -730,7 +730,7 @@ func TestAttachmentManager_RemoveNodeAttachment(t *testing.T) {
 			name: "remove secondary node - one remaining",
 			setup: func(am *AttachmentManager) {
 				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
-				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2", 5*time.Minute)
 			},
 			volumeID:        "vol-1",
 			nodeID:          "node-2",
@@ -741,7 +741,7 @@ func TestAttachmentManager_RemoveNodeAttachment(t *testing.T) {
 			name: "remove primary node - secondary promoted",
 			setup: func(am *AttachmentManager) {
 				_ = am.TrackAttachmentWithMode(context.Background(), "vol-1", "node-1", "RWX")
-				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2")
+				_ = am.AddSecondaryAttachment(context.Background(), "vol-1", "node-2", 5*time.Minute)
 			},
 			volumeID:        "vol-1",
 			nodeID:          "node-1",
