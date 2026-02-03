@@ -641,6 +641,14 @@ func (c *connector) DisconnectWithContext(ctx context.Context, nqn string) error
 		return fmt.Errorf("invalid NQN: %w", err)
 	}
 
+	// CRITICAL: Only disconnect CSI-managed volumes to prevent bricking nodes
+	// System volumes (e.g., nixos-*) must never be disconnected by the CSI driver
+	// TODO: Make this prefix configurable via driver flag
+	if !strings.HasPrefix(nqn, "nqn.2000-02.com.mikrotik:pvc-") {
+		klog.Warningf("Refusing to disconnect non-CSI volume: %s (expected pvc-* prefix)", nqn)
+		return fmt.Errorf("refusing to disconnect non-CSI volume: %s (only pvc-* volumes are managed by this driver)", nqn)
+	}
+
 	// Apply timeout from config if no deadline set
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc

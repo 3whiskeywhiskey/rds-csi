@@ -3,6 +3,7 @@ package nvme
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/klog/v2"
 
@@ -45,6 +46,14 @@ func (oc *OrphanCleaner) CleanupOrphanedConnections(ctx context.Context) error {
 
 	orphanCount := 0
 	for _, nqn := range nqns {
+		// CRITICAL: Only manage CSI volumes (pvc-*), skip system volumes (nixos-*, etc.)
+		// This prevents accidentally disconnecting system mounts like /var that use NVMe-oF
+		// TODO: Make this prefix configurable via driver flag for flexibility
+		if !strings.HasPrefix(nqn, "nqn.2000-02.com.mikrotik:pvc-") {
+			klog.V(4).Infof("Skipping non-CSI volume (system or non-managed): %s", nqn)
+			continue
+		}
+
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
