@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 // TestHardwareIntegration tests against a real RDS server
@@ -56,6 +57,13 @@ func TestHardwareIntegration(t *testing.T) {
 	if basePath := os.Getenv("RDS_VOLUME_BASE_PATH"); basePath != "" {
 		volumeBasePath = basePath
 	}
+
+	// Set up allowed base paths for testing
+	utils.ResetAllowedBasePaths()
+	if err := utils.SetAllowedBasePath(volumeBasePath); err != nil {
+		t.Fatalf("Failed to set allowed base path: %v", err)
+	}
+	t.Cleanup(utils.ResetAllowedBasePaths)
 
 	t.Logf("Testing with real RDS hardware:")
 	t.Logf("  Address: %s", address)

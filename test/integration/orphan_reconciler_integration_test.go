@@ -11,11 +11,18 @@ import (
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 	"git.srvlab.io/whiskey/rds-csi-driver/test/mock"
 )
 
 // TestOrphanReconciler_WithMockRDS tests the orphan reconciler with the mock RDS server
 func TestOrphanReconciler_WithMockRDS(t *testing.T) {
+	// Set up allowed base paths for testing
+	utils.ResetAllowedBasePaths()
+	if err := utils.SetAllowedBasePath("/storage-pool/metal-csi"); err != nil {
+		t.Fatalf("Failed to set allowed base path: %v", err)
+	}
+	t.Cleanup(utils.ResetAllowedBasePaths)
 	// Start mock RDS server
 	mockRDS, err := mock.NewMockRDSServer(12223)
 	if err != nil {
