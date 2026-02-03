@@ -794,6 +794,113 @@ func TestControllerUnpublishVolume_EmptyNodeID(t *testing.T) {
 	}
 }
 
+func TestControllerUnpublishVolume_MigrationCompleted(t *testing.T) {
+	// Test that ControllerUnpublishVolume posts MigrationCompleted event
+	// when source node detaches during an active migration
+	ctx := context.Background()
+
+	// Create PV with ClaimRef for event posting
+	volumeID := testVolumeID8
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: volumeID,
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef: &corev1.ObjectReference{
+				Namespace: "default",
+				Name:      "test-pvc",
+			},
+		},
+	}
+
+	// Create PVC for event posting
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "default",
+		},
+	}
+
+	// Create controller with PV and PVC
+	cs, mockRDS := testControllerServer(t)
+	// Add PV and PVC to fake clientset
+	_, err := cs.driver.k8sClient.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to create test PV: %v", err)
+	}
+	_, err = cs.driver.k8sClient.CoreV1().PersistentVolumeClaims("default").Create(ctx, pvc, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to create test PVC: %v", err)
+	}
+
+	// Add volume to mock RDS
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot: volumeID,
+	})
+
+	// Set up migration scenario: volume attached to two nodes (RWX migration)
+	am := cs.driver.GetAttachmentManager()
+
+	// Add primary attachment (source node) with RWX mode
+	err = am.TrackAttachmentWithMode(ctx, volumeID, "node-1", "RWX")
+	if err != nil {
+		t.Fatalf("Failed to track primary attachment: %v", err)
+	}
+
+	// Add secondary attachment (migration target)
+	err = am.AddSecondaryAttachment(ctx, volumeID, "node-2", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to add secondary attachment: %v", err)
+	}
+
+	// Verify migration state is active
+	state, found := am.GetAttachment(volumeID)
+	if !found {
+		t.Fatal("Volume should have attachment state")
+	}
+	if !state.IsMigrating() {
+		t.Fatal("Volume should be in migration state")
+	}
+	if len(state.Nodes) != 2 {
+		t.Fatalf("Expected 2 nodes, got %d", len(state.Nodes))
+	}
+
+	// Sleep briefly to ensure migration duration is measurable
+	time.Sleep(100 * time.Millisecond)
+
+	// Unpublish from source node (completes migration)
+	req := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: volumeID,
+		NodeId:   "node-1", // Remove source node
+	}
+
+	_, err = cs.ControllerUnpublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("ControllerUnpublishVolume failed: %v", err)
+	}
+
+	// Verify partial detach (target node remains)
+	state, found = am.GetAttachment(volumeID)
+	if !found {
+		t.Fatal("Volume should still have attachment state")
+	}
+	if len(state.Nodes) != 1 {
+		t.Fatalf("Expected 1 node after partial detach, got %d", len(state.Nodes))
+	}
+	if state.Nodes[0].NodeID != "node-2" {
+		t.Errorf("Expected target node-2 to remain, got %s", state.Nodes[0].NodeID)
+	}
+
+	// Verify migration state is cleared
+	if state.IsMigrating() {
+		t.Error("Migration state should be cleared after unpublish")
+	}
+
+	// Event posting is best-effort, so we just verify the code path executed
+	// without error. The event itself is tested in events_test.go
+	t.Log("Migration completed event code path executed successfully")
+}
+
 // ========================================
 // RWX Capability Tests (Phase 08-03)
 // ========================================
