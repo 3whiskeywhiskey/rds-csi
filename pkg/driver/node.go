@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -435,6 +436,62 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
+
+	// Detect volume mode early
+	isBlockVolume := req.GetVolumeCapability().GetBlock() != nil
+
+	if isBlockVolume {
+		// Block volume: read device path from staging metadata and bind mount to target file
+
+		// Read device path from staging metadata (written by NodeStageVolume)
+		metadataPath := filepath.Join(stagingPath, "device")
+		deviceBytes, err := os.ReadFile(metadataPath)
+		if err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"failed to read device metadata from staging path %s: %v (was NodeStageVolume called?)",
+				stagingPath, err)
+		}
+		devicePath := strings.TrimSpace(string(deviceBytes))
+
+		// Verify device exists before attempting mount
+		if _, err := os.Stat(devicePath); err != nil {
+			return nil, status.Errorf(codes.Internal, "block device not found: %s", devicePath)
+		}
+
+		klog.V(2).Infof("Publishing block volume %s: device %s -> target %s", volumeID, devicePath, targetPath)
+
+		// Log volume publish request
+		secLogger := security.GetLogger()
+		secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeUnknown, nil, 0)
+		startTime := time.Now()
+
+		// Create target FILE (not directory) - kubelet creates parent directory
+		// CSI spec: target_path for block volumes must be a file
+		if err := ns.mounter.MakeFile(targetPath); err != nil {
+			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to create target file: %v", err)
+		}
+
+		// Bind mount device to target file
+		mountOptions := []string{"bind"}
+		if req.GetReadonly() {
+			mountOptions = append(mountOptions, "ro")
+		}
+
+		// Use empty fstype for bind mount of block device
+		if err := ns.mounter.Mount(devicePath, targetPath, "", mountOptions); err != nil {
+			// Clean up created file on failure
+			_ = os.Remove(targetPath)
+			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to bind mount block device: %v", err)
+		}
+
+		klog.V(2).Infof("Successfully published block volume %s to %s", volumeID, targetPath)
+		secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	// Filesystem volume: existing bind mount from staging to target
 
 	// Check if staging path is mounted
 	mounted, err := ns.mounter.IsLikelyMountPoint(stagingPath)
