@@ -181,7 +181,7 @@ Plans:
 
 **Milestone Goal:** Systematic codebase cleanup to improve maintainability, reduce log noise, and eliminate technical debt
 
-**Status:** Phase 17 complete, Phase 18 in progress (5 plans, 4 complete, 1 gap closure)
+**Status:** Phase 17-18 complete, Phase 19 not started
 
 ---
 
@@ -221,14 +221,14 @@ Plans:
 4. V(3) usage eliminated or explicitly documented
 5. Production logs contain only actionable information at V(2) level
 
-**Plans**: 5 plans (4 complete + 1 gap closure)
+**Plans**: 5 plans (all complete)
 
 Plans:
 - [x] 18-01-PLAN.md — Consolidate security logger with table-driven helper
 - [x] 18-02-PLAN.md — Rationalize pkg/rds and controller verbosity
 - [x] 18-03-PLAN.md — Mount package verbosity rationalization
 - [x] 18-04-PLAN.md — Node and reconciler verbosity, documentation
-- [ ] 18-05-PLAN.md — Gap closure: eliminate remaining V(3) in nvme/utils/circuitbreaker
+- [x] 18-05-PLAN.md — Gap closure: eliminate remaining V(3) in nvme/utils/circuitbreaker
 
 ---
 
@@ -322,7 +322,7 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 15. VolumeAttachment-Based State Rebuild | v0.7.0 | 4/4 | Complete | 2026-02-04 |
 | 16. Migration Metrics Emission | v0.7.0 | 1/1 | Complete | 2026-02-04 |
 | 17. Test Infrastructure Fix | v0.7.1 | 1/1 | Complete | 2026-02-04 |
-| 18. Logging Cleanup | v0.7.1 | 4/5 | In progress | - |
+| 18. Logging Cleanup | v0.7.1 | 5/5 | Complete | 2026-02-04 |
 | 19. Error Handling Standardization | v0.7.1 | 0/? | Not started | - |
 | 20. Test Coverage Expansion | v0.7.1 | 0/? | Not started | - |
 | 21. Code Quality Improvements | v0.7.1 | 0/? | Not started | - |
