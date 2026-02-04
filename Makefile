@@ -195,6 +195,29 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
+# Coverage enforcement
+.PHONY: test-coverage-check install-coverage-tool
+
+# Install go-test-coverage tool
+install-coverage-tool:
+	@echo "Installing go-test-coverage..."
+	go install github.com/vladopajic/go-test-coverage/v2@latest
+
+# Run tests with coverage and check thresholds
+test-coverage-check: install-coverage-tool
+	@echo "Running tests with coverage..."
+	go test -coverprofile=coverage.out -covermode=atomic ./pkg/...
+	@echo "Checking coverage thresholds..."
+	go-test-coverage --config=.go-test-coverage.yml --profile=coverage.out
+	@echo "Coverage check passed!"
+
+# Generate coverage report without enforcement (for local development)
+test-coverage-report:
+	go test -coverprofile=coverage.out -covermode=atomic ./pkg/...
+	go tool cover -func=coverage.out
+	@echo ""
+	@echo "For HTML report: go tool cover -html=coverage.out"
+
 # Integration Testing
 .PHONY: test-integration
 test-integration:
