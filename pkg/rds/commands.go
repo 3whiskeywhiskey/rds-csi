@@ -14,8 +14,6 @@ import (
 
 // CreateVolume creates a file-backed NVMe/TCP volume on RDS
 func (c *sshClient) CreateVolume(opts CreateVolumeOptions) error {
-	klog.V(2).Infof("Creating volume %s (size: %d bytes, path: %s)", opts.Slot, opts.FileSizeBytes, opts.FilePath)
-
 	// Validate options
 	if err := validateCreateVolumeOptions(opts); err != nil {
 		return fmt.Errorf("invalid volume options: %w", err)
@@ -45,14 +43,13 @@ func (c *sshClient) CreateVolume(opts CreateVolumeOptions) error {
 		return fmt.Errorf("volume creation verification failed: %w", err)
 	}
 
-	klog.V(2).Infof("Successfully created volume %s", opts.Slot)
+	klog.V(2).Infof("Created volume %s", opts.Slot)
+	klog.V(4).Infof("Created volume %s (path=%s, size=%d, nqn=%s)", opts.Slot, opts.FilePath, opts.FileSizeBytes, opts.NVMETCPNQN)
 	return nil
 }
 
 // ResizeVolume resizes an existing volume on RDS
 func (c *sshClient) ResizeVolume(slot string, newSizeBytes int64) error {
-	klog.V(2).Infof("Resizing volume %s to %d bytes", slot, newSizeBytes)
-
 	// Validate slot name
 	if err := validateSlotName(slot); err != nil {
 		return err
@@ -77,7 +74,7 @@ func (c *sshClient) ResizeVolume(slot string, newSizeBytes int64) error {
 
 	// If size is the same, nothing to do
 	if newSizeBytes == currentVolume.FileSizeBytes {
-		klog.V(2).Infof("Volume %s is already at requested size, skipping resize", slot)
+		klog.V(4).Infof("Volume %s is already at requested size, skipping resize", slot)
 		return nil
 	}
 
@@ -99,14 +96,12 @@ func (c *sshClient) ResizeVolume(slot string, newSizeBytes int64) error {
 		return fmt.Errorf("failed to verify resize: %w", err)
 	}
 
-	klog.V(2).Infof("Successfully resized volume %s from %d to %d bytes", slot, currentVolume.FileSizeBytes, updatedVolume.FileSizeBytes)
+	klog.V(2).Infof("Resized volume %s (%d -> %d bytes)", slot, currentVolume.FileSizeBytes, updatedVolume.FileSizeBytes)
 	return nil
 }
 
 // DeleteVolume removes a volume from RDS, including both the disk slot and backing file
 func (c *sshClient) DeleteVolume(slot string) error {
-	klog.V(2).Infof("Deleting volume %s", slot)
-
 	// Validate slot name
 	if err := validateSlotName(slot); err != nil {
 		return err
@@ -117,14 +112,14 @@ func (c *sshClient) DeleteVolume(slot string) error {
 	if err != nil {
 		// If volume doesn't exist, that's okay (idempotent)
 		if strings.Contains(err.Error(), "not found") {
-			klog.V(3).Infof("Volume %s does not exist, skipping deletion", slot)
+			klog.V(4).Infof("Volume %s already deleted", slot)
 			return nil
 		}
 		return fmt.Errorf("failed to get volume info before deletion: %w", err)
 	}
 
 	filePath := volume.FilePath
-	klog.V(3).Infof("Volume %s has backing file: %s", slot, filePath)
+	klog.V(4).Infof("Volume %s has backing file: %s", slot, filePath)
 
 	// Step 1: Remove the disk slot
 	cmd := fmt.Sprintf(`/disk remove [find slot=%s]`, slot)
@@ -132,12 +127,12 @@ func (c *sshClient) DeleteVolume(slot string) error {
 	if err != nil {
 		// If volume doesn't exist, that's okay (idempotent)
 		if strings.Contains(err.Error(), "no such item") {
-			klog.V(3).Infof("Volume %s disk slot does not exist, continuing to file cleanup", slot)
+			klog.V(4).Infof("Volume %s disk slot does not exist, continuing to file cleanup", slot)
 		} else {
 			return fmt.Errorf("failed to remove disk slot: %w", err)
 		}
 	}
-	klog.V(3).Infof("Successfully removed disk slot for volume %s", slot)
+	klog.V(4).Infof("Successfully removed disk slot for volume %s", slot)
 
 	// Step 2: Delete the backing file
 	if filePath != "" {
@@ -146,11 +141,11 @@ func (c *sshClient) DeleteVolume(slot string) error {
 			// The orphan reconciler can clean up the file later if needed
 			klog.Warningf("Failed to delete backing file %s for volume %s: %v", filePath, slot, err)
 		} else {
-			klog.V(3).Infof("Successfully deleted backing file %s for volume %s", filePath, slot)
+			klog.V(4).Infof("Successfully deleted backing file %s for volume %s", filePath, slot)
 		}
 	}
 
-	klog.V(2).Infof("Successfully deleted volume %s", slot)
+	klog.V(2).Infof("Deleted volume %s", slot)
 	return nil
 }
 
