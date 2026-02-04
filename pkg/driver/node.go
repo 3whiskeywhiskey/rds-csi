@@ -817,7 +817,8 @@ func (ns *NodeServer) findAndCleanupOrphanedMounts(ctx context.Context, devicePa
 	klog.V(4).Infof("Searching for orphaned bind mounts to device %s", devicePath)
 
 	// Get all mounts with timeout to prevent hanging
-	mounts, err := ns.mounter.GetMountsWithTimeout(ctx, 10*time.Second)
+	// Uses package-level function from mount package
+	mounts, err := mount.GetMountsWithTimeout(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get mounts: %w", err)
 	}
@@ -825,16 +826,16 @@ func (ns *NodeServer) findAndCleanupOrphanedMounts(ctx context.Context, devicePa
 	cleanedCount := 0
 	for _, mnt := range mounts {
 		// Check if this mount's source is our device
-		// mnt.Device is the source device for the mount
-		if mnt.Device == devicePath {
-			klog.V(2).Infof("Found orphaned bind mount: %s -> %s", devicePath, mnt.Path)
+		// mnt.Source is the source device for the mount
+		if mnt.Source == devicePath {
+			klog.V(2).Infof("Found orphaned bind mount: %s -> %s", devicePath, mnt.Mountpoint)
 
 			// Unmount it (force if needed)
-			if err := ns.mounter.Unmount(mnt.Path); err != nil {
-				klog.Warningf("Failed to unmount orphaned mount %s: %v", mnt.Path, err)
+			if err := ns.mounter.Unmount(mnt.Mountpoint); err != nil {
+				klog.Warningf("Failed to unmount orphaned mount %s: %v", mnt.Mountpoint, err)
 				// Continue trying other mounts
 			} else {
-				klog.V(2).Infof("Successfully cleaned up orphaned mount %s", mnt.Path)
+				klog.V(2).Infof("Successfully cleaned up orphaned mount %s", mnt.Mountpoint)
 				cleanedCount++
 			}
 		}
