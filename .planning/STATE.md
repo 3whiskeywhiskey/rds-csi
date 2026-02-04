@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 21 of 21 (Code Quality Improvements)
-Plan: 1 of 4 complete
-Status: In progress - severity mapping refactored
-Last activity: 2026-02-04 — Completed 21-01-PLAN.md (severity mapping refactoring)
+Plan: 2 of 4 complete
+Status: In progress - complexity linters configured
+Last activity: 2026-02-04 — Completed 21-02-PLAN.md (complexity linter configuration)
 
-Progress: [████████████████████████████████░░░░░] 94% (76/81 total plans across all phases)
+Progress: [████████████████████████████████░░░░░] 95% (77/81 total plans across all phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 76
+- Total plans completed: 77
 - Phases completed: 20
-- Average phase completion: 3.8 plans/phase
+- Average phase completion: 3.85 plans/phase
 
 **By Milestone:**
 
@@ -53,6 +53,14 @@ Progress: [███████████████████████
 
 Recent decisions from v0.8.0 work:
 
+- Phase 21-02 (2026-02-04): **Complexity linters enabled with baseline-aware thresholds**
+  - gocyclo and cyclop linters enabled in golangci-lint configuration
+  - Threshold set to 50 (above current max of 44) to prevent new violations without breaking builds
+  - Baseline documented: RecordEvent (44), ControllerPublishVolume (43), NodeStageVolume (36)
+  - Ratcheting plan established: 50 → 30 (v0.8) → 20 (v1.0)
+  - Both linters use same threshold for consistency
+  - Tests not skipped - test code should also have reasonable complexity
+  - Impact: Automated complexity enforcement prevents future regression with gradual improvement path
 - Phase 21-01 (2026-02-04): **Severity mapping refactored to table-driven design**
   - Replaced 21-line switch statement with 4-line map lookup in LogEvent()
   - severityMap struct with both verbosity and logFunc fields provides clearest 1:1 mapping
@@ -225,6 +233,6 @@ None
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 21-01-PLAN.md (severity mapping refactoring) - Phase 21 in progress (1/4 plans)
+Stopped at: Completed 21-02-PLAN.md (complexity linter configuration) - Phase 21 in progress (2/4 plans)
 Resume file: None
-Next action: Continue Phase 21 with plan 21-02
+Next action: Continue Phase 21 with plan 21-03
