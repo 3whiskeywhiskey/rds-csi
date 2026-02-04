@@ -93,13 +93,9 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ Worker nodes recovered and healthy
 - ✓ Fixed driver deployed to all nodes
 - ✓ NQN filtering bug fixed (commit 6d7cece) - prevents system volume disconnect
+- ✓ CI test failure fixed (commit 7728bd4) - health check now skips when device doesn't exist
 
 **Active:**
-- Waiting for CI run to confirm health check fix (commit 7728bd4)
-  - Root cause: TestNodeStageVolume_FilesystemVolume_Unchanged failed in CI
-  - Health check tried to run fsck on non-existent mock device /dev/nvme0n1
-  - fsck output "No such file or directory" was not detected (only checked err.Error())
-  - Fixed by checking both error and output for device-not-found patterns
 - Phase 13 hardware validation interrupted due to node r640 instability
 - Need to redeploy driver with Phase 14 safety features before resuming validation
 - Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value (after Phase 14)
@@ -116,7 +112,7 @@ Stopped at: Fixed CI test failure in health check (commit 7728bd4), waiting for 
 Resume file: None
 Next action: After CI passes, proceed with Phase 13 hardware validation
 
-**CI Investigation Progress:**
+**CI Investigation Complete:**
 1. ✓ Fixed pkg/mount tests (Linux-only procmounts integration tests)
 2. ✓ Identified pkg/driver as consistent failure point
 3. ✓ Confirmed all tests pass locally (145 tests run successfully)
@@ -124,4 +120,4 @@ Next action: After CI passes, proceed with Phase 13 hardware validation
 5. ✓ Analyzed CI logs - found TestNodeStageVolume_FilesystemVolume_Unchanged failing
 6. ✓ Root cause: health check didn't skip when device doesn't exist (fsck error in output not err)
 7. ✓ Fixed in pkg/mount/health.go (commit 7728bd4) - now checks output for device-not-found
-8. ⏳ Waiting for CI run to confirm fix works
+8. ✓ CI passing - fix confirmed working
