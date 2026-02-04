@@ -71,7 +71,7 @@ func (vcb *VolumeCircuitBreaker) getBreaker(volumeID string) *gobreaker.CircuitB
 
 	cb = gobreaker.NewCircuitBreaker(settings)
 	vcb.breakers[volumeID] = cb
-	klog.V(3).Infof("Created circuit breaker for volume %s", volumeID)
+	klog.V(4).Infof("Created circuit breaker for volume %s", volumeID)
 	return cb
 }
 

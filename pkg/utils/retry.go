@@ -49,13 +49,13 @@ func RetryWithBackoff(ctx context.Context, backoff wait.Backoff, fn func() error
 
 		// Check if error is retryable
 		if IsRetryableError(lastErr) {
-			klog.V(3).Infof("Attempt %d failed with retryable error: %v", attempt, lastErr)
+			klog.V(4).Infof("Attempt %d failed with retryable error: %v", attempt, lastErr)
 			// Return false, nil to signal "retry"
 			return false, nil
 		}
 
 		// Non-retryable error - stop immediately
-		klog.V(3).Infof("Attempt %d failed with non-retryable error: %v", attempt, lastErr)
+		klog.V(4).Infof("Attempt %d failed with non-retryable error: %v", attempt, lastErr)
 		return false, lastErr
 	})
 
