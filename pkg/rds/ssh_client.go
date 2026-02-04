@@ -2,6 +2,7 @@ package rds
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -188,7 +189,8 @@ func (c *sshClient) runCommand(command string) (string, error) {
 	// Run command
 	if err := session.Run(command); err != nil {
 		// Check if it's an exit error (command failed)
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+		var exitErr *ssh.ExitError
+		if errors.As(err, &exitErr) {
 			return stdout.String(), fmt.Errorf("command failed (exit %d): %s", exitErr.ExitStatus(), stderr.String())
 		}
 		return "", fmt.Errorf("failed to run command: %w", err)
@@ -250,12 +252,13 @@ func isRetryableError(err error) bool {
 	}
 
 	// Network errors are retryable
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 
 	// EOF and connection reset errors are retryable
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return true
 	}
 

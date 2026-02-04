@@ -33,7 +33,7 @@ func TestVolumeCircuitBreaker_OpensAfterFailures(t *testing.T) {
 		err := vcb.Execute(ctx, "vol-fail", func() error {
 			return testErr
 		})
-		if err != testErr {
+		if !errors.Is(err, testErr) {
 			t.Errorf("Iteration %d: expected test error, got: %v", i, err)
 		}
 	}

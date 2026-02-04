@@ -131,7 +131,7 @@ func TestNewInternalError(t *testing.T) {
 		t.Errorf("Expected sanitized message %q, got %q", userMsg, err.Error())
 	}
 
-	if err.GetOriginal() != originalErr {
+	if !errors.Is(err.GetOriginal(), originalErr) {
 		t.Error("Original error not preserved")
 	}
 
@@ -426,7 +426,7 @@ func TestErrorUnwrapping(t *testing.T) {
 
 	// Unwrap should return the original wrapped error
 	unwrapped := errors.Unwrap(sanitizedErr)
-	if unwrapped != wrappedErr {
+	if !errors.Is(unwrapped, wrappedErr) {
 		t.Error("Expected Unwrap to return original wrapped error")
 	}
 }

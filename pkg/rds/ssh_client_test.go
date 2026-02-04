@@ -196,18 +196,18 @@ func TestParseHostKey(t *testing.T) {
 		expectErr bool
 	}{
 		{
-			name: "valid OpenSSH ed25519 public key",
-			keyData: []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGfHgLqW+tDlnDvIhZBXCCLvJqzVFQxVX0H5K6fqnZxE root@router"),
+			name:      "valid OpenSSH ed25519 public key",
+			keyData:   []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGfHgLqW+tDlnDvIhZBXCCLvJqzVFQxVX0H5K6fqnZxE root@router"),
 			expectErr: false,
 		},
 		{
-			name: "invalid key data returns error",
-			keyData: []byte("not-a-valid-key"),
+			name:      "invalid key data returns error",
+			keyData:   []byte("not-a-valid-key"),
 			expectErr: true,
 		},
 		{
-			name: "empty key data returns error",
-			keyData: []byte(""),
+			name:      "empty key data returns error",
+			keyData:   []byte(""),
 			expectErr: true,
 		},
 	}
@@ -394,7 +394,8 @@ func (s *mockSSHServer) acceptConnections(t *testing.T) {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			// Check if it's a timeout (expected when stopChan is closed)
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
 			// Server closed

@@ -35,11 +35,6 @@ func (t *testableSSHClient) runCommand(command string) (string, error) {
 	return "", fmt.Errorf("no mock runner configured")
 }
 
-// Override runCommandWithRetry to use mock directly (skip retry logic for unit tests)
-func (t *testableSSHClient) runCommandWithRetry(command string, maxRetries int) (string, error) {
-	return t.runCommand(command)
-}
-
 // newTestableSSHClient creates a client for testing
 func newTestableSSHClient(runner mockCommandRunner) *testableSSHClient {
 	base := &sshClient{

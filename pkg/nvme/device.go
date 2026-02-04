@@ -2,6 +2,7 @@ package nvme
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -53,7 +54,8 @@ func CheckDeviceInUse(ctx context.Context, devicePath string) DeviceUsageResult 
 
 	if err != nil {
 		// lsof returns exit code 1 if no processes using device
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			// No processes using device - this is the normal "not busy" case
 			return DeviceUsageResult{InUse: false}
 		}

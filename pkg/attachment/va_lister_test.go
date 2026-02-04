@@ -32,10 +32,10 @@ func createTestVolumeAttachment(name, attacher, volumeID, nodeID string, attache
 
 func TestListDriverVolumeAttachments(t *testing.T) {
 	tests := []struct {
-		name              string
-		existingVAs       []*storagev1.VolumeAttachment
-		expectedCount     int
-		expectEmptySlice  bool
+		name             string
+		existingVAs      []*storagev1.VolumeAttachment
+		expectedCount    int
+		expectEmptySlice bool
 	}{
 		{
 			name: "filters by driver name - returns only our driver",
@@ -162,10 +162,10 @@ func TestGroupVolumeAttachmentsByVolume(t *testing.T) {
 	var nilVol *string = nil
 
 	tests := []struct {
-		name              string
-		input             []*storagev1.VolumeAttachment
-		expectedGroups    map[string]int // volumeID -> count
-		expectWarning     bool
+		name           string
+		input          []*storagev1.VolumeAttachment
+		expectedGroups map[string]int // volumeID -> count
+		expectWarning  bool
 	}{
 		{
 			name: "groups by volume ID - multiple nodes for same volume",

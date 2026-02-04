@@ -742,7 +742,10 @@ func TestMakeFile(t *testing.T) {
 
 // mockMultiExecCommand returns different results for sequential calls
 // This is needed to mock complex operations like ForceUnmount that make multiple exec calls
-func mockMultiExecCommand(results []struct{ stdout, stderr string; exitCode int }) func(string, ...string) *exec.Cmd {
+func mockMultiExecCommand(results []struct {
+	stdout, stderr string
+	exitCode       int
+}) func(string, ...string) *exec.Cmd {
 	callCount := 0
 	return func(command string, args ...string) *exec.Cmd {
 		if callCount >= len(results) {
@@ -811,7 +814,10 @@ func TestForceUnmount(t *testing.T) {
 		name        string
 		target      string
 		setupTarget bool
-		mockResults []struct{ stdout, stderr string; exitCode int }
+		mockResults []struct {
+			stdout, stderr string
+			exitCode       int
+		}
 		expectError bool
 		errContains string
 	}{
@@ -819,7 +825,10 @@ func TestForceUnmount(t *testing.T) {
 			name:        "normal unmount succeeds immediately",
 			target:      "/mnt/test",
 			setupTarget: true,
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
+			mockResults: []struct {
+				stdout, stderr string
+				exitCode       int
+			}{
 				// findmnt check - is mounted
 				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
 				// umount succeeds
@@ -831,7 +840,10 @@ func TestForceUnmount(t *testing.T) {
 			name:        "target not mounted - succeeds idempotently",
 			target:      "/mnt/test",
 			setupTarget: true,
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
+			mockResults: []struct {
+				stdout, stderr string
+				exitCode       int
+			}{
 				// findmnt check - not mounted
 				{stdout: "", stderr: "", exitCode: 1},
 			},
@@ -841,7 +853,10 @@ func TestForceUnmount(t *testing.T) {
 			name:        "unmount fails then lazy unmount succeeds",
 			target:      "/mnt/test",
 			setupTarget: true,
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
+			mockResults: []struct {
+				stdout, stderr string
+				exitCode       int
+			}{
 				// First unmount attempt: findmnt check - is mounted
 				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
 				// umount fails (device busy)

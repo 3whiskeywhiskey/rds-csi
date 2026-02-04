@@ -988,20 +988,3 @@ func (cs *ControllerServer) getNVMEAddress(params map[string]string) string {
 	// Fall back to RDS address if nvmeAddress not specified
 	return cs.getRDSAddress(params)
 }
-
-// containsString checks if a string contains a substring
-// NOTE: This function is kept for potential non-error string matching.
-// RDS error classification now uses errors.Is() with sentinel errors.
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && indexString(s, substr) >= 0)
-}
-
-// indexString finds the index of substr in s
-func indexString(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}

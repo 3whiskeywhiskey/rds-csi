@@ -2,6 +2,7 @@ package circuitbreaker
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -84,7 +85,7 @@ func (vcb *VolumeCircuitBreaker) Execute(ctx context.Context, volumeID string, f
 		return nil, fn()
 	})
 
-	if err == gobreaker.ErrOpenState {
+	if errors.Is(err, gobreaker.ErrOpenState) {
 		return status.Errorf(codes.Unavailable,
 			"Volume %s circuit breaker is OPEN due to %d consecutive failures. "+
 				"Filesystem may be corrupted. To retry: add annotation '%s=true' to the PV "+
@@ -92,7 +93,7 @@ func (vcb *VolumeCircuitBreaker) Execute(ctx context.Context, volumeID string, f
 			volumeID, DefaultConsecutiveFailures, ResetAnnotation)
 	}
 
-	if err == gobreaker.ErrTooManyRequests {
+	if errors.Is(err, gobreaker.ErrTooManyRequests) {
 		return status.Errorf(codes.Unavailable,
 			"Volume %s circuit breaker is HALF-OPEN and already has a request in progress. "+
 				"Wait for the current request to complete.",

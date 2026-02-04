@@ -306,7 +306,8 @@ func SanitizeError(err error) error {
 	}
 
 	// If it's already a SanitizedError, return as-is
-	if _, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return err
 	}
 
@@ -345,7 +346,8 @@ func WrapError(err error, format string, args ...interface{}) error {
 
 	// Get original error
 	originalErr := err
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		originalErr = se.GetOriginal()
 	}
 
@@ -369,7 +371,8 @@ func WrapError(err error, format string, args ...interface{}) error {
 
 // IsInternalError checks if an error is an internal error
 func IsInternalError(err error) bool {
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.errorType == ErrorTypeInternal
 	}
 	return false
@@ -377,7 +380,8 @@ func IsInternalError(err error) bool {
 
 // IsUserError checks if an error is a user-facing error
 func IsUserError(err error) bool {
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.errorType == ErrorTypeUser
 	}
 	return false
@@ -385,7 +389,8 @@ func IsUserError(err error) bool {
 
 // IsValidationError checks if an error is a validation error
 func IsValidationError(err error) bool {
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.errorType == ErrorTypeValidation
 	}
 	return false
@@ -397,7 +402,8 @@ func LogErrorDetails(err error) {
 		return
 	}
 
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		se.Log()
 	} else {
 		klog.Errorf("Error: %v", err)
@@ -410,7 +416,8 @@ func GetSanitizedMessage(err error) string {
 		return ""
 	}
 
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.sanitizedMsg
 	}
 

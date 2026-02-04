@@ -215,16 +215,16 @@ func (l *Logger) LogSSHHostKeyMismatch(address, expectedFingerprint, actualFinge
 
 // OperationLogConfig defines the configuration for a logging operation
 type OperationLogConfig struct {
-	Operation    string
-	Category     EventCategory
-	SuccessType  EventType
-	FailureType  EventType
-	RequestType  EventType
-	SuccessSev   EventSeverity
-	FailureSev   EventSeverity
-	SuccessMsg   string
-	FailureMsg   string
-	RequestMsg   string
+	Operation   string
+	Category    EventCategory
+	SuccessType EventType
+	FailureType EventType
+	RequestType EventType
+	SuccessSev  EventSeverity
+	FailureSev  EventSeverity
+	SuccessMsg  string
+	FailureMsg  string
+	RequestMsg  string
 }
 
 // operationConfigs defines the logging configuration for all operations
