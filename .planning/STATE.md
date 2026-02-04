@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 Phase: 13 of 14 (Hardware Validation)
 Plan: 1 of 1 in current phase
-Status: Ready to deploy - block volumes + mount storm protection fixes
-Last activity: 2026-02-04 — Fixed block volumes and added mount storm pre-check (commits d33e09a, e2303ce)
+Status: Ready to deploy - mknod fix for block volumes (CRITICAL)
+Last activity: 2026-02-04 — Block volumes use mknod to prevent devtmpfs mount storm (commit 0ea6bee)
 
 Progress: [█████████████████████████████████] 92% (49/53 plans completed across all phases)
 
@@ -48,6 +48,14 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
+- Phase 13 (2026-02-04): **Block volumes use mknod instead of bind mount** (commit 0ea6bee - CRITICAL FIX)
+  - Root cause of mount storm: bind mounting from `/dev/nvmeXnY` (in devtmpfs) triggers mount namespace propagation
+  - Mount propagation cascades devtmpfs through containers → 2048 devtmpfs mounts → kernel memory exhaustion
+  - Solution: Use syscall.Mknod to create device node with same major:minor as source device
+  - Creates device node directly at target path without touching devtmpfs (no bind mount = no propagation)
+  - NodeUnpublishVolume detects block devices (syscall.S_IFBLK) and removes via os.Remove instead of unmount
+  - Avoids K3s 1.34.1 mount storm entirely while maintaining CSI spec compliance
+  - CSI spec allows either bind mount OR mknod - we chose mknod for stability
 - Phase 13 (2026-02-04): **Block volumes follow AWS EBS pattern - no staging directory** (root cause analysis)
   - NodeStageVolume for block volumes connects NVMe device but creates NOTHING at staging_target_path
   - NodePublishVolume finds device by NQN lookup (not from staging path) and bind mounts to target file
@@ -117,15 +125,17 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ CI test failure fixed (commit 7728bd4) - health check now skips when device doesn't exist
 
 **Active:**
-- **Ready to deploy: Two critical fixes batched for single CI/CD run**
-  - Fix 1 (d33e09a): Block volumes corrected to follow AWS EBS pattern
-  - Fix 2 (e2303ce): Mount storm pre-detection activated (was implemented but never called!)
-  - Both fixes address issues discovered during Phase 13 hardware validation
-  - Single deployment minimizes CI/CD overhead as requested
-- **r640 node recovery needed** - mount storm wedged node, requires reboot or manual cleanup
-  - 502MB unreclaimable slab memory, soft lockup, OOM kill
-  - New mount storm fix would have prevented this
-  - Can recover after deploying fixes
+- **CRITICAL: mknod fix for block volumes ready for deployment** (commit 0ea6bee)
+  - Root cause identified: bind mount from devtmpfs triggers mount namespace propagation storm
+  - Solution: Use syscall.Mknod to create device node directly (no bind mount, no storm)
+  - Replaces previous fixes d33e09a (AWS EBS pattern) and e2303ce (mount storm detection)
+  - THIS IS THE FIX - previous approaches didn't prevent the storm at the source
+  - CI/CD build in progress (15 minutes)
+  - Will test on r740xd immediately after deployment
+- **r640/r740xd node recovery needed** - both experienced mount storms during testing
+  - r740xd: 2048 devtmpfs mounts, caught early and recovered after pod deletion
+  - r640: 502MB unreclaimable slab memory, soft lockup, OOM kill (needs reboot)
+  - mknod fix eliminates root cause, preventing future storms
 - Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value (after Phase 14)
 
 **Critical Discovery:**
