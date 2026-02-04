@@ -53,6 +53,13 @@ Progress: [███████████████████████
 
 Recent decisions from v0.7.1 work:
 
+- Phase 20-01 (2026-02-04): **Mock SSH server using golang.org/x/crypto/ssh primitives**
+  - Created in-process SSH server for unit testing connection lifecycle and command execution
+  - Generates ed25519 keys dynamically with crypto/rand instead of hardcoded PEM keys
+  - Command-aware handler inspects SSH exec requests and returns RouterOS-style responses
+  - Achieves 74-100% coverage on SSH client functions (newSSHClient, Connect, runCommand, runCommandWithRetry)
+  - Tests pass consistently (no flakiness) and reusable pattern for controller/node tests
+  - Overall RDS package coverage: 61.1%
 - Phase 20-02 (2026-02-04): **Command-aware mocking pattern for multi-step filesystem operations**
   - TestHelperProcess runs in separate process for each exec call - stateful mocks don't work
   - Command-aware mock inspects command name (blkid vs resize2fs) to return appropriate data
@@ -180,6 +187,6 @@ None
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 20-02-PLAN.md - mount package test coverage expansion
+Stopped at: Completed 20-01-PLAN.md (SSH client unit tests) - 2 of 5 plans complete in Phase 20
 Resume file: None
 Next action: Execute 20-03-PLAN.md (driver package tests) with `/gsd:execute-plan`
