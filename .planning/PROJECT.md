@@ -8,20 +8,20 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current Milestone: v0.7.0 State Management Refactoring and Observability
+## Latest Milestone: v0.7.0 State Management Refactoring and Observability (Shipped: 2026-02-04)
 
-**Goal:** Use Kubernetes VolumeAttachment objects as source of truth for attachment state and complete migration metrics observability.
+**Delivered:** VolumeAttachment-based state rebuild and complete migration metrics observability
 
-**Target features:**
+**Shipped features:**
 - VolumeAttachment-based state rebuild (Phase 15 - complete)
-- Migration metrics emission (Phase 16 - planned)
+- Migration metrics emission (Phase 16 - complete)
 - PV annotations informational-only
-- Clean state rebuild without stale attachment risk
+- Stale attachment state eliminated by design
 
 ## Current State
 
-**Version:** v0.2.0 (shipped 2026-01-31)
-**LOC:** 22,424 Go
+**Version:** v0.7.0 (shipped 2026-02-04)
+**LOC:** 31,882 Go
 **Tech Stack:** Go 1.24, CSI Spec v1.5.0+, NVMe/TCP, SSH/RouterOS CLI
 
 ### What's Working
@@ -69,10 +69,14 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - ✓ KubeVirt live migration works end-to-end on metal cluster — v0.6.0
 - ✓ Mount storm prevention (NQN filtering, duplicate detection, circuit breaker) — v0.6.0
 - ✓ System volume protection via configurable NQN prefix filtering — v0.6.0
+- ✓ Controller rebuilds state from VolumeAttachment objects (not PV annotations) — v0.7.0
+- ✓ Migration state detection from multiple VolumeAttachment objects — v0.7.0
+- ✓ PV annotations are informational-only (never read during rebuild) — v0.7.0
+- ✓ Migration metrics (count, duration, active) observable via Prometheus — v0.7.0
 
 ### Active
 
-(No active requirements - next milestone to be defined)
+(No active requirements - all v0.7.0 work complete)
 
 ### Out of Scope
 
@@ -101,4 +105,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-02-04 after completing v0.6.0 milestone (block volume support)*
+*Last updated: 2026-02-04 after completing v0.7.0 milestone (state management refactoring and observability)*
