@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 21 of 21 (Code Quality Improvements)
-Plan: 4 of 4 complete
-Status: Phase complete - code quality milestone shipped
-Last activity: 2026-02-04 — Completed Phase 21 with 4 plans, v0.8.0 shipped
+Plan: 3 of 4 complete
+Status: In progress - documentation updates complete, final plan pending
+Last activity: 2026-02-04 — Completed 21-03-PLAN.md (documentation updates)
 
-Progress: [████████████████████████████████████] 100% (79/79 total plans across all phases)
+Progress: [████████████████████████████████████░] 98% (78/79 total plans across all phases)
 
 ## Performance Metrics
 
@@ -53,6 +53,13 @@ Progress: [███████████████████████
 
 Recent decisions from v0.8.0 work:
 
+- Phase 21-03 (2026-02-04): **All code smells documented with resolution status**
+  - Updated CONCERNS.md with RESOLVED/DEFERRED status for all 5 code smells
+  - 4 code smells resolved in Phases 18, 19, 21-01 (270+ lines of duplication eliminated)
+  - Large package refactoring deferred to v0.9.0 with explicit rationale (packages functional, 65% coverage, refactoring risk > benefit)
+  - QUAL-01 attribution corrected from Phase 21 to Phase 19 (sentinel errors were Phase 19 work)
+  - Requirements traceability accurate: Phase 21 delivered only QUAL-02 and QUAL-04
+  - Impact: Clear historical record, explicit deferral rationale prevents future confusion
 - Phase 21 (2026-02-04): **Code quality improvements complete with complexity enforcement**
   - Severity mapping switch replaced with table-driven severityMap lookup
   - golangci-lint configured with gocyclo/cyclop at threshold 50 (baseline: 44)
@@ -239,6 +246,6 @@ None
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 21-04-PLAN.md (milestone finalization) - v0.8.0 complete
+Stopped at: Completed 21-03-PLAN.md (documentation updates) - 3/4 plans complete
 Resume file: None
-Next action: Plan next milestone or release v0.8.0
+Next action: Execute Phase 21 Plan 04 (final cleanup and milestone finalization)
