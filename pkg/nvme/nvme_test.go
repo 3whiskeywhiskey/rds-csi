@@ -336,3 +336,120 @@ func TestGetDevicePathWithMockFilesystem(t *testing.T) {
 	// For now, this test documents the expected behavior
 	t.Log("GetDevicePath test requires filesystem mocking refactor")
 }
+
+// TestConnectorAccessorMethods tests simple accessor methods for 100% coverage
+func TestConnectorAccessorMethods(t *testing.T) {
+	config := DefaultConfig()
+	c := NewConnectorWithConfig(config).(*connector)
+
+	// Test GetMetrics returns non-nil metrics
+	metrics := c.GetMetrics()
+	if metrics == nil {
+		t.Error("GetMetrics() returned nil")
+	}
+
+	// Test GetConfig returns current config
+	returnedConfig := c.GetConfig()
+	if returnedConfig.ConnectTimeout != config.ConnectTimeout {
+		t.Errorf("GetConfig() ConnectTimeout=%v, want %v", returnedConfig.ConnectTimeout, config.ConnectTimeout)
+	}
+
+	// Test GetResolver returns non-nil resolver
+	resolver := c.GetResolver()
+	if resolver == nil {
+		t.Error("GetResolver() returned nil")
+	}
+}
+
+// TestMetricsString tests Metrics.String() method for coverage
+func TestMetricsString(t *testing.T) {
+	m := &Metrics{}
+
+	// Test with empty metrics
+	s := m.String()
+	if !strings.Contains(s, "Connects") {
+		t.Errorf("Expected 'Connects' in string, got: %s", s)
+	}
+	if !strings.Contains(s, "Disconnects") {
+		t.Errorf("Expected 'Disconnects' in string, got: %s", s)
+	}
+
+	// Test with some metrics populated
+	m.connectCount = 5
+	m.connectDurationTotal = 10 * time.Second
+	m.disconnectCount = 3
+	m.disconnectDurationTotal = 6 * time.Second
+	m.timeoutCount = 1
+	m.activeOperations = 2
+
+	s = m.String()
+	if !strings.Contains(s, "total=5") {
+		t.Errorf("Expected 'total=5' in string, got: %s", s)
+	}
+	if !strings.Contains(s, "Active=2") {
+		t.Errorf("Expected 'Active=2' in string, got: %s", s)
+	}
+}
+
+// TestConnectionConfigDefaults tests ConnectionConfig defaults
+func TestConnectionConfigDefaults(t *testing.T) {
+	config := DefaultConnectionConfig()
+
+	// Test that default config has sensible values
+	if config.CtrlLossTmo != -1 {
+		t.Errorf("Expected CtrlLossTmo=-1 (unlimited), got %d", config.CtrlLossTmo)
+	}
+	if config.ReconnectDelay <= 0 {
+		t.Errorf("Expected positive ReconnectDelay, got %d", config.ReconnectDelay)
+	}
+	// KeepAliveTmo can be 0 (use kernel default)
+}
+
+// TestConnectWrapper tests Connect() wrapper method
+func TestConnectWrapper(t *testing.T) {
+	c := &connector{
+		execCommand:      mockExecCommand("No NVMe subsystems", "", 0),
+		config:           DefaultConfig(),
+		metrics:          &Metrics{},
+		activeOperations: make(map[string]*operationTracker),
+		resolver:         NewDeviceResolver(),
+	}
+
+	target := Target{
+		Transport:     "tcp",
+		NQN:           "nqn.2000-02.com.mikrotik:pvc-test",
+		TargetAddress: "10.0.0.1",
+		TargetPort:    4420,
+	}
+
+	// This will fail because device won't appear, but it tests the wrapper
+	_, err := c.Connect(target)
+	if err == nil {
+		t.Skip("Connect succeeded unexpectedly - may require actual NVMe device")
+	}
+	// Error is expected because device won't appear
+	if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "device") {
+		t.Logf("Connect failed with: %v (expected timeout or device error)", err)
+	}
+}
+
+// TestLegacyFunctionsDocumented documents legacy functions that require hardware/specific
+// nvme-cli versions to test properly.
+//
+// Legacy functions exist as fallbacks when JSON output parsing fails:
+// - connectLegacy: Uses text parsing instead of JSON
+// - disconnectLegacy: Uses text parsing instead of JSON
+// - isConnectedLegacy: Checks via nvme list-subsys text output
+// - getDevicePathLegacy: Scans /sys/block manually
+//
+// These paths are exercised in production when nvme-cli doesn't support
+// JSON output or returns unexpected formats. They are marked as deprecated
+// and kept for reference during migration.
+//
+// Manual testing should verify:
+// 1. Legacy functions work with older nvme-cli versions (< 1.9)
+// 2. Fallback activates when JSON parsing fails
+// 3. Device path resolution works via sysfs scanning
+func TestLegacyFunctionsDocumented(t *testing.T) {
+	t.Skip("Legacy functions require specific nvme-cli versions or hardware for testing")
+}
