@@ -34,6 +34,16 @@ func TestHelperProcess(t *testing.T) {
 		return
 	}
 
+	// Suppress any coverage warnings or other test infrastructure output
+	// by reopening stderr to /dev/null if we're not explicitly writing to it
+	if os.Getenv("STDERR") == "" {
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err == nil {
+			os.Stderr = devNull
+			defer devNull.Close()
+		}
+	}
+
 	// Output mock data
 	_, _ = os.Stdout.WriteString(os.Getenv("STDOUT"))
 	_, _ = os.Stderr.WriteString(os.Getenv("STDERR"))
