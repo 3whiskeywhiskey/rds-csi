@@ -988,7 +988,8 @@ func TestNodeUnpublishVolume_BlockVolume(t *testing.T) {
 	}
 }
 
-// TestNodeUnstageVolume_BlockVolume tests unstaging a block volume
+// TestNodeUnstageVolume_BlockVolume tests unstaging a block volume.
+// Block volumes have no staging artifacts to clean up - only NVMe disconnect.
 func TestNodeUnstageVolume_BlockVolume(t *testing.T) {
 	// Create temp directory for staging
 	tmpDir, err := os.MkdirTemp("", "node-test-block-unstage-*")
@@ -998,16 +999,6 @@ func TestNodeUnstageVolume_BlockVolume(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	stagingPath := filepath.Join(tmpDir, "staging")
-
-	// Setup staging directory with device metadata (simulating block volume stage)
-	if err := os.MkdirAll(stagingPath, 0750); err != nil {
-		t.Fatalf("failed to create staging dir: %v", err)
-	}
-
-	metadataPath := filepath.Join(stagingPath, "device")
-	if err := os.WriteFile(metadataPath, []byte("/dev/nvme0n1\n"), 0600); err != nil {
-		t.Fatalf("failed to write device metadata: %v", err)
-	}
 
 	// Setup mocks
 	mounter := &mockMounter{}
@@ -1051,16 +1042,6 @@ func TestNodeUnstageVolume_BlockVolume(t *testing.T) {
 	if !connector.disconnectCalled {
 		t.Error("NVMe disconnect should be called")
 	}
-
-	// Verify: Metadata file was removed
-	if _, err := os.Stat(metadataPath); !os.IsNotExist(err) {
-		t.Error("metadata file should have been removed")
-	}
-
-	// Verify: Staging directory was removed
-	if _, err := os.Stat(stagingPath); !os.IsNotExist(err) {
-		t.Error("staging directory should have been removed")
-	}
 }
 
 // TestNodeUnstageVolume_FilesystemVolume_Unchanged tests that filesystem volumes still work
@@ -1079,8 +1060,10 @@ func TestNodeUnstageVolume_FilesystemVolume_Unchanged(t *testing.T) {
 		t.Fatalf("failed to create staging dir: %v", err)
 	}
 
-	// Setup mocks
-	mounter := &mockMounter{}
+	// Setup mocks - mounter reports staging path IS mounted (filesystem volume pattern)
+	mounter := &mockMounter{
+		isLikelyMounted: true, // Key: filesystem volumes have mounted staging path
+	}
 	connector := &mockNVMEConnector{
 		devicePath: "/dev/nvme0n1",
 	}
