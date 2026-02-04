@@ -80,8 +80,8 @@ func (am *AttachmentManager) TrackAttachmentWithMode(ctx context.Context, volume
 	// Create new attachment state with first node
 	now := time.Now()
 	state := &AttachmentState{
-		VolumeID:   volumeID,
-		NodeID:     nodeID, // Keep for backward compat
+		VolumeID: volumeID,
+		NodeID:   nodeID, // Keep for backward compat
 		Nodes: []NodeAttachment{
 			{NodeID: nodeID, AttachedAt: now},
 		},

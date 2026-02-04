@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/klog/v2"
+
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
-	"k8s.io/klog/v2"
 )
 
 // RecoveryConfig holds recovery configuration

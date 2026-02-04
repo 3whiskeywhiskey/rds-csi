@@ -50,9 +50,9 @@ type Metrics struct {
 	attachmentStaleCleared    prometheus.Counter
 
 	// Migration operation metrics
-	migrationsTotal    *prometheus.CounterVec
-	migrationDuration  prometheus.Histogram
-	activeMigrations   prometheus.Gauge
+	migrationsTotal   *prometheus.CounterVec
+	migrationDuration prometheus.Histogram
+	activeMigrations  prometheus.Gauge
 }
 
 // NewMetrics creates a new Metrics instance with all metrics registered.

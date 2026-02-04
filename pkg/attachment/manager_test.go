@@ -709,12 +709,12 @@ func TestAttachmentManager_AddSecondaryAttachment(t *testing.T) {
 
 func TestAttachmentManager_RemoveNodeAttachment(t *testing.T) {
 	tests := []struct {
-		name             string
-		setup            func(am *AttachmentManager)
-		volumeID         string
-		nodeID           string
-		expectDetached   bool
-		expectRemaining  int
+		name            string
+		setup           func(am *AttachmentManager)
+		volumeID        string
+		nodeID          string
+		expectDetached  bool
+		expectRemaining int
 	}{
 		{
 			name: "remove only node - fully detached",
@@ -975,4 +975,3 @@ func TestRemoveNodeAttachment_ClearsMigrationState(t *testing.T) {
 		t.Errorf("Remaining node should be %s, got %s", secondaryNode, state.Nodes[0].NodeID)
 	}
 }
-
