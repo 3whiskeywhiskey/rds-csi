@@ -93,7 +93,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 
 	for attempt := 1; attempt <= r.config.MaxAttempts; attempt++ {
 		result.Attempts = attempt
-		klog.V(2).Infof("Mount recovery attempt %d/%d for %s", attempt, r.config.MaxAttempts, mountPath)
+		klog.V(4).Infof("Mount recovery attempt %d/%d for %s", attempt, r.config.MaxAttempts, mountPath)
 
 		// Check context cancellation
 		select {
@@ -104,7 +104,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 		}
 
 		// Step 1: Try to unmount the stale mount
-		klog.V(3).Infof("Attempting ForceUnmount for %s with timeout %v", mountPath, r.config.NormalUnmountWait)
+		klog.V(4).Infof("Attempting ForceUnmount for %s with timeout %v", mountPath, r.config.NormalUnmountWait)
 		err := r.mounter.ForceUnmount(mountPath, r.config.NormalUnmountWait)
 		if err != nil {
 			// Check if mount is in use - if so, refuse to retry
@@ -125,7 +125,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 
 			// Sleep before next attempt if not last attempt
 			if attempt < r.config.MaxAttempts {
-				klog.V(3).Infof("Sleeping %v before retry", backoff)
+				klog.V(4).Infof("Sleeping %v before retry", backoff)
 				select {
 				case <-ctx.Done():
 					result.FinalError = ctx.Err()
@@ -137,7 +137,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 			continue
 		}
 
-		klog.V(3).Infof("Successfully unmounted stale mount %s", mountPath)
+		klog.V(4).Infof("Successfully unmounted stale mount %s", mountPath)
 
 		// Step 2: Resolve new device path from NQN
 		newDevice, err := r.resolver.ResolveDevicePath(nqn)
@@ -147,7 +147,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 
 			// Sleep before next attempt if not last attempt
 			if attempt < r.config.MaxAttempts {
-				klog.V(3).Infof("Sleeping %v before retry", backoff)
+				klog.V(4).Infof("Sleeping %v before retry", backoff)
 				select {
 				case <-ctx.Done():
 					result.FinalError = ctx.Err()
@@ -160,10 +160,10 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 		}
 
 		result.NewDevice = newDevice
-		klog.V(3).Infof("Resolved new device for NQN %s: %s", nqn, newDevice)
+		klog.V(4).Infof("Resolved new device for NQN %s: %s", nqn, newDevice)
 
 		// Step 3: Mount new device to mount path
-		klog.V(3).Infof("Attempting to mount %s to %s with fsType %s", newDevice, mountPath, fsType)
+		klog.V(4).Infof("Attempting to mount %s to %s with fsType %s", newDevice, mountPath, fsType)
 		err = r.mounter.Mount(newDevice, mountPath, fsType, mountOptions)
 		if err != nil {
 			result.FinalError = fmt.Errorf("mount failed: %w", err)
@@ -171,7 +171,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 
 			// Sleep before next attempt if not last attempt
 			if attempt < r.config.MaxAttempts {
-				klog.V(3).Infof("Sleeping %v before retry", backoff)
+				klog.V(4).Infof("Sleeping %v before retry", backoff)
 				select {
 				case <-ctx.Done():
 					result.FinalError = ctx.Err()
@@ -184,7 +184,7 @@ func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn stri
 		}
 
 		// Success!
-		klog.V(2).Infof("Successfully recovered mount %s (old device: %s, new device: %s) after %d attempt(s)",
+		klog.V(2).Infof("Recovered mount %s (old device: %s, new device: %s) after %d attempt(s)",
 			mountPath, result.OldDevice, result.NewDevice, attempt)
 		result.Recovered = true
 		result.FinalError = nil
