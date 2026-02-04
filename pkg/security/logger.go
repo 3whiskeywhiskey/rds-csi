@@ -37,36 +37,32 @@ func NewLogger() *Logger {
 	}
 }
 
+// severityMapping defines how a severity level maps to klog behavior
+type severityMapping struct {
+	verbosity klog.Level
+	logFunc   func(args ...interface{})
+}
+
+// severityMap maps EventSeverity to klog verbosity and logging function
+// This is a table-driven replacement for the switch in LogEvent()
+var severityMap = map[EventSeverity]severityMapping{
+	SeverityInfo:     {verbosity: 2, logFunc: func(args ...interface{}) { klog.V(2).Info(args...) }},
+	SeverityWarning:  {verbosity: 1, logFunc: klog.Warning},
+	SeverityError:    {verbosity: 0, logFunc: klog.Error},
+	SeverityCritical: {verbosity: 0, logFunc: klog.Error},
+}
+
 // LogEvent logs a security event with structured logging
 func (l *Logger) LogEvent(event *SecurityEvent) {
 	// Record in metrics
 	l.metrics.RecordEvent(event)
 
-	// Determine klog verbosity and logging function based on severity
-	var logFunc func(args ...interface{})
-	var verbosity klog.Level
-
-	switch event.Severity {
-	case SeverityInfo:
-		verbosity = 2
-		logFunc = func(args ...interface{}) {
-			klog.V(verbosity).Info(args...)
-		}
-	case SeverityWarning:
-		verbosity = 1
-		logFunc = klog.Warning
-	case SeverityError:
-		verbosity = 0
-		logFunc = klog.Error
-	case SeverityCritical:
-		verbosity = 0
-		logFunc = klog.Error
-	default:
-		verbosity = 2
-		logFunc = func(args ...interface{}) {
-			klog.V(verbosity).Info(args...)
-		}
+	// Look up severity mapping (default to Info if unknown)
+	mapping, ok := severityMap[event.Severity]
+	if !ok {
+		mapping = severityMap[SeverityInfo]
 	}
+	logFunc := mapping.logFunc
 
 	// Build structured log message
 	logMsg := l.formatLogMessage(event)
