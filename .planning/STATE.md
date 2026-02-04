@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 15 of 15 (VolumeAttachment-Based State Rebuild)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-04 — Completed 15-02-PLAN.md (VA-based state rebuild)
+Last activity: 2026-02-04 — Completed 15-03-PLAN.md (PV annotation documentation)
 
-Progress: [███████████████████████████████████] 98% (52/53 plans completed across all phases)
+Progress: [███████████████████████████████████] 100% (53/53 plans completed across all phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 52
+- Total plans completed: 53
 - Phases completed: 13
-- Average phase completion: 4.00 plans/phase
+- Average phase completion: 4.08 plans/phase
 
 **By Milestone:**
 
@@ -36,7 +36,7 @@ Progress: [███████████████████████
 - Last milestone (v0.5.0): 12 plans, 3 phases
 - Trend: Stable execution pattern
 
-*Updated: 2026-02-03*
+*Updated: 2026-02-04*
 
 ## Accumulated Context
 
@@ -49,6 +49,11 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.7.0 work:
 
+- Phase 15-03 (2026-02-04): **PV annotations are informational-only**
+  - Annotations written during ControllerPublishVolume for debugging/observability
+  - Never read during state rebuild - VolumeAttachment objects are authoritative
+  - Package-level documentation added explaining write-only nature
+  - Prevents future confusion about annotation vs VolumeAttachment roles
 - Phase 15-02 (2026-02-04): **VA-based rebuild replaces annotation-based**
   - RebuildStateFromVolumeAttachments is now the authoritative rebuild method
   - VolumeAttachment objects are managed by external-attacher and never stale
@@ -186,9 +191,9 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Phase 15-02 complete (VA-based state rebuild)
+Stopped at: Phase 15-03 complete (PV annotation documentation)
 Resume file: None
-Next action: Continue with Phase 15-03 (PV annotation documentation)
+Next action: Continue with Phase 15-04 (final integration and testing)
 
 **Phase 13 Hardware Validation Progress:**
 1. ✓ Created comprehensive validation runbook (test/e2e/PROGRESSIVE_VALIDATION.md)
