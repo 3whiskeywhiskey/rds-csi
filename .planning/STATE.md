@@ -42,12 +42,19 @@ Progress: [███████████████████████
 
 ### Roadmap Evolution
 
+- Phase 15 added: VolumeAttachment-Based State Rebuild (v0.7.0 milestone - architectural improvement to use VolumeAttachment objects as source of truth instead of PV annotations)
 - Phase 14 added: Error Resilience and Mount Storm Prevention (discovered mount storm issue during Phase 13 execution - corrupted filesystem caused thousands of duplicate mounts)
 
 ### Decisions
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
+- Phase 15 planning (2026-02-04): **VolumeAttachment-based rebuild deferred to v0.7.0**
+  - Bug report suggested using VolumeAttachment objects as source of truth instead of PV annotations
+  - Architecturally superior approach (external-attacher is authoritative, no stale state risk)
+  - Current fix (62197ce - clear annotations on detach) is sufficient for v0.6.0
+  - Deferring to v0.7.0 because: 1) Current fix solves the production bug, 2) Grace period logic needs careful design, 3) Project is 92% through milestone with critical fixes ready to deploy
+  - Phase 15 will implement VolumeAttachment watcher, rebuild from VolumeAttachment objects, keep PV annotations informational only
 - Phase 13 (2026-02-04): **Clear PV annotations on full detachment** (commit 62197ce - FIX)
   - Root cause: RemoveNodeAttachment only cleared in-memory state, not PV annotations
   - On controller restart, RebuildState read stale annotations and resurrected detached volumes
