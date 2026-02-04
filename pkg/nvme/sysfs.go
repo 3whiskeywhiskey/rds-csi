@@ -185,7 +185,7 @@ func (s *SysfsScanner) FindDeviceByNQN(nqn string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("found controller for NQN %s but no block device: %w", nqn, err)
 			}
-			klog.V(3).Infof("FindDeviceByNQN: resolved NQN %s -> %s", nqn, devicePath)
+			klog.V(4).Infof("FindDeviceByNQN: resolved NQN %s -> %s", nqn, devicePath)
 			return devicePath, nil
 		}
 	}

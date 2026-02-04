@@ -79,12 +79,12 @@ func (r *DeviceResolver) ResolveDevicePath(nqn string) (string, error) {
 				klog.V(4).Infof("DeviceResolver: cache hit for NQN %s -> %s", nqn, entry.devicePath)
 				return entry.devicePath, nil
 			}
-			klog.V(3).Infof("DeviceResolver: cache entry for NQN %s invalid (device %s not found), rescanning", nqn, entry.devicePath)
+			klog.V(4).Infof("DeviceResolver: cache entry for NQN %s invalid (device %s not found), rescanning", nqn, entry.devicePath)
 		} else {
-			klog.V(3).Infof("DeviceResolver: cache entry for NQN %s expired (age %v > TTL %v), rescanning", nqn, time.Since(entry.resolvedAt), r.ttl)
+			klog.V(4).Infof("DeviceResolver: cache entry for NQN %s expired (age %v > TTL %v), rescanning", nqn, time.Since(entry.resolvedAt), r.ttl)
 		}
 	} else {
-		klog.V(3).Infof("DeviceResolver: cache miss for NQN %s, scanning sysfs", nqn)
+		klog.V(4).Infof("DeviceResolver: cache miss for NQN %s, scanning sysfs", nqn)
 	}
 
 	// Scan sysfs for matching NQN
@@ -112,7 +112,7 @@ func (r *DeviceResolver) Invalidate(nqn string) {
 
 	if _, exists := r.cache[nqn]; exists {
 		delete(r.cache, nqn)
-		klog.V(3).Infof("DeviceResolver: invalidated cache for NQN %s", nqn)
+		klog.V(4).Infof("DeviceResolver: invalidated cache for NQN %s", nqn)
 	}
 }
 
@@ -123,7 +123,7 @@ func (r *DeviceResolver) InvalidateAll() {
 
 	count := len(r.cache)
 	r.cache = make(map[string]*cacheEntry)
-	klog.V(3).Infof("DeviceResolver: invalidated entire cache (%d entries)", count)
+	klog.V(4).Infof("DeviceResolver: invalidated entire cache (%d entries)", count)
 }
 
 // CacheStats returns statistics about the cache for debugging
