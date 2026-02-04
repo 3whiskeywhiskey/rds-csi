@@ -55,15 +55,26 @@ func CheckFilesystemHealth(ctx context.Context, devicePath, fsType string) error
 	}
 
 	if err != nil {
+		outputStr := string(output)
+
 		// Check if command not found (tool not installed) - skip check gracefully
 		if strings.Contains(err.Error(), "executable file not found") || strings.Contains(err.Error(), "no such file or directory") {
 			klog.V(2).Infof("Skipping health check for %s: filesystem check tool not found", fsType)
 			return nil
 		}
+
+		// Check if device doesn't exist yet (will be formatted next) - skip check gracefully
+		// fsck outputs "No such file or directory while trying to open /dev/X" when device is missing
+		if strings.Contains(outputStr, "No such file or directory while trying to open") ||
+			strings.Contains(outputStr, "Possibly non-existent device") {
+			klog.V(2).Infof("Skipping health check for %s: device %s not found (will be formatted)", fsType, devicePath)
+			return nil
+		}
+
 		return fmt.Errorf("filesystem health check failed for device %s (fsType: %s): %w. "+
 			"Filesystem may be corrupted. Output: %s. "+
 			"Consider running fsck manually after unmounting any existing mounts",
-			devicePath, fsType, err, string(output))
+			devicePath, fsType, err, outputStr)
 	}
 
 	klog.V(3).Infof("Filesystem health check passed for %s (fsType: %s, duration: %v)", devicePath, fsType, duration)
