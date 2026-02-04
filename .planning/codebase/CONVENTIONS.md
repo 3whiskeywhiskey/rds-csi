@@ -1,58 +1,59 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-01-30
+**Analysis Date:** 2026-02-04
 
 ## Naming Patterns
 
 **Files:**
-- Package files: lowercase with underscores for multiple words (e.g., `ssh_client.go`, `controller_test.go`)
-- Test files: `*_test.go` suffix (e.g., `identity_test.go`, `commands_test.go`)
-- Main entry point: `cmd/rds-csi-plugin/main.go`
+- Lowercase with underscores for utilities: `ssh_client.go`, `proc_mounts.go`
+- Descriptive names matching primary type: `controller.go`, `node.go`, `driver.go`
+- Test files follow Go convention: `*_test.go` (43 test files across codebase)
+- Package organization reflects functionality: `pkg/driver/`, `pkg/nvme/`, `pkg/rds/`
 
 **Functions:**
-- Public functions: PascalCase (e.g., `NewIdentityServer()`, `GetPluginInfo()`, `CreateVolume()`)
-- Private functions: camelCase (e.g., `newSSHClient()`, `parseVolumeInfo()`, `sanitizePaths()`)
-- Interface methods: PascalCase following receiver convention (e.g., `(cs *ControllerServer) CreateVolume()`)
-- Test functions: `Test` prefix with PascalCase (e.g., `TestValidateVolumeCapabilities()`, `TestParseVolumeInfo()`)
+- Exported functions: PascalCase (e.g., `CreateVolume`, `NewConnector`, `GetVolume`)
+- Unexported functions: camelCase (e.g., `validateCreateVolumeOptions`, `runCommandWithRetry`)
+- Helper methods use consistent prefixes: `Track`, `Log`, `Get`, `Set`, `Is`
+- Logger methods follow pattern: `Log{Entity}{Action}` (e.g., `LogVolumeCreate`, `LogSSHConnectionFailure`)
 
 **Variables:**
-- Package-level private: camelCase (e.g., `globalLogger`, `loggerOnce`, `defaultFSType`)
-- Constants (package-level): ALL_CAPS with underscores for multi-word (e.g., `DriverName`, `defaultVersion`, `minVolumeSizeBytes`, `volumeContextNQN`)
-- Local variables: camelCase (e.g., `volumeID`, `stagingPath`, `requiredBytes`)
-- Error returns: often short variable names `err` for last return value
+- Interface variables: PascalCase (e.g., `Connector`, `Mounter`, `RDSClient`)
+- Struct fields: PascalCase
+- Local variables: camelCase (e.g., `volumeID`, `stagingPath`, `isBlockVolume`)
+- Constants: UPPER_SNAKE_CASE (e.g., `defaultVolumeBasePath`)
 
 **Types:**
-- Structs: PascalCase (e.g., `ControllerServer`, `Driver`, `SanitizedError`, `SecurityEvent`)
-- Interfaces: PascalCase ending with "er" for behavioral contracts (e.g., `RDSClient`, `Connector`, `Mounter`)
-- Type aliases for enums: PascalCase (e.g., `ErrorType`, `EventCategory`)
-- Embedded fields: unnamed embedding with interface types (e.g., `csi.UnimplementedIdentityServer`)
+- Interfaces: PascalCase with verb/noun structure (e.g., `Connector`, `Mounter`, `RDSClient`)
+- Structs: PascalCase descriptive names (e.g., `ControllerServer`, `NodeServer`, `SecurityEvent`)
+- Type definitions for enums: PascalCase (e.g., `EventType`, `EventSeverity`, `EventOutcome`)
 
 ## Code Style
 
 **Formatting:**
-- Uses `go fmt` for automatic formatting
-- Goimports with local module path: `git.srvlab.io/whiskey/rds-csi-driver`
-- Line length: follows Go conventions (no hard limit enforced, but readable)
+- Standard Go fmt (enforced via `make fmt`)
+- Uses goimports with local import path: `git.srvlab.io/whiskey/rds-csi-driver`
+- Line length: standard Go (no hard limit enforced)
 - Indentation: tabs (Go standard)
 
 **Linting:**
-- Uses `golangci-lint` with 5-minute timeout for CI
-- Code must pass: `fmt`, `vet`, and `lint` before test
-- Called via: `make verify` which runs fmt, vet, lint, and test sequentially
-- Individual targets: `make fmt`, `make vet`, `make lint`
+- Tool: golangci-lint with 5-minute timeout
+- Run: `make lint`
+- No custom `.golangci.yml` file - uses default rules
+- Coverage: run with `make test-coverage`
 
 ## Import Organization
 
 **Order:**
-1. Standard library imports (e.g., `context`, `fmt`, `time`)
-2. Third-party public imports (e.g., `github.com/...`, `k8s.io/...`, `google.golang.org/...`)
-3. Local project imports (e.g., `git.srvlab.io/whiskey/rds-csi-driver/pkg/...`)
+1. Standard library imports (e.g., `"context"`, `"fmt"`, `"time"`)
+2. Blank line
+3. Third-party imports (e.g., `"github.com/..."`, `"k8s.io/..."`, `"google.golang.org/..."`)
+4. Blank line
+5. Local imports (e.g., `"git.srvlab.io/whiskey/rds-csi-driver/pkg/..."`)
 
 **Path Aliases:**
-- Local imports: `git.srvlab.io/whiskey/rds-csi-driver/pkg/driver`
-- Kubernetes: `k8s.io/klog/v2` for logging (never `log` package)
-- CSI: `github.com/container-storage-interface/spec/lib/go/csi`
-- gRPC: `google.golang.org/grpc` with `codes` and `status` subpackages
+- Local path: `git.srvlab.io/whiskey/rds-csi-driver/pkg/`
+- Kubernetes imports: `metav1`, `corev1`, `"k8s.io/klog/v2"`
+- Never use `"log"` package - always use `k8s.io/klog/v2`
 
 **Example from `pkg/driver/controller.go`:**
 ```go
@@ -64,6 +65,8 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
@@ -75,178 +78,170 @@ import (
 ## Error Handling
 
 **Patterns:**
-- Use `fmt.Errorf()` for wrapping errors with context: `fmt.Errorf("operation failed: %w", err)`
-- CSI gRPC errors: use `status.Error(codes.Code, "message")` for returning to kubelet
-- Sanitized errors: use `utils.SanitizedError` for sensitive information removal
-- Error classification: `ErrorTypeInternal`, `ErrorTypeUser`, `ErrorTypeValidation`
+- CSI errors use `status.Error()` and `status.Errorf()` with gRPC codes: `codes.InvalidArgument`, `codes.Internal`, `codes.ResourceExhausted`
+- Internal errors use `fmt.Errorf()` with verb `%w` for error wrapping
+- Error wrapping adds context: `fmt.Errorf("failed to create volume: %w", err)`
+- All error paths must include context for troubleshooting
 
-**Error Wrapping (from `pkg/utils/errors.go`):**
-- `NewInternalError(err, userMsg)` - Internal errors hidden from users, logged fully
-- `NewUserError(err, operation)` - User-facing errors with sanitization
-- `NewValidationError(field, reason)` - Validation errors (safe to show)
-- `WrapError(err, format, args...)` - Wraps with context, sanitizes message
-- `SanitizeErrorMessage(msg)` - Removes IPs, paths, hostnames, stack traces
-
-**CSI Status Codes (from `pkg/driver/controller.go`):**
-- `codes.InvalidArgument` - Validation failures (missing fields, bad format)
-- `codes.OutOfRange` - Size constraints violated (too large/small)
-- `codes.Unavailable` - Service not ready (RDS not connected)
-- `codes.Internal` - Unexpected errors (wrapped as status.Error)
-
-**Example from `pkg/driver/identity.go`:**
+**CSI Service Layer (driver/controller.go, driver/node.go):**
 ```go
-if ids.driver.name == "" {
-	return nil, status.Error(codes.Unavailable, "driver name not configured")
+if req.GetName() == "" {
+	return nil, status.Error(codes.InvalidArgument, "volume name is required")
 }
+if err := someOperation(); err != nil {
+	return nil, status.Errorf(codes.Internal, "failed to operation: %v", err)
+}
+```
+
+**Internal Packages (rds/commands.go, nvme/nvme.go):**
+```go
+if err := validateSlotName(slot); err != nil {
+	return err  // Already wrapped
+}
+if newSizeBytes <= 0 {
+	return fmt.Errorf("new size must be positive")
+}
+return fmt.Errorf("failed to get volume info: %w", err)
 ```
 
 ## Logging
 
-**Framework:** `k8s.io/klog/v2` (Kubernetes standard)
+**Framework:** Kubernetes klog/v2 (468 total logging calls across codebase)
 
-**Patterns:**
-- Verbosity levels: `V(0)=Error`, `V(1)=Warning`, `V(2)=Info`, `V(4)=Debug`, `V(5)=Trace`
-- Always use structured logging with `.Infof()`, `.Warningf()`, `.Errorf()` methods
-- Log entry point calls: `V(2).Infof("MethodName called with param: %s", value)`
-- Log success/completion: `V(2).Infof("MethodName completed successfully")`
-- Security events: use `pkg/security/logger.go` for structured security logging
+**Verbosity Levels in Use:**
+- `V(0)`: Errors (klog.Errorf, klog.Error)
+- `V(1)`: Warnings (klog.Warningf, klog.Warning)
+- `V(2)`: Key operations (CreateVolume entry/exit, DeleteVolume, NodeStageVolume) - 54 occurrences
+- `V(3)`: Intermediate steps (volume exists checks, file cleanup) - DeleteVolume logs multiple V(3) steps
+- `V(4)`: Detailed queries (ValidateVolumeCapabilities, GetCapacity)
+- `V(5)`: Framework calls (ControllerGetCapabilities)
 
-**Example from `pkg/driver/controller.go`:**
+**Current Distribution:**
+- klog.V(2): 54 occurrences (primary operation logging)
+- klog.V(3): Intermediate checks
+- klog.V(4): Capability validation, capacity queries
+- klog.V(5): Framework discovery
+- klog.Errorf/Warningf: 100+ error/warning paths
+
+**Patterns in Controller (`pkg/driver/controller.go`):**
 ```go
 klog.V(2).Infof("CreateVolume called with name: %s", req.GetName())
+klog.V(2).Infof("Using volume ID: %s (from volume name: %s)", volumeID, req.GetName())
+klog.V(3).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
+klog.V(3).Infof("Deleting volume %s (path=%s, size=%d bytes, nvme_export=%v)", volumeID, filePath, size, export)
+klog.Errorf("Failed to delete volume %s: %v", volumeID, err)
 ```
 
-**Security Logging (from `pkg/security/logger.go`):**
-- Use `security.GetLogger().LogEvent(event)` for access control, authentication, volume operations
-- Event types: `EventSSHConnectionAttempt`, `EventVolumeCreateRequest`, `EventVolumeDeleteRequest`
-- Severities: `SeverityInfo`, `SeverityWarning`, `SeverityError`
-- Categories: `CategoryAuthentication`, `CategoryVolumeOperation`, `CategorySecurityValidation`
+**Patterns in Node (`pkg/driver/node.go`):**
+```go
+klog.V(2).Infof("NodeStageVolume called for volume: %s, staging path: %s", volumeID, stagingPath)
+klog.V(3).Infof("Volume %s already connected, fetching device path", volumeID)
+klog.Warningf("Failed to format device: %v", err)
+```
+
+**Patterns in RDS Commands (`pkg/rds/commands.go`):**
+```go
+klog.V(2).Infof("Creating volume %s (size: %d bytes, path: %s)", opts.Slot, opts.FileSizeBytes, opts.FilePath)
+klog.V(2).Infof("Successfully created volume %s", opts.Slot)
+klog.V(3).Infof("Volume %s not found, skipping deletion", slot)
+klog.Warningf("Failed to delete backing file: %v", err)
+```
+
+**Security Logging (`pkg/security/logger.go`):**
+- Centralized security event logging separate from operational logs
+- Maps severity (Info/Warning/Error/Critical) to klog verbosity
+- Structured fields: username, source_ip, volume_id, node_id, operation, duration
+- Critical events also logged as JSON: `"CRITICAL_SECURITY_EVENT: {...}"`
+- Provides 20+ helper methods for common events (LogVolumeCreate, LogSSHConnectionFailure, etc.)
+
+**Guidelines for v0.7.1:**
+- Log operation entry with inputs at V(2)
+- Log operation completion at V(2)
+- Log intermediate steps at V(3) ONLY for troubleshooting, not on every path
+- Log errors at klog.Errorf() level (always visible)
+- Use Warningf for recoverable issues
+- Avoid logging sensitive data (passwords, private keys)
+- Include context: volumeID, nodeID, operation, duration
 
 ## Comments
 
 **When to Comment:**
-- All public functions and types must have doc comments starting with the name
-- Explain "why", not "what" (the code shows what)
-- Complex algorithms or non-obvious logic
-- Tricky workarounds or temporary fixes
+- Package-level documentation: every public package has a comment explaining purpose
+- Exported functions/types: brief description of behavior
+- Complex logic: explain non-obvious decisions or algorithms
+- Workarounds/hacks: explain why workaround is needed and plan to fix
+- Business logic: explain CSI spec requirements or design decisions
 
-**JSDoc/Go Doc Pattern:**
+**Example from `pkg/attachment/manager.go`:**
 ```go
-// ControllerServer implements the CSI Controller service
-type ControllerServer struct {
-	// driver holds reference to parent Driver instance
-	driver *Driver
-}
-
-// NewControllerServer creates a new Controller service
-func NewControllerServer(driver *Driver) *ControllerServer {
-	return &ControllerServer{
-		driver: driver,
-	}
-}
-
-// CreateVolume provisions a new volume on RDS
-// This involves:
-// 1. Validating the request
-// 2. Checking if volume already exists (idempotency)
-// 3. Creating the file-backed disk via SSH
-// 4. Waiting for NVMe/TCP export to be ready
-func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+// TrackAttachment records that a volume is attached to a node.
+// This method is idempotent - if the volume is already attached to the same node,
+// it returns nil. If the volume is attached to a different node, it returns an error.
+// For RWX dual-attach, use TrackAttachmentWithMode or AddSecondaryAttachment instead.
+func (am *AttachmentManager) TrackAttachment(ctx context.Context, volumeID, nodeID string) error {
 ```
 
-**Constants and "why" comments:**
+**Go Doc Pattern:**
 ```go
-const (
-	// Default values for storage parameters
-	defaultVolumeBasePath = "/storage-pool/metal-csi"
-	defaultNVMETCPPort    = 4420
+// TypeName represents purpose
+// Additional context if needed.
+type TypeName struct {
+	// Field explains purpose
+	Field string
+}
 
-	// Minimum/maximum volume sizes
-	minVolumeSizeBytes = 1 * 1024 * 1024 * 1024         // 1 GiB
-	maxVolumeSizeBytes = 16 * 1024 * 1024 * 1024 * 1024 // 16 TiB
-)
+// MethodName does something
+// Multi-line comments explain complex behavior.
+func (t *TypeName) MethodName() error {
 ```
 
 ## Function Design
 
-**Size:** Keep functions under 50 lines when possible. Complex operations (like CreateVolume) are broken into helper functions.
+**Size:**
+- Target: 20-60 lines
+- Larger functions (100-200+ lines): ControllerPublishVolume, ControllerUnpublishVolume, NodeStageVolume
+- Large functions use clear section comments separating concerns
 
 **Parameters:**
-- Use context as first parameter in all async/network operations: `func (...) methodName(ctx context.Context, ...)`
-- Receiver types as pointers for methods that modify state: `func (cs *ControllerServer) Method()`
-- Use structs for multiple related parameters instead of long argument lists (e.g., `CreateVolumeOptions`, `ClientConfig`)
+- Context as first parameter (required for timeout/cancellation)
+- Group related parameters together
+- Use structs for >3 parameters (e.g., `CreateVolumeOptions` struct)
+- Avoid pass-by-value for large structs
 
 **Return Values:**
-- Error as last return value: `func Foo(x int) (string, error)`
-- Use pointer receivers to return data and error: `(*VolumeInfo, error)`
-- Boolean success indicator not used; use error return instead
+- CSI methods: `(response, error)`
+- Single-value methods: `(value, error)`
+- Helper functions: `(data, error)`
+- Never return nil response when error is present
 
-**Example from `pkg/rds/client.go`:**
-```go
-// RDSClient interface defines clean contract
-type RDSClient interface {
-	Connect() error
-	CreateVolume(opts CreateVolumeOptions) error
-	DeleteVolume(slot string) error
-	GetVolume(slot string) (*VolumeInfo, error)
-	ListVolumes() ([]VolumeInfo, error)
-	GetCapacity(basePath string) (*CapacityInfo, error)
-}
-
-// NewClient uses configuration struct
-func NewClient(config ClientConfig) (RDSClient, error) {
-	// Route to appropriate implementation
-	switch config.Protocol {
-	case "ssh":
-		return newSSHClient(config)
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", config.Protocol)
-	}
-}
-```
+**Error Propagation:**
+- Wrap errors with context: `fmt.Errorf("failed to X: %w", err)`
+- Each layer adds information rather than hiding original error
+- Avoid re-throwing without context
 
 ## Module Design
 
 **Exports:**
-- All public types/functions exported: PascalCase
-- All private types/functions unexported: camelCase
-- Constructor functions: `New<TypeName>()` returns interface when possible (e.g., `NewClient()` returns `RDSClient`)
+- Exported functions document public API clearly
+- Unexported helpers keep implementation private
+- Interfaces exported for dependency injection (Connector, Mounter, RDSClient)
+- Configuration constants exported (DefaultOrphanCheckInterval)
 
-**Barrel Files:** Not used. Import specific package paths directly.
+**Barrel Files:**
+- Not used - no index.go files
+- Direct imports from specific packages
 
-**Package Responsibilities:**
-- `pkg/driver/` - CSI gRPC services (Identity, Controller, Node)
-- `pkg/rds/` - RDS/RouterOS SSH client and command parsing
-- `pkg/nvme/` - NVMe/TCP connector for block device operations
-- `pkg/mount/` - Filesystem mounting operations
-- `pkg/security/` - Security logging, metrics, event tracking
-- `pkg/utils/` - Common utilities (error sanitization, validation, volume ID generation)
-- `pkg/reconciler/` - Orphan volume detection and cleanup
-
-**Example from `pkg/driver/driver.go`:**
-```go
-// Driver is the main CSI driver instance
-type Driver struct {
-	// Public exports via GetPluginInfo()
-	name    string
-	version string
-
-	// CSI service implementations
-	ids csi.IdentityServer
-	cs  csi.ControllerServer
-	ns  csi.NodeServer
-
-	// RDS backend
-	rdsClient rds.RDSClient
-	reconciler *reconciler.OrphanReconciler
-}
-
-// NewDriver is the public constructor
-func NewDriver(config DriverConfig) (*Driver, error) {
-	// Initialization logic
-}
-```
+**Package Structure (9 packages in pkg/):**
+- `pkg/driver/`: CSI services (Identity, Controller, Node) - 830+ lines
+- `pkg/rds/`: RDS/RouterOS SSH client and command parsing - 600+ lines
+- `pkg/nvme/`: NVMe/TCP connector, device resolution - 500+ lines
+- `pkg/mount/`: Filesystem operations, mount recovery - 600+ lines
+- `pkg/attachment/`: Volume-to-node attachment state tracking - 400+ lines
+- `pkg/reconciler/`: Orphan volume detection and cleanup - 300+ lines
+- `pkg/utils/`: Validation, retry, error handling, volume ID generation - 300+ lines
+- `pkg/security/`: Security event logging and metrics - 600+ lines
+- `pkg/observability/`: Prometheus metrics collection - 200+ lines
 
 ---
 
-*Convention analysis: 2026-01-30*
+*Convention analysis: 2026-02-04*

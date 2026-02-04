@@ -1,477 +1,475 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-01-30
+**Analysis Date:** 2026-02-04
 
 ## Test Framework
 
 **Runner:**
-- `go test` (native Go testing)
-- Configuration: `Makefile` targets for standard invocation
-- Flags: `-v` (verbose), `-race` (race detector), `-timeout 5m` (unit tests), `-timeout 10m` (integration)
+- Go `testing` package (built-in)
+- Go 1.24+
 
 **Assertion Library:**
-- Native Go `testing.T` package (no assertion libraries like testify)
-- Manual assertions with `t.Errorf()`, `t.Fatalf()`, `t.Error()`
+- Standard library `testing.T` with manual assertions
 
 **Run Commands:**
 ```bash
-make test                # Run all unit tests (pkg/...)
-make test-coverage       # Run tests with coverage report, HTML output
-make test-integration    # Run integration tests (test/integration/...)
-make test-sanity-mock    # CSI sanity tests with mock RDS
-make test-sanity-real    # CSI sanity tests with real RDS hardware
-make verify              # fmt + vet + lint + test (full verification)
+make test                  # Run all unit tests with -race flag
+make test-coverage         # Run tests with coverage report to coverage.html
+make test-integration      # Run integration tests with mock RDS
+make test-sanity          # Run CSI sanity tests (auto-detects RDS or uses mock)
+make test-sanity-mock     # CSI sanity tests with mock RDS (no real RDS needed)
+make test-sanity-real     # CSI sanity tests with real RDS (requires RDS_ADDRESS env var)
+make lint                 # Run golangci-lint
+make verify               # Run fmt + vet + lint + test
 ```
 
-## Test File Organization
+## Test Organization and Coverage
 
-**Location:**
-- Co-located with source: `pkg/driver/identity.go` has `pkg/driver/identity_test.go`
-- Integration tests: `test/integration/` directory (separate from pkg/)
-- Mock server: `test/mock/rds_server.go` for RDS simulation
+### Overall Coverage by Package
 
-**Naming:**
-- Test files: `*_test.go` suffix
-- Test functions: `TestFunctionName()` format
-- Subtests (rare): table-driven test structure with named cases
+| Package | Coverage | Status | Notes |
+|---------|----------|--------|-------|
+| `pkg/utils` | 92.3% | GOOD | Validation, errors, regex, retry helpers |
+| `pkg/circuitbreaker` | 90.2% | GOOD | Circuit breaker implementation |
+| `pkg/attachment` | 84.5% | GOOD | Attachment tracking and reconciliation |
+| `pkg/security` | 79.8% | GOOD | Metrics, logger, event recording |
+| `pkg/observability` | 75.0% | ACCEPTABLE | Prometheus metrics |
+| `pkg/reconciler` | 66.4% | GAPS | Orphan reconciliation logic |
+| `pkg/mount` | 55.9% | **CRITICAL** | Core mounting operations (20KB code, 18KB tests) |
+| `pkg/rds` | 44.5% | **CRITICAL** | SSH client completely untested (341 lines) |
+| `pkg/nvme` | 43.3% | **CRITICAL** | 4031 lines, 2376 test lines - missing edge cases |
+| `pkg/driver` | FAILING | **BLOCKING** | Block volume tests have nil pointer dereference |
 
-**Structure:**
-```
-pkg/driver/
-├── identity.go
-├── identity_test.go      # Co-located tests
-├── controller.go
-├── controller_test.go
-├── node.go
-└── node_test.go          # (if exists)
+## File and Test Structure
 
-test/integration/
-├── controller_integration_test.go
-├── hardware_integration_test.go
-└── orphan_reconciler_integration_test.go
-```
+**Location Pattern:** Co-located
 
-## Test Structure
+Tests are in same directory as implementation:
+- `pkg/driver/controller.go` → `pkg/driver/controller_test.go`
+- `pkg/nvme/nvme.go` → `pkg/nvme/nvme_test.go`
+- `pkg/mount/mount.go` → `pkg/mount/mount_test.go`
 
-**Suite Organization:**
+**Naming Convention:**
+- Test functions: `Test<Function><Scenario>` (e.g., `TestNodeStageVolume_BlockVolume`)
+- Helper functions: Lowercase with clear purpose (e.g., `mockExecCommand`, `createBlockVolumeCapability`)
+- Test data: Inline or simple mock structs
+
+**Files Without Tests (COVERAGE GAPS):**
+- `pkg/rds/ssh_client.go` - 341 lines - SSH connection, authentication, command execution
+- `pkg/driver/server.go` - 145 lines - gRPC server setup, endpoint parsing
+- `pkg/attachment/persist.go` - 147 lines - PV annotation persistence
+- `pkg/rds/client.go` - 69 lines - RDS client factory (thin wrapper)
+
+## Test Structure Pattern
+
+### Standard Unit Test Structure
+
 ```go
-package driver
-
-import (
-	"context"
-	"testing"
-
-	"github.com/container-storage-interface/spec/lib/go/csi"
-)
-
-// Organized by test type (positive, negative, edge cases)
-func TestGetPluginInfo(t *testing.T) {
-	// Setup
-	driver := &Driver{
-		name:    "test.csi.driver",
-		version: "v1.0.0",
-	}
-
-	// Execute
-	ids := NewIdentityServer(driver)
-	resp, err := ids.GetPluginInfo(context.Background(), &csi.GetPluginInfoRequest{})
-
-	// Assert
-	if err != nil {
-		t.Fatalf("GetPluginInfo failed: %v", err)
-	}
-
-	if resp.Name != "test.csi.driver" {
-		t.Errorf("Expected name test.csi.driver, got %s", resp.Name)
-	}
-}
-
-// Negative case (same function, different scenario)
-func TestGetPluginInfoNoName(t *testing.T) {
-	driver := &Driver{
-		name:    "",  // Empty name triggers error
-		version: "v1.0.0",
-	}
-
-	ids := NewIdentityServer(driver)
-	_, err := ids.GetPluginInfo(context.Background(), &csi.GetPluginInfoRequest{})
-
-	if err == nil {
-		t.Error("Expected error when driver name is empty, got nil")
-	}
-}
-```
-
-**Patterns:**
-- Setup: Create fixtures directly or use helper functions
-- No separate setup/teardown (simple functions don't need them)
-- Cleanup: defer statements in tests that allocate resources
-- Multiple assertions: list expected vs. actual for each case
-
-## Mocking
-
-**Framework:** No external mocking library. Use:
-- Interface-based mocks: Create simple structs that implement interfaces
-- Command mocking: `exec.Cmd` mocking via environment variables (see below)
-- Mock servers: Embed in test files or `test/mock/` package
-
-**Patterns:**
-
-**Interface Mocks (from `pkg/driver/controller_test.go`):**
-```go
-// Test creates minimal Driver struct directly
+// From pkg/driver/controller_test.go
 func TestValidateVolumeCapabilities(t *testing.T) {
-	cs := &ControllerServer{
-		driver: &Driver{
-			vcaps: []*csi.VolumeCapability_AccessMode{
-				{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
-				{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY},
-			},
-		},
-	}
+    // 1. Setup
+    cs := &ControllerServer{
+        driver: &Driver{
+            vcaps: []*csi.VolumeCapability_AccessMode{
+                {Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
+            },
+        },
+    }
 
-	// No external mock, just struct with required fields
-	caps := []*csi.VolumeCapability{
-		{
-			AccessMode: &csi.VolumeCapability_AccessMode{
-				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-			},
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-		},
-	}
+    // 2. Define test cases as table-driven
+    tests := []struct {
+        name      string
+        caps      []*csi.VolumeCapability
+        expectErr bool
+    }{
+        {
+            name: "valid single node writer with mount",
+            caps: []*csi.VolumeCapability{...},
+            expectErr: false,
+        },
+        // More cases...
+    }
 
-	err := cs.validateVolumeCapabilities(caps)
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
+    // 3. Run test cases
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            err := cs.validateVolumeCapabilities(tt.caps)
+            if tt.expectErr && err == nil {
+                t.Error("Expected error but got nil")
+            }
+            if !tt.expectErr && err != nil {
+                t.Errorf("Unexpected error: %v", err)
+            }
+        })
+    }
 }
 ```
 
-**Command Execution Mocking (from `pkg/nvme/nvme_test.go`):**
+## Mocking Patterns
+
+### Mock Types Strategy
+
+**By Package:**
+
+#### pkg/driver/node_test.go
+```go
+// mockMounter implements mount.Mounter interface for testing
+type mockMounter struct {
+    formatCalled    bool
+    mountCalled     bool
+    unmountCalled   bool
+    mountErr        error
+    unmountErr      error
+    formatErr       error
+    isLikelyMounted bool
+    // ... more fields
+}
+
+func (m *mockMounter) Mount(source, target, fsType string, options []string) error {
+    m.mountCalled = true
+    return m.mountErr
+}
+// ... implement all interface methods
+```
+
+**Pattern:**
+- Mocks implement interfaces (e.g., `mount.Mounter`, `RDSClient`)
+- Tracking fields (e.g., `mountCalled`, `formatErr`) record what was called and with what errors
+- Simple default behavior (e.g., return nil) unless test specifically configures error
+
+#### pkg/nvme/nvme_test.go (exec.Cmd mocking)
 ```go
 // mockExecCommand creates a mock exec.Cmd for testing
 func mockExecCommand(stdout, stderr string, exitCode int) func(string, ...string) *exec.Cmd {
-	return func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-			"STDOUT=" + stdout,
-			"STDERR=" + stderr,
-			"EXIT_CODE=" + fmt.Sprintf("%d", exitCode),
-		}
-		return cmd
-	}
+    return func(command string, args ...string) *exec.Cmd {
+        cs := []string{"-test.run=TestHelperProcess", "--", command}
+        cs = append(cs, args...)
+        cmd := exec.Command(os.Args[0], cs...)
+        cmd.Env = []string{
+            "GO_WANT_HELPER_PROCESS=1",
+            "STDOUT=" + stdout,
+            "STDERR=" + stderr,
+            "EXIT_CODE=" + fmt.Sprintf("%d", exitCode),
+        }
+        return cmd
+    }
 }
 
-// TestHelperProcess is invoked as subprocess to simulate command output
+// TestHelperProcess is called by the mocked command
 func TestHelperProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
-		return
-	}
-	_, _ = os.Stdout.WriteString(os.Getenv("STDOUT"))
-	_, _ = os.Stderr.WriteString(os.Getenv("STDERR"))
-	exitCode, _ := strconv.Atoi(os.Getenv("EXIT_CODE"))
-	os.Exit(exitCode)
-}
-
-// Usage in test
-func TestConnect(t *testing.T) {
-	tests := []struct {
-		name        string
-		target      Target
-		listOutput  string  // mock output from nvme list
-		devicePath  string  // expected device path
-		expectError bool
-	}{
-		{
-			name: "successful connection",
-			target: Target{
-				Transport:     "tcp",
-				NQN:           "nqn.2000-02.com.mikrotik:pvc-test-123",
-				TargetAddress: "10.0.0.1",
-				TargetPort:    4420,
-			},
-			listOutput: `NVMe Devices\n/dev/nvme0n1`,
-			devicePath: "/dev/nvme0n1",
-			expectError: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// execCommand would be replaced with mockExecCommand
-			// (actual implementation shows pattern)
-		})
-	}
+    if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+        return
+    }
+    // Read STDOUT/STDERR/EXIT_CODE from env and output accordingly
 }
 ```
 
-**What to Mock:**
-- External system calls: command execution, SSH commands
-- Network operations: connection/disconnection (via mock RDS server)
-- Kubernetes API: not needed for unit tests (integration tests use real k8s client)
+### What to Mock
 
-**What NOT to Mock:**
-- Core business logic: CSI service methods
-- Data parsing: RouterOS output parsing (use real output samples)
-- Validation functions: test with real inputs
+**DO Mock:**
+- External dependencies: SSH, NVMe commands, Kubernetes API (`k8s.io/client-go/kubernetes/fake`)
+- System calls: `exec.Command`, filesystem operations (for unit tests)
+- Time: For timeout/retry testing (use standard `time` package)
+- RDS client: Use `test/mock/rds_server.go` for integration tests
 
-## Fixtures and Factories
+**DO NOT Mock:**
+- Core driver logic (test actual implementation)
+- CSI structures (use real `csi.VolumeCapability`, `csi.NodeStageVolumeRequest`)
+- Volume ID generation (test real `pkg/utils/volumeid.go`)
+- Validation functions (test real validation, not mocked)
 
-**Test Data:**
+## Key Testing Patterns Observed
+
+### Pattern 1: Error Injection via Struct Fields
+
+From `pkg/attachment/manager_test.go`:
 ```go
-// Real RouterOS /disk print output format
-output := `type=file slot="pvc-test-123" slot-default="" parent="" fs=-
-               model="/storage-pool/test.img"
-               size=53 687 091 200 mount-filesystem=yes mount-read-only=no
-               compress=no sector-size=512 raid-master=none
-               nvme-tcp-export=yes nvme-tcp-server-port=4420
-               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-123"`
+// Setup mocks with error injection
+mounter := &mockMounter{
+    mountErr:    fmt.Errorf("mount failed"),
+    formatErr:   nil,
+    unmountErr: nil,
+}
 
-// Parse and verify
-volume, err := parseVolumeInfo(output)
+// Test calls method, mock returns configured error
+err := ns.NodeStageVolume(ctx, req)
+```
+
+### Pattern 2: Table-Driven Tests
+
+Heavily used throughout for testing multiple scenarios:
+```go
+tests := []struct {
+    name      string
+    input     string
+    expected  string
+    shouldErr bool
+}{
+    {"valid case", "input1", "expected1", false},
+    {"error case", "input2", "", true},
+}
+
+for _, tt := range tests {
+    t.Run(tt.name, func(t *testing.T) {
+        // Test implementation
+    })
+}
+```
+
+### Pattern 3: Temporary Filesystem for Tests
+
+From `pkg/driver/node_test.go`:
+```go
+tmpDir, err := os.MkdirTemp("", "node-test-*")
 if err != nil {
-	t.Fatalf("Unexpected error: %v", err)
+    t.Fatalf("failed to create temp dir: %v", err)
 }
+defer os.RemoveAll(tmpDir)
 
-// Use real expected values
-if volume.FileSizeBytes != 50*1024*1024*1024 {
-	t.Errorf("Expected size %d, got %d", 50*1024*1024*1024, volume.FileSizeBytes)
-}
+// Test operations on temp directory
+stagingPath := filepath.Join(tmpDir, "staging")
 ```
 
-**Location:**
-- Inline in test files (most common): fixtures created in test functions
-- Real output samples: from `test/integration/` for RouterOS command output parsing
-- Shared helpers: small utility functions in same `_test.go` file
+### Pattern 4: Fake Kubernetes Client
 
-**Example from `pkg/rds/commands_test.go`:**
+From `pkg/driver/controller_test.go`:
 ```go
-func TestParseVolumeInfo(t *testing.T) {
-	// Real RouterOS output format as literal string
-	output := `type=file slot="pvc-test-123" slot-default="" parent="" fs=-
-               model="/storage-pool/test.img"
-               size=53 687 091 200 mount-filesystem=yes mount-read-only=no
-               nvme-tcp-export=yes nvme-tcp-server-port=4420
-               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-123"`
+import "k8s.io/client-go/kubernetes/fake"
 
-	volume, err := parseVolumeInfo(output)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	// Verify parsed values match expectations
-	if volume.Slot != "pvc-test-123" {
-		t.Errorf("Expected slot pvc-test-123, got %s", volume.Slot)
-	}
-	if volume.NVMETCPPort != 4420 {
-		t.Errorf("Expected port 4420, got %d", volume.NVMETCPPort)
-	}
-}
+// Use fake client for integration tests
+clientset := fake.NewSimpleClientset()
+// Tests can interact with Kubernetes API without real cluster
 ```
 
-## Coverage
+### Pattern 5: Context-Based Test Isolation
 
-**Requirements:** No hard coverage target enforced, but measured with `make test-coverage`
+All CSI service tests use `context.Background()`:
+```go
+ctx := context.Background()
+_, err = ns.NodeStageVolume(ctx, req)
+```
 
-**View Coverage:**
+No context timeouts observed - tests run to completion without interruption.
+
+## Test Quality Assessment
+
+### Strong Areas
+
+**1. Validation Testing** (`pkg/utils/validation_test.go`)
+- Comprehensive test cases: 20+ subtests for NQN validation
+- Security-focused: Tests for shell injection, special characters
+- Example: `TestValidateNQN` covers 20+ injection attack patterns
+
+**2. Error Handling** (`pkg/utils/errors_test.go`)
+- 482 lines of thorough error tests
+- Tests sanitization of IPs, paths, hostnames, fingerprints
+- Tests context preservation in error chains
+- Complex scenario testing (multi-component errors)
+
+**3. Attachment Management** (`pkg/attachment/manager_test.go`)
+- Idempotency testing (same call twice should be safe)
+- Conflict detection (volume already attached to different node)
+- State tracking and cleanup
+
+**4. Mount Operations** (`pkg/mount/mount_test.go`)
+- 18KB of tests for 20KB of mount logic
+- Tests for stale mount detection, recovery, health checks
+- Tests for /proc/mounts parsing edge cases
+
+### Critical Gaps (for v0.7.1)
+
+**1. SSH Client Completely Untested** - `pkg/rds/ssh_client.go` (341 lines)
+- No tests for SSH key parsing
+- No tests for host key verification
+- No tests for SSH connection establishment
+- No tests for SSH command execution
+- No tests for error handling (timeout, auth failure, connection refused)
+- **Impact:** Control plane (volume CRUD) is untested at SSH transport level
+- **Risk Level:** HIGH - This is the critical path for all volume operations
+
+**2. gRPC Server Setup Untested** - `pkg/driver/server.go` (145 lines)
+- `parseEndpoint()` function untested
+- No tests for socket cleanup, TCP binding
+- No tests for service registration
+- **Impact:** Driver startup and initialization untested
+- **Risk Level:** MEDIUM - Only runs once at startup
+
+**3. Block Volume Support Broken** - `pkg/driver/node_test.go`
+- `TestNodeStageVolume_BlockVolume` - FAILING (staging directory not created)
+- `TestNodePublishVolume_BlockVolume` - FAILING (nil pointer dereference)
+- Root cause: NodeStageVolume for block volumes doesn't create staging dir or device metadata file
+- **Impact:** Block volumes (KubeVirt, raw disks) don't work
+- **Risk Level:** CRITICAL for v0.7.1 (blocks VMs on NVMe/TCP)
+
+**4. Attachment Persistence Untested** - `pkg/attachment/persist.go` (147 lines)
+- PV annotation persistence never tested
+- No tests for retry logic with conflicts
+- No tests for "not found" handling
+- **Impact:** Debugging attachments may be unreliable
+- **Risk Level:** LOW - Informational only, doesn't affect attachment state
+
+**5. RDS Package Coverage Only 44.5%** - `pkg/rds/` (3024 lines code, 1211 test lines)
+- `ssh_client.go` - 0% coverage (341 lines)
+- `client.go` - 0% coverage (69 lines)
+- Only `commands_test.go` and `pool_test.go` have tests
+- Missing: SSH connection lifecycle, key loading, host verification
+- **Impact:** RDS integration untested except parsing
+- **Risk Level:** HIGH - Volume creation/deletion depends on this
+
+**6. NVMe Package Only 43.3%** - `pkg/nvme/` (4031 lines)
+- Coverage gaps in `nvme.go` (NVMe connect/disconnect)
+- Limited error path testing
+- No timeout/retry scenario tests
+- **Impact:** Data plane (device connection) has edge cases untested
+- **Risk Level:** MEDIUM - Most paths exercised but error handling thin
+
+**7. Mount Package Only 55.9%** - `pkg/mount/` (3523 lines, 2190 test lines)
+- 20KB code, 18KB tests but still only 55% coverage
+- Likely missing: Permission errors, filesystem full, path escaping
+- **Impact:** Pod mounting may fail ungracefully
+- **Risk Level:** MEDIUM
+
+**8. Driver Package Test Failures**
+- Block volume support tests failing with nil pointer panic
+- This indicates incomplete implementation or test mismatch
+- **Impact:** v0.7.1 block volume feature incomplete
+- **Risk Level:** CRITICAL
+
+## Coverage Gaps Summary for v0.7.1
+
+### By Severity
+
+**BLOCKING (must fix for release):**
+1. Block volume tests failing - `pkg/driver/node_test.go:728-889`
+   - NodeStageVolume not writing device metadata
+   - NodePublishVolume dereferencing nil pointer
+   - Fix: Complete block volume implementation in `pkg/driver/node.go`
+
+2. SSH client untested - `pkg/rds/ssh_client.go`
+   - 341 lines of critical code with 0% test coverage
+   - Tests needed for:
+     - SSH key parsing and authentication
+     - Host key verification
+     - Connection timeouts and retries
+     - Command execution
+     - Connection cleanup
+
+### HIGH PRIORITY (may impact v0.7.1)
+
+3. RDS client untested - `pkg/rds/client.go`, `ssh_client.go`
+   - Volume creation/deletion path needs SSH tests
+   - Mock RDS server exists but SSH client itself untested
+
+4. Attachment persistence untested - `pkg/attachment/persist.go`
+   - Needs tests for PV annotation updates
+   - Conflict retry logic untested
+
+### MEDIUM PRIORITY (can defer if time-constrained)
+
+5. gRPC server setup untested - `pkg/driver/server.go`
+   - Endpoint parsing needs tests
+   - Start/stop lifecycle untested
+
+6. NVMe edge cases - `pkg/nvme/nvme.go`
+   - Error scenarios need more coverage
+   - Timeout handling untested
+
+## Test Execution Environment
+
+**Local Testing:**
 ```bash
-make test-coverage       # Runs tests and generates coverage.html
-# Opens coverage.html in browser to see uncovered lines
+# Run on macOS/Linux with no RDS required
+make test
+make test-integration      # Uses mock RDS server
+make test-sanity-mock      # CSI sanity with mock
+
+# With real RDS
+RDS_ADDRESS=192.168.1.100 RDS_SSH_KEY=~/.ssh/id_rsa make test-sanity-real
 ```
 
-**Output:**
-- `coverage.out` - raw coverage profile (binary format)
-- `coverage.html` - HTML report showing covered/uncovered lines by package
+**Docker Testing:**
+```bash
+make test-docker           # All tests in Docker Compose
+make test-docker-sanity    # CSI sanity in Docker
+make test-docker-integration # Integration tests in Docker
+```
 
-**Current gaps (identified in codebase):**
-- Integration tests have minimal coverage for error paths
-- Mock RDS server (`test/mock/rds_server.go`) for sanity tests
-- Some NVMe connector edge cases untested (error handling)
+**CI Integration:**
+- Makefile targets: `test`, `lint`, `verify`
+- No external test runners configured (just `go test`)
+- No coverage threshold enforcement (but should be added)
 
-## Test Types
+## Hard-to-Maintain Tests
 
-**Unit Tests:**
-- Scope: Single function or method in isolation
-- Location: `*_test.go` co-located with source
-- Time: < 100ms per test (enforced by `-timeout 5m` for 3000+ tests)
-- Approach: Direct function calls, minimal setup, table-driven for multiple cases
-- Example: `TestValidateVolumeCapabilities()` tests validation logic directly
+### Test 1: Block Volume Mock Setup (node_test.go)
 
-**Integration Tests:**
-- Scope: Multiple components working together (e.g., driver + RDS client simulation)
-- Location: `test/integration/*_test.go`
-- Time: < 1s per test (enforced by `-timeout 10m` for ~600 tests)
-- Approach: Use mock RDS server, test full volume lifecycle
-- Example: `test/integration/controller_integration_test.go` tests CreateVolume -> DeleteVolume flow
-- Mock RDS: `test/mock/rds_server.go` provides SSH command simulation
-
-**E2E Tests:**
-- Framework: `csi-test` (official Kubernetes CSI compliance)
-- Type: CSI sanity tests
-- Invocation: `make test-sanity-mock` (with mock RDS) or `make test-sanity-real` (with hardware)
-- Approach: Validates driver against CSI spec requirements
-- Runs: CreateVolume, DeleteVolume, ValidateVolumeCapabilities, NodeStageVolume, NodePublishVolume, etc.
-
-## Common Patterns
-
-**Async Testing:**
+**Issue:** Complex mock filesystem setup for block volumes
 ```go
-// Tests use context.Background() for simple cases
-func TestGetPluginInfo(t *testing.T) {
-	ids := NewIdentityServer(driver)
-	resp, err := ids.GetPluginInfo(context.Background(), req)
-	// ...
-}
-
-// Integration tests may use context.WithTimeout() for RDS operations
-func TestCreateVolumeWithTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := cs.CreateVolume(ctx, req)
-	// ...
-}
+// Creates temporary /dev-like structures
+tmpDir, _ := os.MkdirTemp("", "node-test-block-stage-*")
+stagingPath := filepath.Join(tmpDir, "staging")
+mockDevicePath := filepath.Join(tmpDir, "mock-nvme0n1")
+// ... writes metadata files, creates directories
 ```
 
-**Error Testing:**
+**Problem:** Test is fragile if NodeStageVolume implementation changes metadata location
+
+**Recommendation:** Use `os.WriteFile` with known paths, assert file presence at end
+
+### Test 2: NVMe ExecCommand Mocking (nvme_test.go)
+
+**Issue:** TestHelperProcess pattern is complex and easy to break
 ```go
-// Test error case - validation
-func TestValidateVolumeCapabilitiesMultiNode(t *testing.T) {
-	cs := &ControllerServer{
-		driver: &Driver{
-			vcaps: []*csi.VolumeCapability_AccessMode{
-				{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
-			},
-		},
-	}
-
-	caps := []*csi.VolumeCapability{
-		{
-			AccessMode: &csi.VolumeCapability_AccessMode{
-				Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
-			},
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-		},
-	}
-
-	// Expect error, verify it occurs
-	if len(caps) > 0 {
-		supported := false
-		for _, cap := range cs.driver.vcaps {
-			if cap.Mode == caps[0].AccessMode.Mode {
-				supported = true
-				break
-			}
-		}
-		if !supported {
-			// Error path verified
-			t.Log("Correctly rejected unsupported access mode")
-		}
-	}
-}
-
-// Test error case - status code
-func TestGetPluginInfoNoName(t *testing.T) {
-	driver := &Driver{name: "", version: "v1.0.0"}
-	ids := NewIdentityServer(driver)
-
-	_, err := ids.GetPluginInfo(context.Background(), &csi.GetPluginInfoRequest{})
-
-	// Verify error is not nil
-	if err == nil {
-		t.Error("Expected error when driver name is empty, got nil")
-	}
-
-	// Could also check status code if using gRPC status
-	// st, ok := status.FromError(err)
-	// if !ok || st.Code() != codes.Unavailable {
-	// 	t.Error("Expected Unavailable status code")
-	// }
-}
+// Must coordinate between mockExecCommand and TestHelperProcess
+// ENV variables pass state (STDOUT, STDERR, EXIT_CODE)
+// Helper process must read correct env vars
 ```
 
-**Table-Driven Tests (from `pkg/utils/validation_test.go`):**
+**Problem:** If helper test is modified, all mocks break silently
+
+**Recommendation:** Use `exec.CommandContext` with timeout for clearer semantics
+
+### Test 3: Mount Stale Check with Mocking (node_test.go)
+
+**Issue:** `createNodeServerWithStaleBehavior` has 150+ lines of setup
 ```go
-func TestValidateFilePath(t *testing.T) {
-	tests := []struct {
-		name    string
-		path    string
-		wantErr bool
-	}{
-		{
-			name:    "valid absolute path",
-			path:    "/storage-pool/kubernetes-volumes/pvc-123.img",
-			wantErr: false,
-		},
-		{
-			name:    "empty path",
-			path:    "",
-			wantErr: true,
-		},
-		{
-			name:    "path traversal with ../",
-			path:    "/storage-pool/kubernetes-volumes/../../../etc/passwd",
-			wantErr: true,
-		},
-		{
-			name:    "semicolon injection",
-			path:    "/storage-pool/volumes/pvc-123.img; rm -rf /",
-			wantErr: true,
-		},
-	}
-
-	// Iterate and test each case
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateFilePath(tt.path)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateFilePath() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
+// Simulates entire sysfs structure for NVMe device resolution
+// Sets up directories, NQN files, block device entries
+// Configures stale check behavior with multiple branches
 ```
 
-**Parsing/Output Testing (Real RouterOS Output):**
-```go
-func TestParseVolumeList(t *testing.T) {
-	// Real RouterOS /disk print multi-line output format
-	output := ` 0  type=file slot="pvc-test-1" size=53 687 091 200
-               file-path=/storage-pool/test1.img file-size=50.0GiB
-               nvme-tcp-export=yes nvme-tcp-server-port=4420
-               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-1"
+**Problem:** Test is tightly coupled to resolver internals; changes to sysfs detection break test
 
- 1  type=file slot="pvc-test-2" size=107 374 182 400
-               file-path=/storage-pool/test2.img file-size=100.0GiB
-               nvme-tcp-export=yes nvme-tcp-server-port=4420
-               nvme-tcp-server-nqn="nqn.2000-02.com.mikrotik:pvc-test-2"`
+**Recommendation:** Extract stale check setup into a test helper function with better documentation
 
-	volumes, err := parseVolumeList(output)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
+## Recommendations for v0.7.1
 
-	if len(volumes) != 2 {
-		t.Errorf("Expected 2 volumes, got %d", len(volumes))
-	}
+1. **Fix Blocking Tests (IMMEDIATE)**
+   - Implement block volume support in `pkg/driver/node.go` (staging dir, metadata file)
+   - Or remove/disable tests until feature is ready
 
-	// Verify structure and values
-	if volumes[0].Slot != "pvc-test-1" {
-		t.Errorf("Expected first volume slot pvc-test-1, got %s", volumes[0].Slot)
-	}
-	if volumes[1].FileSizeBytes != 100*1024*1024*1024 {
-		t.Errorf("Expected second volume size %d, got %d", 100*1024*1024*1024, volumes[1].FileSizeBytes)
-	}
-}
-```
+2. **Add SSH Client Tests (HIGH)**
+   - Create `pkg/rds/ssh_client_test.go` (target: 80%+ coverage)
+   - Test: key loading, host verification, command execution, timeouts
+   - Use mock SSH server or `golang.org/x/crypto/ssh/test` if available
+
+3. **Add Persistence Tests (MEDIUM)**
+   - Create `pkg/attachment/persist_test.go`
+   - Test: PV annotation updates, retry on conflict, "not found" handling
+
+4. **Add Server Tests (MEDIUM)**
+   - Add `server_test.go` for `parseEndpoint()` and server lifecycle
+
+5. **Improve Coverage Enforcement**
+   - Add coverage threshold to CI (e.g., min 70% per package)
+   - Pre-commit hook to run `make verify`
+   - Document coverage expectations per package
+
+6. **Document Mock Strategy**
+   - Document when to use interface mocks vs. fake clients
+   - Add comments explaining mock setup patterns
+   - Create test utility package for common mocks
 
 ---
 
-*Testing analysis: 2026-01-30*
+*Testing analysis: 2026-02-04*
