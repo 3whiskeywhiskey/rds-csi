@@ -417,3 +417,36 @@ func GetSanitizedMessage(err error) string {
 	// Sanitize unsanitized errors
 	return SanitizeErrorMessage(err.Error())
 }
+
+// WrapVolumeError wraps a sentinel error with volume-specific context.
+// This preserves the error chain so errors.Is() still works.
+func WrapVolumeError(sentinel error, volumeID, details string) error {
+	if details != "" {
+		return fmt.Errorf("volume %s: %s: %w", volumeID, details, sentinel)
+	}
+	return fmt.Errorf("volume %s: %w", volumeID, sentinel)
+}
+
+// WrapNodeError wraps a sentinel error with node-specific context.
+func WrapNodeError(sentinel error, nodeID, details string) error {
+	if details != "" {
+		return fmt.Errorf("node %s: %s: %w", nodeID, details, sentinel)
+	}
+	return fmt.Errorf("node %s: %w", nodeID, sentinel)
+}
+
+// WrapDeviceError wraps a sentinel error with device-specific context.
+func WrapDeviceError(sentinel error, devicePath, details string) error {
+	if details != "" {
+		return fmt.Errorf("device %s: %s: %w", devicePath, details, sentinel)
+	}
+	return fmt.Errorf("device %s: %w", devicePath, sentinel)
+}
+
+// WrapMountError wraps a sentinel error with mount-specific context.
+func WrapMountError(sentinel error, target, details string) error {
+	if details != "" {
+		return fmt.Errorf("mount %s: %s: %w", target, details, sentinel)
+	}
+	return fmt.Errorf("mount %s: %w", target, sentinel)
+}
