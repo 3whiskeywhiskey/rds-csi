@@ -412,3 +412,135 @@ func TestRebuildStateFromVolumeAttachments_AccessModeFallback(t *testing.T) {
 	// Verify no error - graceful handling
 	// (already verified by err check above)
 }
+
+// Task 3: Test backward compatibility with stale annotations
+//
+// These tests verify that VolumeAttachment is the authoritative source of truth,
+// and PV annotations are ignored during rebuild even when they contradict VA state.
+
+func TestRebuildStateFromVolumeAttachments_IgnoresStaleAnnotations(t *testing.T) {
+	volumeID := "pvc-vol1"
+	correctNode := "node-2"
+	staleNode := "node-1"
+
+	// Create PV with stale attachment annotations (different node than VA)
+	pv := createFakePVWithAnnotations(volumeID, staleNode, time.Now().Add(-1*time.Hour).Format(metav1.RFC3339Micro))
+
+	// Create VA pointing to correct node
+	va := createFakeVolumeAttachment("va1", driverName, volumeID, correctNode, true)
+
+	client := fake.NewSimpleClientset(va, pv)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist")
+	}
+
+	// Verify state uses VA's node, NOT annotation's node
+	if state.NodeID != correctNode {
+		t.Errorf("Expected nodeID from VA (%s), got %s (from stale annotation?)", correctNode, state.NodeID)
+	}
+
+	// Verify stale node is NOT in state
+	if state.IsAttachedToNode(staleNode) {
+		t.Errorf("Expected stale node %s to NOT be in state, but IsAttachedToNode returned true", staleNode)
+	}
+
+	// Verify correct node IS in state
+	if !state.IsAttachedToNode(correctNode) {
+		t.Errorf("Expected correct node %s to be in state", correctNode)
+	}
+}
+
+func TestRebuildStateFromVolumeAttachments_NoVAButHasAnnotation(t *testing.T) {
+	volumeID := "pvc-vol1"
+
+	// Create PV with attachment annotations but NO VolumeAttachment
+	pv := createFakePVWithAnnotations(volumeID, "node-1", time.Now().Format(metav1.RFC3339Micro))
+
+	// Client has PV but no VA
+	client := fake.NewSimpleClientset(pv)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	// Verify volume is NOT in rebuilt state
+	state, exists := am.GetAttachment(volumeID)
+	if exists {
+		t.Errorf("Expected volume to NOT be in state (no VA), but found: %+v", state)
+	}
+
+	// Previously (with annotation-based rebuild) this would have been rebuilt.
+	// Now correctly absent because VolumeAttachment is authoritative.
+}
+
+func TestRebuildStateFromVolumeAttachments_VAAndMatchingAnnotation(t *testing.T) {
+	volumeID := "pvc-vol1"
+	nodeID := "node-1"
+	attachedAt := time.Now().Add(-30 * time.Minute)
+
+	// Create VA and PV with matching annotations (happy path)
+	va := createFakeVolumeAttachmentWithTime("va1", driverName, volumeID, nodeID, true, attachedAt)
+	pv := createFakePVWithAnnotations(volumeID, nodeID, attachedAt.Format(metav1.RFC3339Micro))
+
+	client := fake.NewSimpleClientset(va, pv)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	// Verify rebuild works (happy path)
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist")
+	}
+
+	if state.NodeID != nodeID {
+		t.Errorf("Expected nodeID %s, got %s", nodeID, state.NodeID)
+	}
+}
+
+func TestRebuildStateFromAnnotations_StillWorks(t *testing.T) {
+	// Test the deprecated function still works for backward compatibility
+	volumeID := "pvc-vol1"
+	nodeID := "node-1"
+	attachedAt := time.Now().Add(-1 * time.Hour)
+
+	// Create PV with annotations, no VA
+	pv := createFakePVWithAnnotations(volumeID, nodeID, attachedAt.Format(metav1.RFC3339Micro))
+
+	client := fake.NewSimpleClientset(pv)
+	am := NewAttachmentManager(client)
+
+	// Call RebuildStateFromAnnotations (deprecated)
+	err := am.RebuildStateFromAnnotations(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromAnnotations failed: %v", err)
+	}
+
+	// Verify it rebuilds from annotations
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist from annotation-based rebuild")
+	}
+
+	if state.NodeID != nodeID {
+		t.Errorf("Expected nodeID %s, got %s", nodeID, state.NodeID)
+	}
+
+	// Ensures we didn't break the fallback (even though it's deprecated)
+}
