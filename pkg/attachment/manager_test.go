@@ -345,17 +345,21 @@ func TestAttachmentManager_ClearAttachment(t *testing.T) {
 func TestAttachmentManager_RebuildState(t *testing.T) {
 	ctx := context.Background()
 
-	// Create fake clientset with 3 PVs
+	// Create fake clientset with 3 PVs and corresponding VolumeAttachments
 	pv1 := createTestPV("pv-1", "node-a")
 	pv2 := createTestPV("pv-2", "node-b")
 	pv3 := createTestPV("pv-3", "") // No annotations (not attached)
 
-	fakeClient := fake.NewSimpleClientset(pv1, pv2, pv3)
+	// Create VolumeAttachments for pv-1 and pv-2 (pv-3 has no VA = not attached)
+	va1 := createTestVolumeAttachment("va-1", "rds.csi.srvlab.io", "pv-1", "node-a", true)
+	va2 := createTestVolumeAttachment("va-2", "rds.csi.srvlab.io", "pv-2", "node-b", true)
+
+	fakeClient := fake.NewSimpleClientset(pv1, pv2, pv3, va1, va2)
 
 	// Create AttachmentManager
 	am := NewAttachmentManager(fakeClient)
 
-	// Call Initialize (which calls RebuildState)
+	// Call Initialize (which calls RebuildState from VolumeAttachments)
 	err := am.Initialize(ctx)
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
@@ -384,9 +388,9 @@ func TestAttachmentManager_RebuildState(t *testing.T) {
 		t.Error("Expected pv-2 to be in attachments")
 	}
 
-	// Verify pv-3 is not in attachments (no annotations)
+	// Verify pv-3 is not in attachments (no VolumeAttachment)
 	if _, exists := attachments["pv-3"]; exists {
-		t.Error("Expected pv-3 to not be in attachments (no annotations)")
+		t.Error("Expected pv-3 to not be in attachments (no VolumeAttachment)")
 	}
 }
 
