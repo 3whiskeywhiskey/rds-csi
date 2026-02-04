@@ -428,3 +428,238 @@ func TestSecurityEvent_Chaining(t *testing.T) {
 		t.Error("Detail not set")
 	}
 }
+
+func TestLogOperation_OutcomeMapping(t *testing.T) {
+	logger := NewLogger()
+	logger.metrics.Reset()
+
+	config := operationConfigs["VolumeCreate"]
+
+	tests := []struct {
+		name             string
+		outcome          EventOutcome
+		expectedType     EventType
+		expectedSeverity EventSeverity
+	}{
+		{
+			name:             "Success outcome",
+			outcome:          OutcomeSuccess,
+			expectedType:     EventVolumeCreateSuccess,
+			expectedSeverity: SeverityInfo,
+		},
+		{
+			name:             "Failure outcome",
+			outcome:          OutcomeFailure,
+			expectedType:     EventVolumeCreateFailure,
+			expectedSeverity: SeverityError,
+		},
+		{
+			name:             "Unknown outcome (request)",
+			outcome:          OutcomeUnknown,
+			expectedType:     EventVolumeCreateRequest,
+			expectedSeverity: SeverityInfo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger.metrics.Reset()
+
+			// Create a test config with outcome fields
+			logger.LogOperation(config, tt.outcome)
+
+			// Verify the correct event type was used by checking metrics
+			metrics := logger.metrics.Snapshot()
+			switch tt.expectedType {
+			case EventVolumeCreateSuccess:
+				if metrics.VolumeCreateSuccesses != 1 {
+					t.Errorf("Expected 1 volume create success, got %d", metrics.VolumeCreateSuccesses)
+				}
+			case EventVolumeCreateFailure:
+				if metrics.VolumeCreateFailures != 1 {
+					t.Errorf("Expected 1 volume create failure, got %d", metrics.VolumeCreateFailures)
+				}
+			case EventVolumeCreateRequest:
+				// Request events increment the InfoEvents counter
+				if metrics.InfoEvents != 1 {
+					t.Errorf("Expected 1 info event, got %d", metrics.InfoEvents)
+				}
+			}
+		})
+	}
+}
+
+func TestLogOperation_EventFields(t *testing.T) {
+	config := operationConfigs["VolumeStage"]
+
+	tests := []struct {
+		name   string
+		fields []EventField
+		check  func(*testing.T, *SecurityEvent)
+	}{
+		{
+			name:   "WithVolume sets VolumeID and VolumeName",
+			fields: []EventField{WithVolume("vol-123", "pvc-test")},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.VolumeID != "vol-123" {
+					t.Errorf("Expected VolumeID vol-123, got %s", e.VolumeID)
+				}
+				if e.VolumeName != "pvc-test" {
+					t.Errorf("Expected VolumeName pvc-test, got %s", e.VolumeName)
+				}
+			},
+		},
+		{
+			name:   "WithNode sets NodeID",
+			fields: []EventField{WithNode("node-1")},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.NodeID != "node-1" {
+					t.Errorf("Expected NodeID node-1, got %s", e.NodeID)
+				}
+			},
+		},
+		{
+			name:   "WithTarget sets TargetIP and NQN",
+			fields: []EventField{WithTarget("10.0.0.1", "nqn.test")},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.TargetIP != "10.0.0.1" {
+					t.Errorf("Expected TargetIP 10.0.0.1, got %s", e.TargetIP)
+				}
+				if e.NQN != "nqn.test" {
+					t.Errorf("Expected NQN nqn.test, got %s", e.NQN)
+				}
+			},
+		},
+		{
+			name:   "WithDuration sets Duration",
+			fields: []EventField{WithDuration(100 * time.Millisecond)},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.Duration != 100*time.Millisecond {
+					t.Errorf("Expected Duration 100ms, got %v", e.Duration)
+				}
+			},
+		},
+		{
+			name:   "WithMountPath sets MountPath",
+			fields: []EventField{WithMountPath("/mnt/test")},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.MountPath != "/mnt/test" {
+					t.Errorf("Expected MountPath /mnt/test, got %s", e.MountPath)
+				}
+			},
+		},
+		{
+			name:   "WithError sets Error string",
+			fields: []EventField{WithError(errors.New("test error"))},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.Error != "test error" {
+					t.Errorf("Expected Error 'test error', got %s", e.Error)
+				}
+			},
+		},
+		{
+			name:   "WithError with nil does nothing",
+			fields: []EventField{WithError(nil)},
+			check: func(t *testing.T, e *SecurityEvent) {
+				if e.Error != "" {
+					t.Errorf("Expected empty Error, got %s", e.Error)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock event to test field application
+			event := NewSecurityEvent(config.SuccessType, config.Category, config.SuccessSev, config.SuccessMsg)
+			for _, field := range tt.fields {
+				field(event)
+			}
+			tt.check(t, event)
+		})
+	}
+}
+
+func TestLogOperation_AllOperations(t *testing.T) {
+	logger := NewLogger()
+
+	operations := []string{
+		"VolumeCreate",
+		"VolumeDelete",
+		"VolumeStage",
+		"VolumeUnstage",
+		"VolumePublish",
+		"VolumeUnpublish",
+		"NVMEConnect",
+	}
+
+	for _, op := range operations {
+		t.Run(op, func(t *testing.T) {
+			config, exists := operationConfigs[op]
+			if !exists {
+				t.Fatalf("Operation config %s not found in operationConfigs map", op)
+			}
+
+			// Verify config has required fields
+			if config.Operation == "" {
+				t.Error("Operation field is empty")
+			}
+			if config.Category == "" {
+				t.Error("Category field is empty")
+			}
+			if config.SuccessType == "" {
+				t.Error("SuccessType field is empty")
+			}
+			if config.FailureType == "" {
+				t.Error("FailureType field is empty")
+			}
+			if config.RequestType == "" {
+				t.Error("RequestType field is empty")
+			}
+			if config.SuccessMsg == "" {
+				t.Error("SuccessMsg field is empty")
+			}
+			if config.FailureMsg == "" {
+				t.Error("FailureMsg field is empty")
+			}
+			if config.RequestMsg == "" {
+				t.Error("RequestMsg field is empty")
+			}
+
+			// Test that LogOperation works with this config
+			logger.metrics.Reset()
+			logger.LogOperation(config, OutcomeSuccess)
+
+			// Verify an event was logged (metrics should have changed)
+			metrics := logger.metrics.Snapshot()
+			totalEvents := metrics.InfoEvents + metrics.WarningEvents + metrics.ErrorEvents + metrics.CriticalEvents
+			if totalEvents == 0 {
+				t.Errorf("No events logged for operation %s", op)
+			}
+		})
+	}
+}
+
+func TestLogOperation_MultipleFields(t *testing.T) {
+	logger := NewLogger()
+	logger.metrics.Reset()
+
+	config := operationConfigs["VolumeStage"]
+
+	// Test combining multiple EventFields
+	logger.LogOperation(config, OutcomeSuccess,
+		WithVolume("vol-123", "pvc-test"),
+		WithNode("node-1"),
+		WithTarget("10.0.0.1", "nqn.test"),
+		WithDuration(50*time.Millisecond),
+		WithError(nil))
+
+	// Verify metrics were updated
+	metrics := logger.metrics.Snapshot()
+	if metrics.VolumeStageSuccesses != 1 {
+		t.Errorf("Expected 1 volume stage success, got %d", metrics.VolumeStageSuccesses)
+	}
+	if metrics.AverageOperationDuration != 50*time.Millisecond {
+		t.Errorf("Expected average duration 50ms, got %v", metrics.AverageOperationDuration)
+	}
+}
