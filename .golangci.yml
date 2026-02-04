@@ -13,6 +13,10 @@ linters:
     - errcheck      # Check for unchecked errors
     - errorlint     # Enforce Go 1.13+ error patterns
 
+    # Complexity linters
+    - gocyclo       # Cyclomatic complexity per function
+    - cyclop        # Function and package complexity
+
     # Code quality (already used)
     - gofmt
     - goimports
@@ -43,6 +47,18 @@ linters-settings:
     comparison: true
     # Suggest errors.As instead of type assertion
     asserts: true
+
+  gocyclo:
+    # Threshold based on current baseline (max: 44 in RecordEvent)
+    # Set to 50 to allow existing code, catch new violations
+    # Target: Ratchet down to 30 by v0.8, 20 by v1.0
+    min-complexity: 50
+
+  cyclop:
+    # Match gocyclo threshold for consistency
+    max-complexity: 50
+    # Don't skip tests - they should also have reasonable complexity
+    skip-tests: false
 
   goimports:
     # Group local imports separately
