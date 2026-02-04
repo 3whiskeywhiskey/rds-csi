@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockExecCommand creates a mock exec.Cmd for testing
@@ -723,6 +725,152 @@ func TestMakeFile(t *testing.T) {
 
 			if !tt.expectError && tt.validate != nil {
 				tt.validate(t, path)
+			}
+		})
+	}
+}
+
+// mockMultiExecCommand returns different results for sequential calls
+// This is needed to mock complex operations like ForceUnmount that make multiple exec calls
+func mockMultiExecCommand(results []struct{ stdout, stderr string; exitCode int }) func(string, ...string) *exec.Cmd {
+	callCount := 0
+	return func(command string, args ...string) *exec.Cmd {
+		if callCount >= len(results) {
+			// Repeat last result if we run out
+			callCount = len(results) - 1
+		}
+		r := results[callCount]
+		callCount++
+		return mockExecCommand(r.stdout, r.stderr, r.exitCode)(command, args...)
+	}
+}
+
+func TestIsMountInUse(t *testing.T) {
+	// IsMountInUse requires /proc filesystem (Linux-specific)
+	if runtime.GOOS != "linux" {
+		t.Skipf("IsMountInUse requires Linux /proc filesystem, skipping on %s", runtime.GOOS)
+	}
+
+	tests := []struct {
+		name          string
+		path          string
+		expectInUse   bool
+		expectPIDsLen int
+		expectError   bool
+	}{
+		{
+			name:          "mount not in use - no processes",
+			path:          t.TempDir(),
+			expectInUse:   false,
+			expectPIDsLen: 0,
+			expectError:   false,
+		},
+		{
+			name:          "nonexistent path returns not in use",
+			path:          "/nonexistent-mount-path-12345",
+			expectInUse:   false,
+			expectPIDsLen: 0,
+			expectError:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewMounter()
+
+			inUse, pids, err := m.IsMountInUse(tt.path)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if inUse != tt.expectInUse {
+				t.Errorf("Expected inUse %v, got %v", tt.expectInUse, inUse)
+			}
+			if len(pids) != tt.expectPIDsLen {
+				t.Errorf("Expected %d PIDs, got %d: %v", tt.expectPIDsLen, len(pids), pids)
+			}
+		})
+	}
+}
+
+func TestForceUnmount(t *testing.T) {
+	tests := []struct {
+		name        string
+		target      string
+		setupTarget bool
+		mockResults []struct{ stdout, stderr string; exitCode int }
+		expectError bool
+		errContains string
+	}{
+		{
+			name:        "normal unmount succeeds immediately",
+			target:      "/mnt/test",
+			setupTarget: true,
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// findmnt check - is mounted
+				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
+				// umount succeeds
+				{stdout: "", stderr: "", exitCode: 0},
+			},
+			expectError: false,
+		},
+		{
+			name:        "target not mounted - succeeds idempotently",
+			target:      "/mnt/test",
+			setupTarget: true,
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// findmnt check - not mounted
+				{stdout: "", stderr: "", exitCode: 1},
+			},
+			expectError: false,
+		},
+		{
+			name:        "unmount fails then lazy unmount succeeds",
+			target:      "/mnt/test",
+			setupTarget: true,
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// First unmount attempt: findmnt check - is mounted
+				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
+				// umount fails (device busy)
+				{stdout: "", stderr: "target is busy", exitCode: 1},
+				// Poll check: findmnt - still mounted
+				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
+				// After timeout, no fuser output (not in use - note: IsMountInUse doesn't use fuser in real impl)
+				// Lazy unmount succeeds
+				{stdout: "", stderr: "", exitCode: 0},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var target string
+			if tt.setupTarget {
+				target = t.TempDir()
+			} else {
+				target = tt.target
+			}
+
+			m := &mounter{
+				execCommand: mockMultiExecCommand(tt.mockResults),
+			}
+
+			err := m.ForceUnmount(target, 100*time.Millisecond)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if tt.expectError && err != nil && tt.errContains != "" {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error to contain %q, got: %v", tt.errContains, err)
+				}
 			}
 		})
 	}
