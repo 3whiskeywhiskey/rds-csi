@@ -234,3 +234,181 @@ func TestRebuildStateFromVolumeAttachments_OtherDriverVA(t *testing.T) {
 		t.Errorf("Expected other driver VA to NOT be in state, but found: %+v", state)
 	}
 }
+
+// Task 2: Test migration detection from dual VolumeAttachments
+
+func TestRebuildStateFromVolumeAttachments_MigrationState(t *testing.T) {
+	volumeID := "pvc-vol1"
+	node1 := "node-1"
+	node2 := "node-2"
+
+	// Create 2 VAs for SAME volume (different nodes) - simulates migration
+	now := time.Now()
+	older := now.Add(-5 * time.Minute)
+
+	va1 := createFakeVolumeAttachmentWithTime("va1", driverName, volumeID, node1, true, older)
+	va2 := createFakeVolumeAttachmentWithTime("va2", driverName, volumeID, node2, true, now)
+
+	// Create PV with ReadWriteMany (migration requires RWX)
+	pv := createFakePV(volumeID, []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany})
+
+	client := fake.NewSimpleClientset(va1, va2, pv)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	// Verify attachment exists
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist after rebuild")
+	}
+
+	// Verify 2 nodes
+	if len(state.Nodes) != 2 {
+		t.Fatalf("Expected 2 nodes for migration, got %d", len(state.Nodes))
+	}
+
+	// Verify both nodes present
+	nodeIDs := state.GetNodeIDs()
+	if len(nodeIDs) != 2 {
+		t.Fatalf("Expected 2 node IDs, got %d", len(nodeIDs))
+	}
+	foundNode1 := false
+	foundNode2 := false
+	for _, nid := range nodeIDs {
+		if nid == node1 {
+			foundNode1 = true
+		}
+		if nid == node2 {
+			foundNode2 = true
+		}
+	}
+	if !foundNode1 {
+		t.Errorf("Expected to find node %s in Nodes", node1)
+	}
+	if !foundNode2 {
+		t.Errorf("Expected to find node %s in Nodes", node2)
+	}
+
+	// Verify MigrationStartedAt is set to older VA's timestamp
+	if state.MigrationStartedAt == nil {
+		t.Fatal("Expected MigrationStartedAt to be set for migration state")
+	}
+	if !state.MigrationStartedAt.Equal(older) {
+		t.Errorf("Expected MigrationStartedAt=%v, got %v", older, *state.MigrationStartedAt)
+	}
+
+	// Verify AccessMode is RWX
+	if state.AccessMode != "RWX" {
+		t.Errorf("Expected AccessMode RWX, got %s", state.AccessMode)
+	}
+
+	// Verify IsMigrating returns true
+	if !state.IsMigrating() {
+		t.Error("Expected IsMigrating() to return true")
+	}
+}
+
+func TestRebuildStateFromVolumeAttachments_MigrationTimestamp(t *testing.T) {
+	volumeID := "pvc-vol1"
+
+	// Create 2 VAs with different CreationTimestamps
+	now := time.Now()
+	older := now.Add(-10 * time.Minute)
+	newer := now.Add(-2 * time.Minute)
+
+	va1 := createFakeVolumeAttachmentWithTime("va1", driverName, volumeID, "node-1", true, newer)
+	va2 := createFakeVolumeAttachmentWithTime("va2", driverName, volumeID, "node-2", true, older)
+
+	pv := createFakePV(volumeID, []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany})
+
+	client := fake.NewSimpleClientset(va1, va2, pv)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist")
+	}
+
+	// Verify MigrationStartedAt equals OLDER VA's timestamp (not newer)
+	if state.MigrationStartedAt == nil {
+		t.Fatal("Expected MigrationStartedAt to be set")
+	}
+	if !state.MigrationStartedAt.Equal(older) {
+		t.Errorf("Expected MigrationStartedAt to be older timestamp %v, got %v", older, *state.MigrationStartedAt)
+	}
+}
+
+func TestRebuildStateFromVolumeAttachments_MoreThanTwoVAs(t *testing.T) {
+	volumeID := "pvc-vol1"
+
+	// Create 3 VAs for same volume (anomaly case)
+	now := time.Now()
+	va1 := createFakeVolumeAttachmentWithTime("va1", driverName, volumeID, "node-1", true, now.Add(-15*time.Minute))
+	va2 := createFakeVolumeAttachmentWithTime("va2", driverName, volumeID, "node-2", true, now.Add(-10*time.Minute))
+	va3 := createFakeVolumeAttachmentWithTime("va3", driverName, volumeID, "node-3", true, now.Add(-5*time.Minute))
+
+	pv := createFakePV(volumeID, []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany})
+
+	client := fake.NewSimpleClientset(va1, va2, va3, pv)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state (should log warning but continue)
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist")
+	}
+
+	// Verify only first 2 VAs are used
+	if len(state.Nodes) != 2 {
+		t.Errorf("Expected only 2 nodes (first 2 VAs), got %d", len(state.Nodes))
+	}
+
+	// Warning should be logged (verified by manual inspection or log capture)
+	// Here we just ensure rebuild doesn't fail
+}
+
+func TestRebuildStateFromVolumeAttachments_AccessModeFallback(t *testing.T) {
+	volumeID := "pvc-vol1"
+
+	// Create VA but NO corresponding PV
+	va := createFakeVolumeAttachment("va1", driverName, volumeID, "node-1", true)
+
+	// Client has VA but no PV
+	client := fake.NewSimpleClientset(va)
+	am := NewAttachmentManager(client)
+
+	// Rebuild state
+	err := am.RebuildStateFromVolumeAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("RebuildStateFromVolumeAttachments failed: %v", err)
+	}
+
+	state, exists := am.GetAttachment(volumeID)
+	if !exists {
+		t.Fatal("Expected attachment to exist")
+	}
+
+	// Verify AccessMode defaults to RWO (conservative default)
+	if state.AccessMode != "RWO" {
+		t.Errorf("Expected AccessMode to default to RWO when PV not found, got %s", state.AccessMode)
+	}
+
+	// Verify no error - graceful handling
+	// (already verified by err check above)
+}
