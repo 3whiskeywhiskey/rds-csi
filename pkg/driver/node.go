@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -237,24 +236,44 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	klog.V(2).Infof("Connected to NVMe target, device: %s", devicePath)
 
 	if isBlockVolume {
-		// Block volume: store device path in staging directory, skip format/mount
+		// Block volume: create symlink to device in staging directory for kubelet to discover
 		// CSI spec: staging_target_path is ALWAYS a directory, even for block volumes
+		// Kubelet calls EvalHostSymlinks on staging path to find the actual device for MapBlockVolume
 		if err := os.MkdirAll(stagingPath, 0750); err != nil {
 			_ = ns.nvmeConn.Disconnect(nqn)
 			secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
 			return nil, status.Errorf(codes.Internal, "failed to create staging directory: %v", err)
 		}
 
-		// Store device path in metadata file for NodePublishVolume to read
-		metadataPath := filepath.Join(stagingPath, "device")
-		if err := os.WriteFile(metadataPath, []byte(devicePath), 0600); err != nil {
-			_ = ns.nvmeConn.Disconnect(nqn)
-			secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
-			return nil, status.Errorf(codes.Internal, "failed to write device metadata: %v", err)
+		// Create symlink at staging_path/device pointing to actual NVMe block device
+		// Kubelet uses this symlink via EvalHostSymlinks to get devicePath for MapBlockVolume
+		symlinkPath := filepath.Join(stagingPath, "device")
+		if err := os.Symlink(devicePath, symlinkPath); err != nil {
+			if os.IsExist(err) {
+				// Symlink already exists - verify it points to the correct device
+				existing, readErr := os.Readlink(symlinkPath)
+				if readErr != nil {
+					_ = ns.nvmeConn.Disconnect(nqn)
+					secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, readErr, time.Since(startTime))
+					return nil, status.Errorf(codes.Internal, "failed to read existing symlink: %v", readErr)
+				}
+				if existing != devicePath {
+					_ = ns.nvmeConn.Disconnect(nqn)
+					errMsg := fmt.Errorf("existing symlink points to wrong device: %s != %s", existing, devicePath)
+					secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, errMsg, time.Since(startTime))
+					return nil, status.Errorf(codes.Internal, "symlink mismatch: %v", errMsg)
+				}
+				// Symlink exists and points to correct device - this is fine (idempotent)
+				klog.V(2).Infof("Symlink %s already exists and points to %s (idempotent)", symlinkPath, devicePath)
+			} else {
+				_ = ns.nvmeConn.Disconnect(nqn)
+				secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
+				return nil, status.Errorf(codes.Internal, "failed to create device symlink: %v", err)
+			}
 		}
 
-		klog.V(2).Infof("Successfully staged block volume %s to %s (device: %s)",
-			volumeID, stagingPath, devicePath)
+		klog.V(2).Infof("Successfully staged block volume %s to %s (device: %s, symlink: %s)",
+			volumeID, stagingPath, devicePath, symlinkPath)
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeSuccess, nil, time.Since(startTime))
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
@@ -349,27 +368,27 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 
 	startTime := time.Now()
 
-	// Detect if this was a block volume by checking for staging metadata file
-	// Block volumes have a "device" file in staging directory instead of a mounted filesystem
-	metadataPath := filepath.Join(stagingPath, "device")
+	// Detect if this was a block volume by checking for staging symlink
+	// Block volumes have a "device" symlink in staging directory instead of a mounted filesystem
+	symlinkPath := filepath.Join(stagingPath, "device")
 	isBlockVolume := false
-	if _, err := os.Stat(metadataPath); err == nil {
+	if info, err := os.Lstat(symlinkPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		isBlockVolume = true
 	}
 
 	klog.V(2).Infof("NodeUnstageVolume: volume %s, isBlock=%v", volumeID, isBlockVolume)
 
 	if isBlockVolume {
-		// Block volume: no filesystem to unmount, just clean up staging metadata and directory
+		// Block volume: no filesystem to unmount, just clean up staging symlink and directory
 		klog.V(2).Infof("Unstaging block volume %s from %s", volumeID, stagingPath)
 
 		// Step 1: Clean up orphaned bind mounts BEFORE checking device-in-use
 		// This prevents the device-in-use check from detecting our own bind mounts
 		if nqn != "" {
-			deviceBytes, err := os.ReadFile(metadataPath)
+			// Read symlink to get device path
+			symlinkPath := filepath.Join(stagingPath, "device")
+			devicePath, err := os.Readlink(symlinkPath)
 			if err == nil {
-				devicePath := strings.TrimSpace(string(deviceBytes))
-
 				// Find and cleanup orphaned bind mounts to this device
 				cleanedCount, cleanupErr := ns.findAndCleanupOrphanedMounts(ctx, devicePath)
 				if cleanupErr != nil {
@@ -408,18 +427,15 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 				} else if result.Error != nil {
 					klog.Warningf("Device busy check failed for %s: %v (proceeding)", devicePath, result.Error)
 				}
+			} else {
+				klog.Warningf("Failed to read device symlink for cleanup checks: %v (proceeding)", err)
 			}
 		}
 
-		// Remove dev directory and its contents (symlinks)
-		devDir := filepath.Join(stagingPath, "dev")
-		if err := os.RemoveAll(devDir); err != nil && !os.IsNotExist(err) {
-			klog.Warningf("Failed to remove dev directory %s: %v", devDir, err)
-		}
-
-		// Remove metadata file
-		if err := os.Remove(metadataPath); err != nil && !os.IsNotExist(err) {
-			klog.Warningf("Failed to remove block volume metadata file %s: %v", metadataPath, err)
+		// Remove device symlink
+		symlinkPath := filepath.Join(stagingPath, "device")
+		if err := os.Remove(symlinkPath); err != nil && !os.IsNotExist(err) {
+			klog.Warningf("Failed to remove device symlink %s: %v", symlinkPath, err)
 		}
 
 		// Remove staging directory (should be empty now)
@@ -539,17 +555,16 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	isBlockVolume := req.GetVolumeCapability().GetBlock() != nil
 
 	if isBlockVolume {
-		// Block volume: read device path from staging metadata and bind mount to target file
+		// Block volume: read device path from staging symlink and bind mount to target file
 
-		// Read device path from staging metadata (written by NodeStageVolume)
-		metadataPath := filepath.Join(stagingPath, "device")
-		deviceBytes, err := os.ReadFile(metadataPath)
+		// Read device path from symlink created by NodeStageVolume
+		symlinkPath := filepath.Join(stagingPath, "device")
+		devicePath, err := os.Readlink(symlinkPath)
 		if err != nil {
 			return nil, status.Errorf(codes.FailedPrecondition,
-				"failed to read device metadata from staging path %s: %v (was NodeStageVolume called?)",
+				"failed to read device symlink from staging path %s: %v (was NodeStageVolume called?)",
 				stagingPath, err)
 		}
-		devicePath := strings.TrimSpace(string(deviceBytes))
 
 		// Verify device exists before attempting mount
 		if _, err := os.Stat(devicePath); err != nil {
