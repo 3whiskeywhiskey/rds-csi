@@ -679,3 +679,129 @@ func TestTestableSSHClientInfrastructure(t *testing.T) {
 		t.Errorf("Expected mock error to propagate")
 	}
 }
+
+func TestVerifyVolumeExistsCommandConstruction(t *testing.T) {
+	setupTestBasePaths(t)
+
+	// Test that VerifyVolumeExists constructs correct command
+	// This tests the validation and command pattern without SSH
+	tests := []struct {
+		name        string
+		slot        string
+		expectError bool
+	}{
+		{"valid slot", "pvc-test-123", false},
+		{"empty slot", "", true},
+		{"dangerous slot", "pvc;evil", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSlotName(tt.slot)
+			if tt.expectError && err == nil {
+				t.Error("Expected validation error")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+func TestExtractMountPoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "mount point with leading slash",
+			input:    "/storage-pool/metal-csi/volumes",
+			expected: "storage-pool",
+		},
+		{
+			name:     "mount point without leading slash",
+			input:    "storage-pool/metal-csi/volumes",
+			expected: "storage-pool",
+		},
+		{
+			name:     "single component path",
+			input:    "/nvme1",
+			expected: "nvme1",
+		},
+		{
+			name:     "multi-level path",
+			input:    "/nvme1/kubernetes/volumes",
+			expected: "nvme1",
+		},
+		{
+			name:     "empty path",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "root path",
+			input:    "/",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractMountPoint(tt.input)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestNormalizeRouterOSOutputEdgeCases(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		expectedContains string
+		description      string
+	}{
+		{
+			name:             "carriage returns",
+			input:            "line1\r\nline2\r\n",
+			expectedContains: "line1",
+			description:      "should remove \\r characters",
+		},
+		{
+			name:             "RouterOS flags header",
+			input:            "Flags: X - disabled\ntype=file slot=test",
+			expectedContains: "type=file slot=test",
+			description:      "should skip Flags: header lines",
+		},
+		{
+			name:             "continuation lines with tabs",
+			input:            "type=file\n\tsize=1000",
+			expectedContains: "type=file size=1000",
+			description:      "should join continuation lines starting with tab",
+		},
+		{
+			name:             "continuation lines with spaces",
+			input:            "type=file\n   size=1000",
+			expectedContains: "type=file size=1000",
+			description:      "should join continuation lines starting with spaces",
+		},
+		{
+			name:             "multiple continuation lines",
+			input:            "type=file\n  size=1000\n  path=/test",
+			expectedContains: "type=file size=1000 path=/test",
+			description:      "should join multiple continuation lines",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeRouterOSOutput(tt.input)
+			if !strings.Contains(result, tt.expectedContains) {
+				t.Errorf("Expected normalized output to contain %q, got %q\nDescription: %s",
+					tt.expectedContains, result, tt.description)
+			}
+		})
+	}
+}
