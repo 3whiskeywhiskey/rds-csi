@@ -200,7 +200,7 @@ func SanitizeMountOptions(options []string, isBindMount bool) ([]string, error) 
 
 // Mount mounts source to target with the given filesystem type and options
 func (m *mounter) Mount(source, target, fsType string, options []string) error {
-	klog.V(2).Infof("Mounting %s to %s (fsType: %s, options: %v)", source, target, fsType, options)
+	klog.V(4).Infof("Mounting %s to %s (fsType: %s, options: %v)", source, target, fsType, options)
 
 	// MOUNT STORM PROTECTION: Check for excessive duplicate mounts BEFORE attempting mount
 	// This prevents adding to an existing mount storm and wedging the node
@@ -284,13 +284,13 @@ func (m *mounter) Mount(source, target, fsType string, options []string) error {
 	}
 
 	klog.V(4).Infof("mount output: %s", string(output))
-	klog.V(2).Infof("Successfully mounted %s to %s", source, target)
+	klog.V(2).Infof("Mounted %s to %s", source, target)
 	return nil
 }
 
 // Unmount unmounts the target path
 func (m *mounter) Unmount(target string) error {
-	klog.V(2).Infof("Unmounting %s", target)
+	klog.V(4).Infof("Unmounting %s", target)
 
 	// Check if it's actually mounted
 	mounted, err := m.IsLikelyMountPoint(target)
@@ -311,7 +311,7 @@ func (m *mounter) Unmount(target string) error {
 	}
 
 	klog.V(4).Infof("umount output: %s", string(output))
-	klog.V(2).Infof("Successfully unmounted %s", target)
+	klog.V(2).Infof("Unmounted %s", target)
 	return nil
 }
 
@@ -340,7 +340,7 @@ func (m *mounter) IsLikelyMountPoint(path string) (bool, error) {
 
 // Format formats a device with the specified filesystem type
 func (m *mounter) Format(device, fsType string) error {
-	klog.V(2).Infof("Formatting device %s with %s", device, fsType)
+	klog.V(4).Infof("Formatting device %s with %s", device, fsType)
 
 	// Check if already formatted
 	formatted, err := m.IsFormatted(device)
@@ -349,7 +349,7 @@ func (m *mounter) Format(device, fsType string) error {
 	}
 
 	if formatted {
-		klog.V(2).Infof("Device %s is already formatted, skipping", device)
+		klog.V(4).Infof("Device %s is already formatted, skipping", device)
 		return nil
 	}
 
@@ -374,7 +374,7 @@ func (m *mounter) Format(device, fsType string) error {
 	}
 
 	klog.V(4).Infof("mkfs output: %s", string(output))
-	klog.V(2).Infof("Successfully formatted %s with %s", device, fsType)
+	klog.V(2).Infof("Formatted %s with %s", device, fsType)
 	return nil
 }
 
@@ -399,7 +399,7 @@ func (m *mounter) IsFormatted(device string) (bool, error) {
 
 // ResizeFilesystem resizes the filesystem on the device to use available space
 func (m *mounter) ResizeFilesystem(device, volumePath string) error {
-	klog.V(2).Infof("Resizing filesystem on device %s (volume path: %s)", device, volumePath)
+	klog.V(4).Infof("Resizing filesystem on device %s (volume path: %s)", device, volumePath)
 
 	// Detect filesystem type using blkid
 	cmd := m.execCommand("blkid", "-o", "value", "-s", "TYPE", device)
@@ -413,7 +413,7 @@ func (m *mounter) ResizeFilesystem(device, volumePath string) error {
 		return fmt.Errorf("could not detect filesystem type for device %s", device)
 	}
 
-	klog.V(2).Infof("Detected filesystem type: %s", fsType)
+	klog.V(4).Infof("Detected filesystem type: %s", fsType)
 
 	// Execute appropriate resize command based on filesystem type
 	var resizeCmd *exec.Cmd
@@ -440,7 +440,7 @@ func (m *mounter) ResizeFilesystem(device, volumePath string) error {
 	}
 
 	klog.V(4).Infof("resize output: %s", string(output))
-	klog.V(2).Infof("Successfully resized filesystem on %s", device)
+	klog.V(2).Infof("Resized filesystem on %s", device)
 	return nil
 }
 
@@ -592,16 +592,16 @@ func (m *mounter) MakeFile(pathname string) error {
 // ForceUnmount attempts normal unmount, then escalates to lazy unmount if needed
 // Returns error if mount is in use (refuses to force unmount in-use mounts)
 func (m *mounter) ForceUnmount(target string, timeout time.Duration) error {
-	klog.V(2).Infof("ForceUnmount: attempting to unmount %s with timeout %v", target, timeout)
+	klog.V(4).Infof("ForceUnmount: attempting to unmount %s with timeout %v", target, timeout)
 
 	// Try normal unmount first
 	err := m.Unmount(target)
 	if err == nil {
-		klog.V(2).Infof("ForceUnmount: normal unmount succeeded for %s", target)
+		klog.V(2).Infof("ForceUnmount: unmounted %s", target)
 		return nil
 	}
 
-	klog.V(2).Infof("ForceUnmount: normal unmount failed for %s: %v, waiting for mount to clear", target, err)
+	klog.V(4).Infof("ForceUnmount: normal unmount failed for %s: %v, waiting for mount to clear", target, err)
 
 	// Wait for mount to clear with polling
 	startTime := time.Now()
@@ -623,7 +623,7 @@ func (m *mounter) ForceUnmount(target string, timeout time.Duration) error {
 
 			// Check if timeout exceeded
 			if time.Since(startTime) >= timeout {
-				klog.V(2).Infof("ForceUnmount: timeout exceeded for %s, escalating to lazy unmount", target)
+				klog.V(4).Infof("ForceUnmount: timeout exceeded for %s, escalating to lazy unmount", target)
 				goto escalate
 			}
 

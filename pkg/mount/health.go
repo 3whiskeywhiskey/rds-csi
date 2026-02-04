@@ -77,6 +77,6 @@ func CheckFilesystemHealth(ctx context.Context, devicePath, fsType string) error
 			devicePath, fsType, err, outputStr)
 	}
 
-	klog.V(3).Infof("Filesystem health check passed for %s (fsType: %s, duration: %v)", devicePath, fsType, duration)
+	klog.V(4).Infof("Filesystem health check passed for %s (fsType: %s, duration: %v)", devicePath, fsType, duration)
 	return nil
 }
