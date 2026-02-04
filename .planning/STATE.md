@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 Phase: 13 of 14 (Hardware Validation)
 Plan: 1 of 1 in current phase
-Status: Ready to deploy - mknod fix for block volumes (CRITICAL)
-Last activity: 2026-02-04 — Block volumes use mknod to prevent devtmpfs mount storm (commit 0ea6bee)
+Status: Ready to deploy - mknod + attachment annotation fixes (CRITICAL)
+Last activity: 2026-02-04 — Block volumes mknod fix + stale attachment state fix (commits 0ea6bee, 62197ce)
 
 Progress: [█████████████████████████████████] 92% (49/53 plans completed across all phases)
 
@@ -48,6 +48,12 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
+- Phase 13 (2026-02-04): **Clear PV annotations on full detachment** (commit 62197ce - FIX)
+  - Root cause: RemoveNodeAttachment only cleared in-memory state, not PV annotations
+  - On controller restart, RebuildState read stale annotations and resurrected detached volumes
+  - Caused "RWO volume already attached to node X" errors blocking legitimate reattach to node Y
+  - Solution: Call clearAttachment() when last node detaches to remove annotations from PV
+  - Prevents stale state across controller restarts, fixes legacy PVC attachment issues
 - Phase 13 (2026-02-04): **Block volumes use mknod instead of bind mount** (commit 0ea6bee - CRITICAL FIX)
   - Root cause of mount storm: bind mounting from `/dev/nvmeXnY` (in devtmpfs) triggers mount namespace propagation
   - Mount propagation cascades devtmpfs through containers → 2048 devtmpfs mounts → kernel memory exhaustion
@@ -125,13 +131,12 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ CI test failure fixed (commit 7728bd4) - health check now skips when device doesn't exist
 
 **Active:**
-- **CRITICAL: mknod fix for block volumes ready for deployment** (commit 0ea6bee)
-  - Root cause identified: bind mount from devtmpfs triggers mount namespace propagation storm
-  - Solution: Use syscall.Mknod to create device node directly (no bind mount, no storm)
-  - Replaces previous fixes d33e09a (AWS EBS pattern) and e2303ce (mount storm detection)
-  - THIS IS THE FIX - previous approaches didn't prevent the storm at the source
+- **CRITICAL: Two fixes batched for single CI/CD deployment**
+  - Fix 1 (0ea6bee): mknod for block volumes - prevents devtmpfs mount storm
+  - Fix 2 (62197ce): Clear PV annotations on detach - fixes stale attachment state
+  - Both fixes address production issues with legacy PVCs and block volumes
   - CI/CD build in progress (15 minutes)
-  - Will test on r740xd immediately after deployment
+  - Will test both fixes on r740xd immediately after deployment
 - **r640/r740xd node recovery needed** - both experienced mount storms during testing
   - r740xd: 2048 devtmpfs mounts, caught early and recovered after pod deletion
   - r640: 502MB unreclaimable slab memory, soft lockup, OOM kill (needs reboot)
