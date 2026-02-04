@@ -1,6 +1,7 @@
 package rds
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -111,7 +112,7 @@ func (c *sshClient) DeleteVolume(slot string) error {
 	volume, err := c.GetVolume(slot)
 	if err != nil {
 		// If volume doesn't exist, that's okay (idempotent)
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, utils.ErrVolumeNotFound) {
 			klog.V(4).Infof("Volume %s already deleted", slot)
 			return nil
 		}
@@ -171,7 +172,7 @@ func (c *sshClient) GetVolume(slot string) (*VolumeInfo, error) {
 	// RouterOS returns flags header even when volume doesn't exist
 	normalized := normalizeRouterOSOutput(output)
 	if strings.TrimSpace(normalized) == "" {
-		return nil, fmt.Errorf("volume not found: %s", slot)
+		return nil, utils.WrapVolumeError(utils.ErrVolumeNotFound, slot, "")
 	}
 
 	volume, err := parseVolumeInfo(output)
@@ -181,7 +182,7 @@ func (c *sshClient) GetVolume(slot string) (*VolumeInfo, error) {
 
 	// Additional check: if slot is empty, volume wasn't found
 	if volume.Slot == "" {
-		return nil, fmt.Errorf("volume not found: %s", slot)
+		return nil, utils.WrapVolumeError(utils.ErrVolumeNotFound, slot, "")
 	}
 
 	return volume, nil
