@@ -1,0 +1,45 @@
+# go-test-coverage configuration
+# https://github.com/vladopajic/go-test-coverage
+
+# Overall coverage thresholds
+threshold:
+  # Minimum coverage per file (some files may be intentionally lower)
+  file: 0      # Disabled - enforce at package level instead
+  # Minimum coverage per package
+  package: 60  # 60% minimum for all packages (realistic given hardware dependencies)
+  # Total coverage across all packages
+  total: 55    # 55% overall minimum
+
+# Package-specific overrides
+override:
+  # Critical packages with higher requirements
+  - threshold: 70
+    path: ^pkg/rds$
+  - threshold: 70
+    path: ^pkg/mount$
+  - threshold: 55
+    path: ^pkg/nvme$       # Lower due to hardware dependencies
+  - threshold: 80
+    path: ^pkg/utils$      # Pure utility code, should have high coverage
+  - threshold: 80
+    path: ^pkg/attachment$ # State management, well-testable
+
+# Exclusions - files/packages that don't need coverage
+exclude:
+  # Test files themselves
+  - path: _test\.go$
+  # Generated files
+  - path: _generated\.go$
+  # Main entry point (mostly wiring)
+  - path: ^cmd/
+  # Integration tests (not counted in unit coverage)
+  - path: ^test/integration/
+  # Mock implementations (test helpers)
+  - path: mock\.go$
+
+# Output configuration
+output:
+  # Generate badge for README
+  badge:
+    enabled: false  # Enable when ready for README badge
+    path: coverage.svg
