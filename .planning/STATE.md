@@ -2,41 +2,42 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-03)
+See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** Phase 12 - Compatibility and Quality (v0.6.0)
+**Current focus:** v0.7.0 shipped - all phases complete
 
 ## Current Position
 
-Phase: 13 of 14 (Hardware Validation)
-Plan: 1 of 1 in current phase
-Status: ✅ COMPLETE - KubeVirt validation passed
-Last activity: 2026-02-04 — Phase 13 complete: KubeVirt VM boot + live migration validated (commit 5b57388)
+Phase: All phases complete (16/16)
+Plan: All plans complete (59/59)
+Status: ✅ SHIPPED - v0.7.0 milestone complete
+Last activity: 2026-02-04 — v0.7.0 milestone complete and archived
 
-Progress: [██████████████████████████████████] 94% (50/53 plans completed across all phases)
+Progress: [████████████████████████████████████] 100% (59/59 plans completed)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 49
-- Phases completed: 13
-- Average phase completion: 3.77 plans/phase
+- Total plans completed: 59
+- Phases completed: 16
+- Average phase completion: 3.7 plans/phase
 
 **By Milestone:**
 
 | Milestone | Phases | Plans | Status |
 |-----------|--------|-------|--------|
-| v1 Production Stability | 1-4 | 17/17 | Complete |
-| v0.3.0 Volume Fencing | 5-7 | 12/12 | Complete |
-| v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Complete |
-| v0.6.0 Block Volume Support | 11-14 | 9/9 | Complete |
+| v1 Production Stability | 1-4 | 17/17 | Shipped 2026-01-31 |
+| v0.3.0 Volume Fencing | 5-7 | 12/12 | Shipped 2026-02-03 |
+| v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Shipped 2026-02-03 |
+| v0.6.0 Block Volume Support | 11-14 | 9/9 | Shipped 2026-02-04 |
+| v0.7.0 State Management & Observability | 15-16 | 5/5 | Shipped 2026-02-04 (archived) |
 
 **Recent Trend:**
-- Last milestone (v0.5.0): 12 plans, 3 phases
-- Trend: Stable execution pattern
+- v0.6.0: 9 plans, 4 phases, 1 day
+- v0.7.0: 5 plans, 2 phases, 1 day (all complete)
 
-*Updated: 2026-02-03*
+*Updated: 2026-02-04*
 
 ## Accumulated Context
 
@@ -47,7 +48,40 @@ Progress: [███████████████████████
 
 ### Decisions
 
-Recent decisions from PROJECT.md affecting v0.6.0 work:
+Recent decisions from PROJECT.md affecting v0.7.0 work:
+
+- Phase 15-03 (2026-02-04): **PV annotations are informational-only**
+  - Annotations written during ControllerPublishVolume for debugging/observability
+  - Never read during state rebuild - VolumeAttachment objects are authoritative
+  - Package-level documentation added explaining write-only nature
+  - Prevents future confusion about annotation vs VolumeAttachment roles
+- Phase 15-02 (2026-02-04): **VA-based rebuild replaces annotation-based**
+  - RebuildStateFromVolumeAttachments is now the authoritative rebuild method
+  - VolumeAttachment objects are managed by external-attacher and never stale
+  - Old annotation-based rebuild renamed to RebuildStateFromAnnotations (deprecated)
+  - Eliminates stale state bugs, aligns with CSI best practices
+- Phase 15-02 (2026-02-04): **Conservative AccessMode default**
+  - Default to RWO if PV not found or access mode lookup fails
+  - RWO is safer default - prevents incorrect dual-attach allowance
+  - Volume may be rejected for RWX dual-attach if PV missing, but data safety preserved
+- Phase 15-02 (2026-02-04): **Migration detection from VA count**
+  - If volume has >1 attached VA, mark as migration state with MigrationStartedAt
+  - Multiple VAs only exist during migration window, older VA timestamp is start time
+  - Automatic migration state recovery without additional coordination
+- Phase 15-01 (2026-02-04): **Empty slice return convention**
+  - VolumeAttachment listing functions return empty slice (not nil) when no results found
+  - Allows safe iteration without nil checks, consistent Go idiom
+  - Applied to: ListDriverVolumeAttachments, FilterAttachedVolumeAttachments, GroupVolumeAttachmentsByVolume
+- Phase 15-01 (2026-02-04): **Skip invalid VAs instead of failing**
+  - GroupVolumeAttachmentsByVolume skips VAs with nil PersistentVolumeName
+  - Logs warning but continues processing other VAs
+  - Rationale: Partial data better than complete failure in state rebuild
+- Phase 15-01 (2026-02-04): **Client-side VA filtering**
+  - List all VolumeAttachments, filter client-side by Spec.Attacher
+  - Could use field selectors but not all fields indexed
+  - Rationale: Simpler, works across all Kubernetes versions, acceptable for small VA counts
+
+Recent decisions from v0.6.0 work:
 
 - Phase 15 planning (2026-02-04): **VolumeAttachment-based rebuild deferred to v0.7.0**
   - Bug report suggested using VolumeAttachment objects as source of truth instead of PV annotations
@@ -158,9 +192,9 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Block volume implementation corrected, mount storm confirmed on r640
+Stopped at: v0.7.0 milestone complete and archived
 Resume file: None
-Next action: Build and deploy block volume fix, then address mount storm issue
+Next action: All current milestones complete. Ready for `/gsd:new-milestone` when next milestone is defined.
 
 **Phase 13 Hardware Validation Progress:**
 1. ✓ Created comprehensive validation runbook (test/e2e/PROGRESSIVE_VALIDATION.md)

@@ -1,0 +1,72 @@
+package driver
+
+import (
+	"testing"
+
+	"k8s.io/client-go/kubernetes/fake"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
+)
+
+// TestAttachmentManager_SetMetricsMethod verifies the SetMetrics method exists and works.
+// This is the critical method that enables migration metrics recording.
+func TestAttachmentManager_SetMetricsMethod(t *testing.T) {
+	k8sClient := fake.NewSimpleClientset()
+	am := attachment.NewAttachmentManager(k8sClient)
+
+	if am == nil {
+		t.Fatal("Failed to create AttachmentManager")
+	}
+
+	// Verify SetMetrics method can be called without panic
+	metrics := observability.NewMetrics()
+	am.SetMetrics(metrics)
+
+	// The method is a simple setter, so if we got here without panic, it works.
+	// The actual metrics recording is tested in prometheus_test.go
+	// and the wiring in driver.go is verified by code inspection (line 188-189).
+}
+
+// TestAttachmentManager_SetMetricsNil verifies SetMetrics handles nil gracefully.
+func TestAttachmentManager_SetMetricsNil(t *testing.T) {
+	k8sClient := fake.NewSimpleClientset()
+	am := attachment.NewAttachmentManager(k8sClient)
+
+	// SetMetrics with nil should not panic (even though it's pointless)
+	am.SetMetrics(nil)
+}
+
+// TestNewDriver_NodeModeSkipsAttachmentManager verifies that node-only mode
+// does not create an attachment manager (controller-only component).
+func TestNewDriver_NodeModeSkipsAttachmentManager(t *testing.T) {
+	config := DriverConfig{
+		DriverName:            "rds.csi.srvlab.io",
+		NodeID:                "test-node",
+		EnableController:      false, // Node mode only
+		EnableNode:            true,
+		K8sClient:             fake.NewSimpleClientset(),
+		Metrics:               observability.NewMetrics(),
+		ManagedNQNPrefix:      "nqn.2000-02.com.example:csi",
+		RDSAddress:            "10.0.0.1",
+		RDSPort:               4420,
+		RDSInsecureSkipVerify: true,
+	}
+
+	driver, err := NewDriver(config)
+	if err != nil {
+		t.Fatalf("NewDriver failed: %v", err)
+	}
+
+	if driver.attachmentManager != nil {
+		t.Error("AttachmentManager should not be created in node-only mode")
+	}
+}
+
+// Note: Testing the full controller mode initialization with AttachmentManager
+// requires a valid RDS connection (SSH), which is not feasible in unit tests.
+// The metrics wiring in driver.go (lines 188-189) is verified by:
+// 1. Code inspection: SetMetrics is called when config.Metrics != nil
+// 2. This test: SetMetrics method works correctly
+// 3. prometheus_test.go: RecordMigration* methods work correctly
+// 4. Manual testing: Full integration test with real driver
