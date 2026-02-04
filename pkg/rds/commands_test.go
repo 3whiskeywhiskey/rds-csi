@@ -1,6 +1,8 @@
 package rds
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
@@ -14,6 +16,41 @@ func setupTestBasePaths(t *testing.T) {
 		t.Fatalf("failed to set test base path: %v", err)
 	}
 	t.Cleanup(utils.ResetAllowedBasePaths)
+}
+
+// mockCommandRunner is a function type for mocking runCommand behavior
+type mockCommandRunner func(command string) (string, error)
+
+// testableSSHClient wraps sshClient for testing command execution
+type testableSSHClient struct {
+	*sshClient
+	mockRunner mockCommandRunner
+}
+
+// Override runCommand to use mock
+func (t *testableSSHClient) runCommand(command string) (string, error) {
+	if t.mockRunner != nil {
+		return t.mockRunner(command)
+	}
+	return "", fmt.Errorf("no mock runner configured")
+}
+
+// Override runCommandWithRetry to use mock directly (skip retry logic for unit tests)
+func (t *testableSSHClient) runCommandWithRetry(command string, maxRetries int) (string, error) {
+	return t.runCommand(command)
+}
+
+// newTestableSSHClient creates a client for testing
+func newTestableSSHClient(runner mockCommandRunner) *testableSSHClient {
+	base := &sshClient{
+		address: "test-rds",
+		port:    22,
+		user:    "admin",
+	}
+	return &testableSSHClient{
+		sshClient:  base,
+		mockRunner: runner,
+	}
 }
 
 func TestParseVolumeInfo(t *testing.T) {
@@ -605,5 +642,40 @@ func TestParseFileInfo_CreatedAtParsing(t *testing.T) {
 				t.Errorf("Expected year %d, got %d", tt.expectedYear, file.CreatedAt.Year())
 			}
 		})
+	}
+}
+
+func TestTestableSSHClientInfrastructure(t *testing.T) {
+	// Verify the mock infrastructure works
+	expectedOutput := "mock output"
+	commandReceived := ""
+
+	runner := func(cmd string) (string, error) {
+		commandReceived = cmd
+		return expectedOutput, nil
+	}
+
+	client := newTestableSSHClient(runner)
+
+	// Test that mock runner is called
+	output, err := client.runCommand("test command")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if output != expectedOutput {
+		t.Errorf("Expected output %q, got %q", expectedOutput, output)
+	}
+	if commandReceived != "test command" {
+		t.Errorf("Expected command %q, got %q", "test command", commandReceived)
+	}
+
+	// Test error propagation
+	errorRunner := func(cmd string) (string, error) {
+		return "", fmt.Errorf("mock error")
+	}
+	errorClient := newTestableSSHClient(errorRunner)
+	_, err = errorClient.runCommand("any")
+	if err == nil || !strings.Contains(err.Error(), "mock error") {
+		t.Errorf("Expected mock error to propagate")
 	}
 }
