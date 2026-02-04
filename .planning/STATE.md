@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 Phase: 13 of 14 (Hardware Validation)
 Plan: 1 of 1 in current phase
-Status: Blocked - Kubernetes 1.34 / K3s bug prevents block volume testing
-Last activity: 2026-02-04 — Phase 13 validation blocked by kubelet losetup bug
+Status: Testing fix - block volume symlink issue resolved
+Last activity: 2026-02-04 — Fixed block volume staging (create symlink for kubelet device discovery)
 
 Progress: [█████████████████████████████████] 92% (49/53 plans completed across all phases)
 
@@ -48,21 +48,19 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
-- Phase 13 (2026-02-04): **Removed dev/ directory and symlink from NodeStageVolume** (commit dae1c4f)
-  - Previous code incorrectly created dev/ directory with symlink in staging path
-  - Kubelet interpreted symlink as file needing losetup, causing "Permission denied"
-  - Now follows AWS EBS CSI pattern: NodeStageVolume only connects NVMe and stores metadata
-  - NodePublishVolume handles bind mount to target path
+- Phase 13 (2026-02-04): **Block volume staging requires symlink for kubelet device discovery** (commit afd727e)
+  - NodeStageVolume must create symlink at `staging_path/device` pointing to actual NVMe device
+  - Kubelet calls EvalHostSymlinks on staging path to get devicePath for MapBlockVolume
+  - Previous implementation only stored metadata file, which kubelet cannot use for device mapping
+  - When MapBlockVolume couldn't find device, it fell back to losetup on empty file, failing with exit status 1
+  - CSI spec allows staging "however you like inside the staging_target_directory" - symlink is standard approach
+  - AWS EBS skips NodeStageVolume entirely for block volumes (no STAGE_UNSTAGE_VOLUME for block mode)
+  - Our implementation stages the NVMe connection, so we create symlink for kubelet to discover device
 - Phase 13 (2026-02-04): **Smart orphaned mount cleanup** (commit dc4140f)
   - NodeUnstageVolume now cleans up orphaned bind mounts before device-in-use check
   - Prevents node wedging from self-detecting own bind mounts as "device in use"
   - Forces cleanup during graceful shutdown (ctx.Done()) to prevent mount namespace wedging
   - Eliminates need for node reboots when cleanup fails
-- Phase 13 (2026-02-04): **Discovered Kubernetes 1.34 / K3s bug**
-  - Kubelet incorrectly calls MapBlockVolume (local volume path) for CSI block volumes
-  - Should use CSI NodePublishVolume bind mount, not create loop devices
-  - Bug appears specific to K3s 1.34.1 (Kubernetes 1.34 released August 2025)
-  - CSI driver implementation verified correct per spec
 
 - Phase 14-03: Circuit breaker opens after 3 consecutive failures with 5-minute timeout
 - Phase 14-03: Per-volume isolation - one volume failure doesn't affect others
