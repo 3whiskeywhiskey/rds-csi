@@ -16,10 +16,17 @@ const (
 	driverName = "rds.csi.srvlab.io"
 )
 
-// RebuildState reconstructs the in-memory attachment state from PersistentVolume annotations.
-// This is called on controller startup to recover state after a restart.
-// Returns nil if k8sClient is nil (allows operation without k8s in tests).
+// RebuildState rebuilds attachment state from VolumeAttachment objects.
+// This is the main entry point for state recovery on controller startup.
 func (am *AttachmentManager) RebuildState(ctx context.Context) error {
+	return am.RebuildStateFromVolumeAttachments(ctx)
+}
+
+// RebuildStateFromAnnotations reconstructs state from PV annotations.
+// Deprecated: Use RebuildStateFromVolumeAttachments instead.
+// PV annotations are now informational-only; VolumeAttachment is the authoritative source.
+// This function is kept for backward compatibility testing.
+func (am *AttachmentManager) RebuildStateFromAnnotations(ctx context.Context) error {
 	if am.k8sClient == nil {
 		klog.V(2).Info("Skipping state rebuild (no k8s client)")
 		return nil
@@ -227,13 +234,14 @@ func (am *AttachmentManager) RebuildStateFromVolumeAttachments(ctx context.Conte
 	return nil
 }
 
-// Initialize initializes the AttachmentManager by rebuilding state from PersistentVolumes.
+// Initialize initializes the AttachmentManager by rebuilding state from VolumeAttachments.
 // This should be called once during driver startup.
 func (am *AttachmentManager) Initialize(ctx context.Context) error {
 	klog.Info("Initializing AttachmentManager")
 
-	if err := am.RebuildState(ctx); err != nil {
-		return err
+	// Use VolumeAttachment-based rebuild (authoritative source)
+	if err := am.RebuildStateFromVolumeAttachments(ctx); err != nil {
+		return fmt.Errorf("failed to rebuild state from VolumeAttachments: %w", err)
 	}
 
 	klog.Info("AttachmentManager initialized successfully")
