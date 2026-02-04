@@ -254,7 +254,7 @@ Plans:
 - [x] 19-02-PLAN.md — Add sentinel errors for type-safe error classification
 - [x] 19-03-PLAN.md — Document error handling patterns in CONVENTIONS.md
 - [x] 19-04-PLAN.md — Add golangci-lint configuration with error linting rules
-- [ ] 19-05-PLAN.md — Gap closure: integrate sentinel errors into RDS and driver packages
+- [x] 19-05-PLAN.md — Gap closure: integrate sentinel errors into RDS and driver packages
 
 ---
 
@@ -328,7 +328,7 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 16. Migration Metrics Emission | v0.7.0 | 1/1 | Complete | 2026-02-04 |
 | 17. Test Infrastructure Fix | v0.7.1 | 1/1 | Complete | 2026-02-04 |
 | 18. Logging Cleanup | v0.7.1 | 5/5 | Complete | 2026-02-04 |
-| 19. Error Handling Standardization | v0.7.1 | 4/5 | Gap closure | 2026-02-04 |
+| 19. Error Handling Standardization | v0.7.1 | 5/5 | Complete | 2026-02-04 |
 | 20. Test Coverage Expansion | v0.7.1 | 0/? | Not started | - |
 | 21. Code Quality Improvements | v0.7.1 | 0/? | Not started | - |
 
