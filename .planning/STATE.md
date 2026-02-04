@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 17 of 21 (Test Infrastructure Fix)
-Plan: 1 of 1 complete
-Status: Phase 17 complete - ready for Phase 18
-Last activity: 2026-02-04 — Completed 17-01-PLAN.md
+Phase: 18 of 21 (Logging Cleanup)
+Plan: 1 of 3 complete
+Status: Phase 18 in progress
+Last activity: 2026-02-04 — Completed 18-01-PLAN.md
 
-Progress: [███████████████████████████░░░░░░░░░░] 77% (60/77 total plans across all phases)
+Progress: [████████████████████████████░░░░░░░░░] 79% (61/77 total plans across all phases)
 
 ## Performance Metrics
 
@@ -32,7 +32,7 @@ Progress: [███████████████████████
 | v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Shipped 2026-02-03 |
 | v0.6.0 Block Volume Support | 11-14 | 9/9 | Shipped 2026-02-04 |
 | v0.7.0 State Management & Observability | 15-16 | 5/5 | Shipped 2026-02-04 |
-| v0.7.1 Code Quality and Logging Cleanup | 17-21 | 1/? | In progress |
+| v0.7.1 Code Quality and Logging Cleanup | 17-21 | 2/? | In progress |
 
 **Recent Trend:**
 - v0.6.0: 9 plans, 4 phases, 1 day
@@ -53,6 +53,11 @@ Progress: [███████████████████████
 
 Recent decisions from v0.7.1 work:
 
+- Phase 18-01 (2026-02-04): **Operation wrapper methods reduced from ~300 lines to 47 lines**
+  - Created table-driven LogOperation helper with OperationLogConfig for 7 volume/NVMe operations
+  - Introduced EventField functional options pattern for composable event configuration
+  - Achieved 84% code reduction in operation methods (300+ lines → 47 lines)
+  - Maintained 100% backward compatibility - all existing Log* signatures unchanged
 - Phase 17-01 (2026-02-04): **Block volume tests verify up to mknod permission error**
   - mknod requires elevated privileges not available in CI/macOS test environment
   - Tests verify nvmeConn usage pattern which is the critical logic
@@ -102,6 +107,6 @@ None
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 17 (Test Infrastructure Fix)
+Stopped at: Completed 18-01-PLAN.md (Security logger consolidation)
 Resume file: None
-Next action: Plan Phase 18 with `/gsd:plan-phase 18` or continue with next priority phase
+Next action: Continue with 18-02 or 18-03 to complete Phase 18 logging cleanup
