@@ -663,3 +663,31 @@ func TestLogOperation_MultipleFields(t *testing.T) {
 		t.Errorf("Expected average duration 50ms, got %v", metrics.AverageOperationDuration)
 	}
 }
+
+func TestLogEventSeverityMapping(t *testing.T) {
+	// Test that all defined severities are handled
+	testCases := []struct {
+		name     string
+		severity EventSeverity
+	}{
+		{"Info", SeverityInfo},
+		{"Warning", SeverityWarning},
+		{"Error", SeverityError},
+		{"Critical", SeverityCritical},
+		{"Unknown", EventSeverity("unknown")}, // Should default to Info behavior
+	}
+
+	logger := NewLogger()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := NewSecurityEvent(
+				EventSSHConnectionAttempt,
+				CategoryAuthentication,
+				tc.severity,
+				"test message",
+			)
+			// Should not panic - verifies map lookup handles all cases
+			logger.LogEvent(event)
+		})
+	}
+}
