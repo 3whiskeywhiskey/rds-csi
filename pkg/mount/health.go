@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -54,6 +55,11 @@ func CheckFilesystemHealth(ctx context.Context, devicePath, fsType string) error
 	}
 
 	if err != nil {
+		// Check if command not found (tool not installed) - skip check gracefully
+		if strings.Contains(err.Error(), "executable file not found") || strings.Contains(err.Error(), "no such file or directory") {
+			klog.V(2).Infof("Skipping health check for %s: filesystem check tool not found", fsType)
+			return nil
+		}
 		return fmt.Errorf("filesystem health check failed for device %s (fsType: %s): %w. "+
 			"Filesystem may be corrupted. Output: %s. "+
 			"Consider running fsck manually after unmounting any existing mounts",

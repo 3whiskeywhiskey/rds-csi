@@ -11,6 +11,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/circuitbreaker"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
@@ -168,10 +169,11 @@ func createNodeServerWithStaleBehavior(mounter mount.Mounter, behavior staleChec
 	}
 
 	return &NodeServer{
-		driver:       driver,
-		mounter:      mounter,
-		nodeID:       "test-node",
-		staleChecker: checker,
+		driver:         driver,
+		mounter:        mounter,
+		nodeID:         "test-node",
+		staleChecker:   checker,
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 }
 
@@ -184,9 +186,10 @@ func createNodeServerNoStaleChecker(mounter mount.Mounter) *NodeServer {
 	}
 
 	return &NodeServer{
-		driver:  driver,
-		mounter: mounter,
-		nodeID:  "test-node",
+		driver:         driver,
+		mounter:        mounter,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 		// No stale checker - will default to healthy condition
 	}
 }
@@ -693,10 +696,11 @@ func TestNodeStageVolume_BlockVolume(t *testing.T) {
 	}
 
 	ns := &NodeServer{
-		driver:   driver,
-		mounter:  mounter,
-		nvmeConn: connector,
-		nodeID:   "test-node",
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 
 	// Create request
@@ -776,10 +780,11 @@ func TestNodeStageVolume_FilesystemVolume_Unchanged(t *testing.T) {
 	}
 
 	ns := &NodeServer{
-		driver:   driver,
-		mounter:  mounter,
-		nvmeConn: connector,
-		nodeID:   "test-node",
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 
 	// Create request for filesystem volume
@@ -1027,10 +1032,11 @@ func TestNodeUnstageVolume_BlockVolume(t *testing.T) {
 	}
 
 	ns := &NodeServer{
-		driver:   driver,
-		mounter:  mounter,
-		nvmeConn: connector,
-		nodeID:   "test-node",
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 
 	// Create request
@@ -1096,10 +1102,11 @@ func TestNodeUnstageVolume_FilesystemVolume_Unchanged(t *testing.T) {
 	}
 
 	ns := &NodeServer{
-		driver:   driver,
-		mounter:  mounter,
-		nvmeConn: connector,
-		nodeID:   "test-node",
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 
 	// Create request

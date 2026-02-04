@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/circuitbreaker"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
@@ -39,13 +40,14 @@ const (
 // NodeServer implements the CSI Node service
 type NodeServer struct {
 	csi.UnimplementedNodeServer
-	driver       *Driver
-	nvmeConn     nvme.Connector
-	mounter      mount.Mounter
-	nodeID       string
-	eventPoster  *EventPoster             // for posting K8s events
-	staleChecker *mount.StaleMountChecker // for detecting stale mounts
-	recoverer    *mount.MountRecoverer    // for recovering stale mounts
+	driver         *Driver
+	nvmeConn       nvme.Connector
+	mounter        mount.Mounter
+	nodeID         string
+	eventPoster    *EventPoster                         // for posting K8s events
+	staleChecker   *mount.StaleMountChecker             // for detecting stale mounts
+	recoverer      *mount.MountRecoverer                // for recovering stale mounts
+	circuitBreaker *circuitbreaker.VolumeCircuitBreaker // for preventing mount retry storms
 }
 
 // NewNodeServer creates a new Node service
@@ -86,13 +88,14 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 	}
 
 	return &NodeServer{
-		driver:       driver,
-		nvmeConn:     connector,
-		mounter:      m,
-		nodeID:       nodeID,
-		eventPoster:  eventPoster,
-		staleChecker: staleChecker,
-		recoverer:    recoverer,
+		driver:         driver,
+		nvmeConn:       connector,
+		mounter:        m,
+		nodeID:         nodeID,
+		eventPoster:    eventPoster,
+		staleChecker:   staleChecker,
+		recoverer:      recoverer,
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 }
 
@@ -277,37 +280,48 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	// Filesystem volume: format and mount (existing code follows)
-
-	// Step 2: Format filesystem if needed
-	if err := ns.mounter.Format(devicePath, fsType); err != nil {
-		// Post mount failure event (format is part of mount preparation, ignore error - best effort)
-		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to format device %s: %v", devicePath, err))
+	// Filesystem volume: format and mount with circuit breaker protection
+	// Wrap format and mount operations in circuit breaker to prevent retry storms
+	err = ns.circuitBreaker.Execute(ctx, volumeID, func() error {
+		// Step 2a: Check filesystem health before mount (only for existing filesystems)
+		formatted, formatErr := ns.mounter.IsFormatted(devicePath)
+		if formatErr != nil {
+			klog.Warningf("Could not check if device is formatted, skipping health check: %v", formatErr)
+		} else if formatted {
+			klog.V(2).Infof("Running filesystem health check for %s", devicePath)
+			if healthErr := mount.CheckFilesystemHealth(ctx, devicePath, fsType); healthErr != nil {
+				return fmt.Errorf("filesystem health check failed: %w", healthErr)
+			}
 		}
-		// Cleanup on failure
-		_ = ns.nvmeConn.Disconnect(nqn)
-		// Log volume stage failure
-		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to format device: %v", err)
-	}
 
-	// Step 3: Mount to staging path
-	mountOptions := []string{}
-	if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
-		mountOptions = mnt.MountFlags
-	}
-
-	if err := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); err != nil {
-		// Post mount failure event (ignore error - event posting is best effort)
-		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to mount %s to %s: %v", devicePath, stagingPath, err))
+		// Step 2b: Format filesystem if needed
+		if formatErr := ns.mounter.Format(devicePath, fsType); formatErr != nil {
+			return fmt.Errorf("failed to format device: %w", formatErr)
 		}
-		// Cleanup on failure
+
+		// Step 3: Mount to staging path
+		mountOptions := []string{}
+		if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
+			mountOptions = mnt.MountFlags
+		}
+
+		if mountErr := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); mountErr != nil {
+			return fmt.Errorf("failed to mount device: %w", mountErr)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		// Post failure event if this is a circuit breaker or mount error
+		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
+			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID,
+				fmt.Sprintf("stage volume failed: %v", err))
+		}
+		// Cleanup NVMe connection on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
-		// Log volume stage failure
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to mount device: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to stage filesystem volume: %v", err)
 	}
 
 	klog.V(2).Infof("Successfully staged volume %s to %s", volumeID, stagingPath)
