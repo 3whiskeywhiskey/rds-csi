@@ -881,90 +881,77 @@ func TestResizeFilesystem(t *testing.T) {
 		name        string
 		device      string
 		volumePath  string
-		mockResults []struct{ stdout, stderr string; exitCode int }
+		fsType      string // What blkid should return
+		blkidExit   int
+		resizeExit  int
 		expectError bool
 		errContains string
 	}{
 		{
-			name:       "ext4 resize success",
-			device:     "/dev/nvme0n1",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid detects ext4
-				{stdout: "ext4\n", stderr: "", exitCode: 0},
-				// resize2fs succeeds
-				{stdout: "Resizing filesystem\n", stderr: "", exitCode: 0},
-			},
+			name:        "ext4 resize success",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "ext4",
+			blkidExit:   0,
+			resizeExit:  0,
 			expectError: false,
 		},
 		{
-			name:       "xfs resize success",
-			device:     "/dev/nvme0n2",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid detects xfs
-				{stdout: "xfs\n", stderr: "", exitCode: 0},
-				// xfs_growfs succeeds
-				{stdout: "data blocks changed\n", stderr: "", exitCode: 0},
-			},
+			name:        "xfs resize success",
+			device:      "/dev/nvme0n2",
+			volumePath:  "/mnt/volume",
+			fsType:      "xfs",
+			blkidExit:   0,
+			resizeExit:  0,
 			expectError: false,
 		},
 		{
-			name:       "ext4 resize fails",
-			device:     "/dev/nvme0n1",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid detects ext4
-				{stdout: "ext4\n", stderr: "", exitCode: 0},
-				// resize2fs fails
-				{stdout: "", stderr: "resize2fs: error resizing", exitCode: 1},
-			},
+			name:        "ext4 resize fails",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "ext4",
+			blkidExit:   0,
+			resizeExit:  1,
 			expectError: true,
 			errContains: "resize failed",
 		},
 		{
-			name:       "xfs resize fails",
-			device:     "/dev/nvme0n2",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid detects xfs
-				{stdout: "xfs\n", stderr: "", exitCode: 0},
-				// xfs_growfs fails
-				{stdout: "", stderr: "xfs_growfs: error", exitCode: 1},
-			},
+			name:        "xfs resize fails",
+			device:      "/dev/nvme0n2",
+			volumePath:  "/mnt/volume",
+			fsType:      "xfs",
+			blkidExit:   0,
+			resizeExit:  1,
 			expectError: true,
 			errContains: "resize failed",
 		},
 		{
-			name:       "unsupported filesystem",
-			device:     "/dev/nvme0n1",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid detects ntfs
-				{stdout: "ntfs\n", stderr: "", exitCode: 0},
-			},
+			name:        "unsupported filesystem",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "ntfs",
+			blkidExit:   0,
+			resizeExit:  0,
 			expectError: true,
 			errContains: "unsupported filesystem type",
 		},
 		{
-			name:       "blkid fails - device not found",
-			device:     "/dev/nonexistent",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid fails
-				{stdout: "", stderr: "cannot access device", exitCode: 1},
-			},
+			name:        "blkid fails - device not found",
+			device:      "/dev/nonexistent",
+			volumePath:  "/mnt/volume",
+			fsType:      "",
+			blkidExit:   1,
+			resizeExit:  0,
 			expectError: true,
 			errContains: "failed to detect filesystem type",
 		},
 		{
-			name:       "blkid returns empty - no filesystem",
-			device:     "/dev/nvme0n1",
-			volumePath: "/mnt/volume",
-			mockResults: []struct{ stdout, stderr string; exitCode int }{
-				// blkid returns empty (no filesystem detected)
-				{stdout: "\n", stderr: "", exitCode: 0},
-			},
+			name:        "blkid returns empty - no filesystem",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "",
+			blkidExit:   0,
+			resizeExit:  0,
 			expectError: true,
 			errContains: "could not detect filesystem type",
 		},
@@ -972,8 +959,18 @@ func TestResizeFilesystem(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Create command-aware mock that returns different results based on command
 			m := &mounter{
-				execCommand: mockMultiExecCommand(tt.mockResults),
+				execCommand: func(name string, args ...string) *exec.Cmd {
+					switch name {
+					case "blkid":
+						return mockExecCommand(tt.fsType, "", tt.blkidExit)(name, args...)
+					case "resize2fs", "xfs_growfs":
+						return mockExecCommand("", "", tt.resizeExit)(name, args...)
+					default:
+						return mockExecCommand("", "", 0)(name, args...)
+					}
+				},
 			}
 
 			err := m.ResizeFilesystem(tt.device, tt.volumePath)
