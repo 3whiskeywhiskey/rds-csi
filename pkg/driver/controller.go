@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -193,7 +194,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeFailure, err, time.Since(startTime))
 
 		// Check if this is a capacity error
-		if containsString(err.Error(), "not enough space") {
+		if stderrors.Is(err, utils.ErrResourceExhausted) {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS: %v", err)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to create volume on RDS: %v", err)
@@ -876,7 +877,7 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 
 	if err := cs.driver.rdsClient.ResizeVolume(volumeID, requiredBytes); err != nil {
 		// Check if this is a capacity error
-		if containsString(err.Error(), "not enough space") {
+		if stderrors.Is(err, utils.ErrResourceExhausted) {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS for expansion: %v", err)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to resize volume on RDS: %v", err)
@@ -989,6 +990,8 @@ func (cs *ControllerServer) getNVMEAddress(params map[string]string) string {
 }
 
 // containsString checks if a string contains a substring
+// NOTE: This function is kept for potential non-error string matching.
+// RDS error classification now uses errors.Is() with sentinel errors.
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && indexString(s, substr) >= 0)
 }
