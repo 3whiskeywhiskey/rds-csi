@@ -672,7 +672,10 @@ func createFilesystemVolumeCapability() *csi.VolumeCapability {
 	}
 }
 
-// TestNodeStageVolume_BlockVolume tests staging a block volume
+// TestNodeStageVolume_BlockVolume tests staging a block volume.
+// Per CSI spec and AWS EBS CSI driver pattern, NodeStageVolume for block volumes
+// only connects to the NVMe device - no staging directory or metadata is created.
+// NodePublishVolume finds the device by NQN via nvmeConn.GetDevicePath().
 func TestNodeStageVolume_BlockVolume(t *testing.T) {
 	// Create temp directory for staging
 	tmpDir, err := os.MkdirTemp("", "node-test-block-stage-*")
@@ -735,24 +738,6 @@ func TestNodeStageVolume_BlockVolume(t *testing.T) {
 	// Verify: Mount was NOT called for block volumes
 	if mounter.mountCalled {
 		t.Error("Mount should not be called for block volumes")
-	}
-
-	// Verify: Staging directory was created
-	if _, err := os.Stat(stagingPath); os.IsNotExist(err) {
-		t.Error("staging directory should have been created")
-	}
-
-	// Verify: Device metadata file was created
-	metadataPath := filepath.Join(stagingPath, "device")
-	deviceBytes, err := os.ReadFile(metadataPath)
-	if err != nil {
-		t.Fatalf("failed to read device metadata file: %v", err)
-	}
-
-	// Verify: Metadata contains expected device path
-	devicePath := strings.TrimSpace(string(deviceBytes))
-	if devicePath != "/dev/nvme0n1" {
-		t.Errorf("device metadata = %q, want %q", devicePath, "/dev/nvme0n1")
 	}
 }
 
