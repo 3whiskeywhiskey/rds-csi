@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,8 @@ type DeviceUsageResult struct {
 	TimedOut bool
 	// Error is set if the check failed for reasons other than timeout
 	Error error
+	// FilteredSelfPIDs is the count of entries removed because they matched the driver's own PID
+	FilteredSelfPIDs int
 }
 
 // CheckDeviceInUse checks if a device has open file descriptors using lsof.
@@ -68,31 +72,119 @@ func CheckDeviceInUse(ctx context.Context, devicePath string) DeviceUsageResult 
 		}
 	}
 
+	// Get our own PID to filter out false positives from driver's temporary operations
+	ownPID := os.Getpid()
+
 	// Parse lsof output
 	// Format: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	// Log raw lsof output for debugging
+	if klog.V(4).Enabled() {
+		klog.Infof("CheckDeviceInUse: lsof output for %s (%d lines):\n%s", devicePath, len(lines), string(out))
+	}
+
 	if len(lines) <= 1 {
 		// Only header line or empty - no processes
 		return DeviceUsageResult{InUse: false}
 	}
 
 	// Extract process info from output (skip header line)
+	// Filter out the driver's own PID to avoid false positives from:
+	// - Temporary FDs during /proc scans in IsMountInUse()
+	// - Sysfs reads during device path resolution
+	// - The lsof check operation itself
 	processes := make([]string, 0, len(lines)-1)
+	filteredCount := 0
+
 	for _, line := range lines[1:] {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
+			// Parse PID from lsof output
+			pid, err := strconv.Atoi(fields[1])
+			if err != nil {
+				klog.Warningf("Failed to parse PID from lsof line '%s': %v", line, err)
+				continue
+			}
+
+			// Filter out driver's own PID
+			if pid == ownPID {
+				filteredCount++
+				klog.V(4).Infof("CheckDeviceInUse: filtered out driver's own PID %d from device-in-use check (command: %s)",
+					pid, fields[0])
+				continue
+			}
+
 			// Format as "command[PID]" for readable error messages
 			processes = append(processes, fmt.Sprintf("%s[PID:%s]", fields[0], fields[1]))
 		}
 	}
 
+	if filteredCount > 0 {
+		klog.V(2).Infof("CheckDeviceInUse: filtered %d driver self-reference(s) from lsof output for %s",
+			filteredCount, devicePath)
+	}
+
 	if len(processes) > 0 {
-		klog.V(2).Infof("Device %s in use by %d process(es): %v", devicePath, len(processes), processes)
+		klog.V(2).Infof("Device %s in use by %d external process(es): %v", devicePath, len(processes), processes)
 		return DeviceUsageResult{
-			InUse:     true,
-			Processes: processes,
+			InUse:            true,
+			Processes:        processes,
+			FilteredSelfPIDs: filteredCount,
 		}
 	}
 
-	return DeviceUsageResult{InUse: false}
+	klog.V(4).Infof("Device %s not in use (filtered %d self-references)", devicePath, filteredCount)
+	return DeviceUsageResult{
+		InUse:            false,
+		FilteredSelfPIDs: filteredCount,
+	}
+}
+
+// CheckDeviceInUseWithRetry checks if a device is in use, retrying multiple times
+// to avoid transient false positives from momentary file descriptor operations.
+// This is particularly useful for filtering out the driver's own temporary FD operations
+// during /proc scans or sysfs reads.
+func CheckDeviceInUseWithRetry(ctx context.Context, devicePath string, retries int, retryDelay time.Duration) DeviceUsageResult {
+	if retries < 1 {
+		retries = 1
+	}
+
+	var lastResult DeviceUsageResult
+	for attempt := 1; attempt <= retries; attempt++ {
+		lastResult = CheckDeviceInUse(ctx, devicePath)
+
+		// If device is not in use, no need to retry
+		if !lastResult.InUse {
+			if attempt > 1 {
+				klog.V(2).Infof("Device %s not in use after %d attempt(s)", devicePath, attempt)
+			}
+			return lastResult
+		}
+
+		// If timed out or errored, return immediately (no point retrying)
+		if lastResult.TimedOut || lastResult.Error != nil {
+			return lastResult
+		}
+
+		// Device reported as in use - retry if we have attempts left
+		if attempt < retries {
+			klog.V(4).Infof("Device %s reported in use (attempt %d/%d), retrying after %v to confirm. Processes: %v",
+				devicePath, attempt, retries, retryDelay, lastResult.Processes)
+
+			// Wait before retry (check context cancellation)
+			select {
+			case <-ctx.Done():
+				// Context cancelled - return current result
+				return lastResult
+			case <-time.After(retryDelay):
+				// Continue to next retry
+			}
+		}
+	}
+
+	// All retries exhausted, device consistently in use
+	klog.V(2).Infof("Device %s confirmed in use after %d attempt(s). Final processes: %v",
+		devicePath, retries, lastResult.Processes)
+	return lastResult
 }

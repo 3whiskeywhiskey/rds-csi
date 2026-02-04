@@ -369,7 +369,14 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 				}
 
 				// Step 2: NOW check device-in-use (after cleaning up our own mounts)
-				result := nvme.CheckDeviceInUse(ctx, devicePath)
+				// Use retry logic to avoid transient false positives from momentary FD operations
+				result := nvme.CheckDeviceInUseWithRetry(ctx, devicePath, 3, 1*time.Second)
+
+				// Log if we filtered out driver's own PID (helps diagnose false positives)
+				if result.FilteredSelfPIDs > 0 {
+					klog.V(2).Infof("Device-in-use check filtered %d driver self-reference(s) for %s",
+						result.FilteredSelfPIDs, devicePath)
+				}
 
 				if result.TimedOut {
 					klog.Warningf("Device %s busy check timed out, proceeding with disconnect", devicePath)
@@ -387,11 +394,11 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 						// Proceed with cleanup
 					default:
 						// Not shutting down - this is a normal unstage, don't force it
-						klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+						klog.Errorf("Device %s in use by external processes: %v", devicePath, result.Processes)
 						secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
 							fmt.Errorf("device in use"), time.Since(startTime))
 						return nil, status.Errorf(codes.FailedPrecondition,
-							"Device %s has open file descriptors, cannot safely unstage. "+
+							"Device %s has open file descriptors from external processes, cannot safely unstage. "+
 								"Ensure pod using volume has terminated. Processes: %v",
 							devicePath, result.Processes)
 					}
@@ -433,7 +440,14 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 				klog.V(4).Infof("Could not get device path for NQN %s: %v (device may already be disconnected, proceeding)", nqn, devErr)
 			} else {
 				// Device path found - check if it's in use before disconnecting
-				result := nvme.CheckDeviceInUse(ctx, devicePath)
+				// Use retry logic to avoid transient false positives from momentary FD operations
+				result := nvme.CheckDeviceInUseWithRetry(ctx, devicePath, 3, 1*time.Second)
+
+				// Log if we filtered out driver's own PID (helps diagnose false positives)
+				if result.FilteredSelfPIDs > 0 {
+					klog.V(2).Infof("Device-in-use check filtered %d driver self-reference(s) for %s",
+						result.FilteredSelfPIDs, devicePath)
+				}
 
 				if result.TimedOut {
 					// Device check timed out - device may be unresponsive
@@ -442,14 +456,14 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 						devicePath)
 				} else if result.InUse {
 					// Device has open file descriptors - unsafe to disconnect
-					klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+					klog.Errorf("Device %s in use by external processes: %v", devicePath, result.Processes)
 
 					// Log failure
 					secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
 						fmt.Errorf("device in use"), time.Since(startTime))
 
 					return nil, status.Errorf(codes.FailedPrecondition,
-						"Device %s has open file descriptors, cannot safely unstage. "+
+						"Device %s has open file descriptors from external processes, cannot safely unstage. "+
 							"Ensure pod using volume has terminated. Processes: %v",
 						devicePath, result.Processes)
 				} else if result.Error != nil {
