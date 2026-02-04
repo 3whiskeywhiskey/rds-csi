@@ -149,7 +149,7 @@ func (r *AttachmentReconciler) run(ctx context.Context) {
 // reconcile performs a single reconciliation pass.
 func (r *AttachmentReconciler) reconcile(ctx context.Context) {
 	startTime := time.Now()
-	klog.V(3).Info("Starting attachment reconciliation")
+	klog.V(4).Info("Starting attachment reconciliation")
 
 	// Get all current attachments
 	attachments := r.manager.ListAttachments()
@@ -178,7 +178,7 @@ func (r *AttachmentReconciler) reconcile(ctx context.Context) {
 		// Node deleted - check if within grace period
 		detachTime := r.manager.GetDetachTimestamp(volumeID)
 		if !detachTime.IsZero() && time.Since(detachTime) < r.gracePeriod {
-			klog.V(3).Infof("Node %s deleted but within grace period for volume %s", state.NodeID, volumeID)
+			klog.V(4).Infof("Node %s deleted but within grace period for volume %s", state.NodeID, volumeID)
 			continue
 		}
 
@@ -212,7 +212,7 @@ func (r *AttachmentReconciler) reconcile(ctx context.Context) {
 	if clearedCount > 0 {
 		klog.Infof("Attachment reconciliation complete: cleared %d stale attachments (duration=%v)", clearedCount, duration)
 	} else {
-		klog.V(3).Infof("Attachment reconciliation complete: no stale attachments (duration=%v)", duration)
+		klog.V(4).Infof("Attachment reconciliation complete: no stale attachments (duration=%v)", duration)
 	}
 }
 
@@ -244,13 +244,13 @@ func (r *AttachmentReconciler) postStaleAttachmentClearedEvent(ctx context.Conte
 	// Volume ID is typically the PV name (e.g., pvc-<uuid>)
 	pv, err := r.k8sClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
 	if err != nil {
-		klog.V(3).Infof("Cannot get PV %s for stale attachment event: %v", volumeID, err)
+		klog.V(4).Infof("Cannot get PV %s for stale attachment event: %v", volumeID, err)
 		return
 	}
 
 	claimRef := pv.Spec.ClaimRef
 	if claimRef == nil {
-		klog.V(3).Infof("PV %s has no claimRef for stale attachment event", volumeID)
+		klog.V(4).Infof("PV %s has no claimRef for stale attachment event", volumeID)
 		return
 	}
 

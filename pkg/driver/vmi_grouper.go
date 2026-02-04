@@ -91,12 +91,12 @@ func (g *VMIGrouper) LockVMI(ctx context.Context, pvcNamespace, pvcName string) 
 	lock := g.getOrCreateLock(vmiKey)
 	lock.mu.Lock()
 
-	klog.V(3).Infof("Acquired VMI lock for %s (PVC: %s/%s)", vmiKey, pvcNamespace, pvcName)
+	klog.V(4).Infof("Acquired VMI lock for %s (PVC: %s/%s)", vmiKey, pvcNamespace, pvcName)
 
 	return vmiKey, func() {
 		lock.mu.Unlock()
 		g.releaseLock(vmiKey)
-		klog.V(3).Infof("Released VMI lock for %s", vmiKey)
+		klog.V(4).Infof("Released VMI lock for %s", vmiKey)
 	}
 }
 
@@ -132,7 +132,7 @@ func (g *VMIGrouper) lookupVMIFromAPI(ctx context.Context, pvcNamespace, pvcName
 	// List pods in the namespace
 	pods, err := g.k8sClient.CoreV1().Pods(pvcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		klog.V(3).Infof("Failed to list pods in namespace %s: %v", pvcNamespace, err)
+		klog.V(4).Infof("Failed to list pods in namespace %s: %v", pvcNamespace, err)
 		return "", false
 	}
 
@@ -142,7 +142,7 @@ func (g *VMIGrouper) lookupVMIFromAPI(ctx context.Context, pvcNamespace, pvcName
 			// Check ownerReferences for VMI
 			vmiKey := g.extractVMIFromPod(&pod)
 			if vmiKey != "" {
-				klog.V(3).Infof("Found VMI %s for PVC %s/%s via pod %s",
+				klog.V(4).Infof("Found VMI %s for PVC %s/%s via pod %s",
 					vmiKey, pvcNamespace, pvcName, pod.Name)
 				return vmiKey, true
 			}
