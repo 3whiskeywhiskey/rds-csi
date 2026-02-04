@@ -95,6 +95,12 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ NQN filtering bug fixed (commit 6d7cece) - prevents system volume disconnect
 
 **Active:**
+- CI test failure in pkg/driver (all tests pass locally with -race flag)
+  - Only 2 of 6 test files run in CI (params_test.go, vmi_grouper_test.go)
+  - 4 test files don't execute (controller_test.go, events_test.go, identity_test.go, node_test.go)
+  - No error message, just generic FAIL at 0.366s (vs expected 1.7-2.8s)
+  - Added verbose JSON logging to Makefile (commit 65fb14c) to diagnose
+  - GitHub Actions run in progress with enhanced diagnostics
 - Phase 13 hardware validation interrupted due to node r640 instability
 - Need to redeploy driver with Phase 14 safety features before resuming validation
 - Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value (after Phase 14)
@@ -107,6 +113,16 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 14 complete - all error resilience features implemented and verified
+Stopped at: Debugging CI test failure, added verbose logging (commit 65fb14c), waiting for GitHub Actions
 Resume file: None
-Next action: Redeploy driver with Phase 14 safety features, then retry Phase 13 validation
+Next action: Check GitHub Actions output for pkg/driver test details, resolve CI issue
+
+**Local commits not pushed:**
+- adb49e3: style: apply goimports formatting across codebase (7 files)
+
+**CI Investigation Progress:**
+1. ✓ Fixed pkg/mount tests (Linux-only procmounts integration tests)
+2. ✓ Identified pkg/driver as consistent failure point
+3. ✓ Confirmed all tests pass locally (145 tests run successfully)
+4. ✓ Added verbose test logging with JSON output and test file listing
+5. ⏳ Waiting for CI run to provide diagnostic details
