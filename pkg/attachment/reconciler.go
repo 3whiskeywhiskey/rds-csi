@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
@@ -29,6 +29,8 @@ type EventPoster interface {
 type AttachmentReconciler struct {
 	manager     *AttachmentManager
 	k8sClient   kubernetes.Interface
+	nodeLister  corev1listers.NodeLister             // Cached node lister (avoids API calls)
+	pvLister    corev1listers.PersistentVolumeLister // Cached PV lister (avoids API calls)
 	interval    time.Duration
 	gracePeriod time.Duration
 	metrics     *observability.Metrics
@@ -44,8 +46,10 @@ type AttachmentReconciler struct {
 type ReconcilerConfig struct {
 	Manager     *AttachmentManager
 	K8sClient   kubernetes.Interface
-	Interval    time.Duration // Default: 5 minutes
-	GracePeriod time.Duration // Default: 30 seconds
+	NodeLister  corev1listers.NodeLister             // Required: cached node lister to avoid API throttling
+	PVLister    corev1listers.PersistentVolumeLister // Required: cached PV lister to avoid API throttling
+	Interval    time.Duration                        // Default: 5 minutes
+	GracePeriod time.Duration                        // Default: 30 seconds
 	Metrics     *observability.Metrics
 	EventPoster EventPoster // Optional, may be nil - for posting lifecycle events
 }
@@ -58,6 +62,12 @@ func NewAttachmentReconciler(config ReconcilerConfig) (*AttachmentReconciler, er
 	if config.K8sClient == nil {
 		return nil, fmt.Errorf("k8sClient is required")
 	}
+	if config.NodeLister == nil {
+		return nil, fmt.Errorf("nodeLister is required (use informer to avoid API throttling)")
+	}
+	if config.PVLister == nil {
+		return nil, fmt.Errorf("pvLister is required (use informer to avoid API throttling)")
+	}
 	if config.Interval <= 0 {
 		config.Interval = 5 * time.Minute
 	}
@@ -68,6 +78,8 @@ func NewAttachmentReconciler(config ReconcilerConfig) (*AttachmentReconciler, er
 	return &AttachmentReconciler{
 		manager:     config.Manager,
 		k8sClient:   config.K8sClient,
+		nodeLister:  config.NodeLister,
+		pvLister:    config.PVLister,
 		interval:    config.Interval,
 		gracePeriod: config.GracePeriod,
 		metrics:     config.Metrics,
@@ -216,9 +228,11 @@ func (r *AttachmentReconciler) reconcile(ctx context.Context) {
 	}
 }
 
-// nodeExists checks if a Kubernetes node exists.
+// nodeExists checks if a Kubernetes node exists using the cached node lister.
+// This avoids direct API calls and prevents throttling during reconciliation.
 func (r *AttachmentReconciler) nodeExists(ctx context.Context, nodeID string) (bool, error) {
-	_, err := r.k8sClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+	// Use cached lister instead of API call - this is the key fix for API throttling!
+	_, err := r.nodeLister.Get(nodeID)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return false, nil
@@ -242,7 +256,8 @@ func (r *AttachmentReconciler) postStaleAttachmentClearedEvent(ctx context.Conte
 
 	// Look up the PV to get the bound PVC information
 	// Volume ID is typically the PV name (e.g., pvc-<uuid>)
-	pv, err := r.k8sClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	// Use cached lister instead of API call to avoid throttling
+	pv, err := r.pvLister.Get(volumeID)
 	if err != nil {
 		klog.V(4).Infof("Cannot get PV %s for stale attachment event: %v", volumeID, err)
 		return

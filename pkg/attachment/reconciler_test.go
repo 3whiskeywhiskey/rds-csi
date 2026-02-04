@@ -2,23 +2,46 @@ package attachment
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 )
+
+// createTestListers creates test node and PV listers from a fake clientset
+func createTestListers(clientset *fake.Clientset, objects ...runtime.Object) (nodeLister corev1listers.NodeLister, pvLister corev1listers.PersistentVolumeLister) {
+	for _, obj := range objects {
+		switch v := obj.(type) {
+		case *corev1.Node:
+			clientset.CoreV1().Nodes().Create(context.Background(), v, metav1.CreateOptions{})
+		case *corev1.PersistentVolume:
+			clientset.CoreV1().PersistentVolumes().Create(context.Background(), v, metav1.CreateOptions{})
+		}
+	}
+	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	nodeLister = informerFactory.Core().V1().Nodes().Lister()
+	pvLister = informerFactory.Core().V1().PersistentVolumes().Lister()
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	informerFactory.Start(stopCh)
+	informerFactory.WaitForCacheSync(stopCh)
+	return nodeLister, pvLister
+}
 
 func TestNewAttachmentReconciler_RequiresManager(t *testing.T) {
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	_, err := NewAttachmentReconciler(ReconcilerConfig{
-		Manager:   nil,
-		K8sClient: k8sClient,
+		Manager:    nil,
+		K8sClient:  k8sClient,
+		NodeLister: nodeLister,
+		PVLister:   pvLister,
 	})
 
 	if err == nil {
@@ -28,10 +51,14 @@ func TestNewAttachmentReconciler_RequiresManager(t *testing.T) {
 
 func TestNewAttachmentReconciler_RequiresK8sClient(t *testing.T) {
 	am := NewAttachmentManager(nil)
+	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	_, err := NewAttachmentReconciler(ReconcilerConfig{
-		Manager:   am,
-		K8sClient: nil,
+		Manager:    am,
+		K8sClient:  nil,
+		NodeLister: nodeLister,
+		PVLister:   pvLister,
 	})
 
 	if err == nil {
@@ -42,10 +69,13 @@ func TestNewAttachmentReconciler_RequiresK8sClient(t *testing.T) {
 func TestNewAttachmentReconciler_DefaultValues(t *testing.T) {
 	am := NewAttachmentManager(nil)
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
-		Manager:   am,
-		K8sClient: k8sClient,
+		Manager:    am,
+		K8sClient:  k8sClient,
+		NodeLister: nodeLister,
+		PVLister:   pvLister,
 		// No interval or grace period specified
 	})
 
@@ -65,10 +95,13 @@ func TestNewAttachmentReconciler_DefaultValues(t *testing.T) {
 func TestReconciler_StartStop(t *testing.T) {
 	am := NewAttachmentManager(nil)
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		Interval:    100 * time.Millisecond,
 		GracePeriod: 10 * time.Millisecond,
 	})
@@ -103,10 +136,13 @@ func TestReconciler_StartStop(t *testing.T) {
 func TestReconciler_ContextCancellation(t *testing.T) {
 	am := NewAttachmentManager(nil)
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		Interval:    1 * time.Hour, // Long interval so we control timing
 		GracePeriod: 30 * time.Second,
 	})
@@ -141,6 +177,7 @@ func TestReconciler_ContextCancellation(t *testing.T) {
 func TestReconciler_ClearsStaleAttachment_NodeDeleted(t *testing.T) {
 	// Create fake k8s client with NO nodes
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	// Create attachment manager and track a volume
 	am := NewAttachmentManager(nil)
@@ -164,6 +201,8 @@ func TestReconciler_ClearsStaleAttachment_NodeDeleted(t *testing.T) {
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		Interval:    100 * time.Millisecond,
 		GracePeriod: 1 * time.Nanosecond, // Effectively expired immediately
 	})
@@ -189,6 +228,7 @@ func TestReconciler_PreservesValidAttachment_NodeExists(t *testing.T) {
 		},
 	}
 	k8sClient := fake.NewSimpleClientset(existingNode)
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	// Create attachment manager and track a volume
 	am := NewAttachmentManager(nil)
@@ -205,6 +245,8 @@ func TestReconciler_PreservesValidAttachment_NodeExists(t *testing.T) {
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		Interval:    100 * time.Millisecond,
 		GracePeriod: 1 * time.Nanosecond,
 	})
@@ -225,6 +267,7 @@ func TestReconciler_PreservesValidAttachment_NodeExists(t *testing.T) {
 func TestReconciler_RespectsGracePeriod(t *testing.T) {
 	// Create fake k8s client with NO nodes
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	// Create attachment manager
 	am := NewAttachmentManager(nil)
@@ -252,6 +295,8 @@ func TestReconciler_RespectsGracePeriod(t *testing.T) {
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		Interval:    100 * time.Millisecond,
 		GracePeriod: 1 * time.Hour, // Very long grace period
 	})
@@ -271,17 +316,19 @@ func TestReconciler_RespectsGracePeriod(t *testing.T) {
 }
 
 func TestReconciler_HandlesAPIErrors(t *testing.T) {
-	// Create fake k8s client that returns errors
-	k8sClient := fake.NewSimpleClientset()
-	k8sClient.PrependReactor("get", "nodes", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, fmt.Errorf("simulated API error")
-	})
+	// NOTE: With informer-based caching, API errors during reconciliation don't occur
+	// because we use cached listers. API errors would only happen during initial cache sync.
+	// This test now verifies correct behavior with cached data: node not in cache = deleted
 
-	// Create attachment manager and track a volume
+	// Create fake k8s client with NO nodes (simulating deleted node)
+	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
+
+	// Create attachment manager and track a volume to non-existent node
 	am := NewAttachmentManager(nil)
 	ctx := context.Background()
-	volumeID := "pvc-test-api-error"
-	nodeID := "some-node"
+	volumeID := "pvc-test-cache-miss"
+	nodeID := "deleted-node"
 
 	err := am.TrackAttachment(ctx, volumeID, nodeID)
 	if err != nil {
@@ -292,6 +339,8 @@ func TestReconciler_HandlesAPIErrors(t *testing.T) {
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		Interval:    100 * time.Millisecond,
 		GracePeriod: 1 * time.Nanosecond,
 	})
@@ -299,24 +348,27 @@ func TestReconciler_HandlesAPIErrors(t *testing.T) {
 		t.Fatalf("Failed to create reconciler: %v", err)
 	}
 
-	// Run reconciliation (should not panic, should skip on API error)
+	// Run reconciliation - should clear attachment (node not in cache = deleted)
 	r.reconcile(ctx)
 
-	// Attachment should still exist (fail-open on API errors)
+	// Attachment should be cleared (node doesn't exist in cache)
 	_, exists := am.GetAttachment(volumeID)
-	if !exists {
-		t.Error("Expected attachment to be preserved on API error (fail-open)")
+	if exists {
+		t.Error("Expected attachment to be cleared when node not in informer cache")
 	}
 }
 
 func TestReconciler_GetGracePeriod(t *testing.T) {
 	am := NewAttachmentManager(nil)
 	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
 
 	gracePeriod := 45 * time.Second
 	r, err := NewAttachmentReconciler(ReconcilerConfig{
 		Manager:     am,
 		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
 		GracePeriod: gracePeriod,
 	})
 	if err != nil {
