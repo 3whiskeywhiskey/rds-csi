@@ -1,5 +1,38 @@
 # Project Milestones: RDS CSI Driver
 
+## v0.6.0 Block Volume Support (Shipped: 2026-02-04)
+
+**Delivered:** CSI block volume support for KubeVirt VMs with validated live migration on metal cluster
+
+**Phases completed:** 11-14 (9 plans total)
+
+**Key accomplishments:**
+- Block volume lifecycle: NodeStageVolume/NodePublishVolume handle block volumes without formatting, using mknod for device nodes
+- KubeVirt integration: VM boot and live migration validated on metal cluster (r740xd → c4140, ~15s)
+- Mount storm prevention: Fixed critical devtmpfs propagation bug (mknod vs bind mount approach)
+- System volume protection: NQN prefix filtering prevents orphan cleaner from disconnecting system volumes (nixos-*)
+- Error resilience framework: Circuit breaker, filesystem health checks, procmounts timeout (10s), duplicate mount detection (100 threshold)
+- Stale state fix: Clear PV annotations on detachment to prevent false positive attachments across controller restarts
+
+**Stats:**
+- 64 files modified
+- +10,453 insertions, -289 deletions
+- 31,807 lines of Go (current codebase)
+- 4 phases, 9 plans
+- 1 day timeline (2026-02-03 to 2026-02-04)
+
+**Git range:** `74fc6bf` → `cf354a0`
+
+**Critical fixes:**
+- commit 0ea6bee: mknod for block volumes (prevents devtmpfs mount storm)
+- commit 62197ce: Clear PV annotations on detachment (fixes stale attachment state)
+
+**See:** `.planning/milestones/v0.6.0-ROADMAP.md`
+
+**What's next:** v0.7.0 State Management Refactoring and Observability - VolumeAttachment-based state rebuild (Phase 15 complete), migration metrics emission (Phase 16 planned)
+
+---
+
 ## v0.5.0 KubeVirt Live Migration (In Progress)
 
 **Goal:** Enable KubeVirt VM live migration with RDS CSI volumes

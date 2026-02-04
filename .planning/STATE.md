@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-03)
+See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** Phase 12 - Compatibility and Quality (v0.6.0)
+**Current focus:** v0.6.0 shipped - planning v0.7.0 Phase 16 (Migration Metrics Emission)
 
 ## Current Position
 
-Phase: 15 of 15 (VolumeAttachment-Based State Rebuild)
-Plan: 4 of 4 in current phase
-Status: ✅ COMPLETE - VA-based rebuild verified
-Last activity: 2026-02-04 — Phase 15 complete: VolumeAttachment-based state rebuild (commit 4e3bb03)
+Phase: 16 of 16 (Migration Metrics Emission)
+Plan: Not started (0/3 plans)
+Status: 📋 PLANNED - Ready to plan Phase 16
+Last activity: 2026-02-04 — v0.6.0 milestone complete and archived
 
-Progress: [███████████████████████████████████] 100% (54/54 plans completed across all phases)
+Progress: [███████████████████████████████████] 93.75% (54/57 plans completed - Phase 16 has 3 planned)
 
 ## Performance Metrics
 
@@ -27,15 +27,15 @@ Progress: [███████████████████████
 
 | Milestone | Phases | Plans | Status |
 |-----------|--------|-------|--------|
-| v1 Production Stability | 1-4 | 17/17 | Complete |
-| v0.3.0 Volume Fencing | 5-7 | 12/12 | Complete |
-| v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Complete |
-| v0.6.0 Block Volume Support | 11-14 | 9/9 | Complete |
-| v0.7.0 VolumeAttachment State | 15 | 4/4 | Complete |
+| v1 Production Stability | 1-4 | 17/17 | Shipped 2026-01-31 |
+| v0.3.0 Volume Fencing | 5-7 | 12/12 | Shipped 2026-02-03 |
+| v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Shipped 2026-02-03 |
+| v0.6.0 Block Volume Support | 11-14 | 9/9 | Shipped 2026-02-04 (archived) |
+| v0.7.0 State Management & Observability | 15-16 | 4/7 | In Progress (Phase 15 complete, Phase 16 planned) |
 
 **Recent Trend:**
-- Last milestone (v0.5.0): 12 plans, 3 phases
-- Trend: Stable execution pattern
+- Last milestone (v0.6.0): 9 plans, 4 phases, 1 day
+- Current: v0.7.0 Phase 16 planned (migration metrics emission)
 
 *Updated: 2026-02-04*
 
