@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 20 of 21 (Test Coverage Expansion)
-Plan: 3 of 5 complete
-Status: In progress - NVMe connection tests complete
-Last activity: 2026-02-04 — Completed 20-03-PLAN.md (NVMe connection tests)
+Plan: 4 of 5 complete (Wave 2 in progress)
+Status: In progress - RDS command tests complete
+Last activity: 2026-02-04 — Completed 20-04-PLAN.md (RDS command tests)
 
-Progress: [██████████████████████████████░░░░░░░] 91% (72/79 total plans across all phases)
+Progress: [██████████████████████████████░░░░░░░] 91% (73/79 total plans across all phases)
 
 ## Performance Metrics
 
@@ -53,6 +53,14 @@ Progress: [███████████████████████
 
 Recent decisions from v0.7.1 work:
 
+- Phase 20-04 (2026-02-04): **testableSSHClient infrastructure for command execution testing**
+  - Created testableSSHClient wrapper with mock runner injection for testing command execution paths without SSH
+  - Focus on parsers and validators (unit test scope) vs SSH execution (integration test scope)
+  - TestExtractMountPoint covers 6 edge cases: with/without slash, single/multi-level, empty, root (0% -> 80%)
+  - TestNormalizeRouterOSOutputEdgeCases covers CR, tabs, spaces, Flags header (92.3% -> 100%)
+  - TestVerifyVolumeExistsCommandConstruction validates slot name patterns against command injection
+  - Command execution methods (CreateVolume, DeleteVolume, etc.) remain at 0% - better suited for integration tests
+  - Overall RDS package coverage: 61.1% -> 61.8% (+0.7pp)
 - Phase 20-03 (2026-02-04): **NVMe accessor methods and legacy functions tested for coverage**
   - Accessor methods (GetMetrics, GetConfig, GetResolver) tested in TestConnectorAccessorMethods for 100% coverage
   - Metrics.String() tested in TestMetricsString with both empty and populated metrics
@@ -194,6 +202,6 @@ None
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 20-03-PLAN.md (NVMe connection tests) - 3 of 5 plans complete in Phase 20
+Stopped at: Completed 20-04-PLAN.md (RDS command tests) - 4 of 5 plans complete in Phase 20
 Resume file: None
-Next action: Execute 20-04-PLAN.md (RDS package tests) with `/gsd:execute-plan`
+Next action: Execute 20-05-PLAN.md (Mount package tests) with `/gsd:execute-plan`
