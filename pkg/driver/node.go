@@ -363,24 +363,48 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		// Block volume: no filesystem to unmount, just clean up staging metadata and directory
 		klog.V(2).Infof("Unstaging block volume %s from %s", volumeID, stagingPath)
 
-		// SAFETY-04: Check device-in-use before NVMe disconnect
-		// For block volumes, check the actual NVMe device, not the staging path
+		// Step 1: Clean up orphaned bind mounts BEFORE checking device-in-use
+		// This prevents the device-in-use check from detecting our own bind mounts
 		if nqn != "" {
 			deviceBytes, err := os.ReadFile(metadataPath)
 			if err == nil {
 				devicePath := strings.TrimSpace(string(deviceBytes))
+
+				// Find and cleanup orphaned bind mounts to this device
+				cleanedCount, cleanupErr := ns.findAndCleanupOrphanedMounts(ctx, devicePath)
+				if cleanupErr != nil {
+					klog.Warningf("Error cleaning up orphaned mounts for %s: %v (proceeding)", devicePath, cleanupErr)
+				} else if cleanedCount > 0 {
+					klog.Infof("Cleaned up %d orphaned bind mount(s) for device %s before unstaging", cleanedCount, devicePath)
+				}
+
+				// Step 2: NOW check device-in-use (after cleaning up our own mounts)
 				result := nvme.CheckDeviceInUse(ctx, devicePath)
 
 				if result.TimedOut {
 					klog.Warningf("Device %s busy check timed out, proceeding with disconnect", devicePath)
 				} else if result.InUse {
-					klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
-					secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
-						fmt.Errorf("device in use"), time.Since(startTime))
-					return nil, status.Errorf(codes.FailedPrecondition,
-						"Device %s has open file descriptors, cannot safely unstage. "+
-							"Ensure pod using volume has terminated. Processes: %v",
-						devicePath, result.Processes)
+					// Device still in use after cleaning up bind mounts
+					// This means actual processes have it open
+
+					// During graceful shutdown, we need to clean up anyway to avoid wedging the node
+					// Check if we're in a terminating context (driver shutting down)
+					select {
+					case <-ctx.Done():
+						// Context cancelled - driver is shutting down
+						klog.Warningf("Device %s in use but driver shutting down, forcing cleanup to prevent node wedge. Processes: %v",
+							devicePath, result.Processes)
+						// Proceed with cleanup
+					default:
+						// Not shutting down - this is a normal unstage, don't force it
+						klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+						secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
+							fmt.Errorf("device in use"), time.Since(startTime))
+						return nil, status.Errorf(codes.FailedPrecondition,
+							"Device %s has open file descriptors, cannot safely unstage. "+
+								"Ensure pod using volume has terminated. Processes: %v",
+							devicePath, result.Processes)
+					}
 				} else if result.Error != nil {
 					klog.Warningf("Device busy check failed for %s: %v (proceeding)", devicePath, result.Error)
 				}
@@ -785,6 +809,42 @@ func (ns *NodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 		// MaxVolumesPerNode: 0 means unlimited
 		MaxVolumesPerNode: 0,
 	}, nil
+}
+
+// findAndCleanupOrphanedMounts finds all bind mounts pointing to a device and unmounts them
+// Returns the number of mounts cleaned up
+func (ns *NodeServer) findAndCleanupOrphanedMounts(ctx context.Context, devicePath string) (int, error) {
+	klog.V(4).Infof("Searching for orphaned bind mounts to device %s", devicePath)
+
+	// Get all mounts with timeout to prevent hanging
+	mounts, err := ns.mounter.GetMountsWithTimeout(ctx, 10*time.Second)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get mounts: %w", err)
+	}
+
+	cleanedCount := 0
+	for _, mnt := range mounts {
+		// Check if this mount's source is our device
+		// mnt.Device is the source device for the mount
+		if mnt.Device == devicePath {
+			klog.V(2).Infof("Found orphaned bind mount: %s -> %s", devicePath, mnt.Path)
+
+			// Unmount it (force if needed)
+			if err := ns.mounter.Unmount(mnt.Path); err != nil {
+				klog.Warningf("Failed to unmount orphaned mount %s: %v", mnt.Path, err)
+				// Continue trying other mounts
+			} else {
+				klog.V(2).Infof("Successfully cleaned up orphaned mount %s", mnt.Path)
+				cleanedCount++
+			}
+		}
+	}
+
+	if cleanedCount > 0 {
+		klog.Infof("Cleaned up %d orphaned bind mount(s) for device %s", cleanedCount, devicePath)
+	}
+
+	return cleanedCount, nil
 }
 
 // NodeExpandVolume expands the filesystem on the node after volume expansion
