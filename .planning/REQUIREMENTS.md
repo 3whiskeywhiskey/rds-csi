@@ -1,4 +1,4 @@
-# Requirements: RDS CSI Driver v0.7.1
+# Requirements: RDS CSI Driver v0.8.0
 
 **Defined:** 2026-02-04
 **Core Value:** Volumes remain accessible after NVMe-oF reconnections

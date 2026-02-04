@@ -8,7 +8,7 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current Milestone: v0.7.1 Code Quality and Logging Cleanup
+## Current Milestone: v0.8.0 Code Quality and Logging Cleanup
 
 **Goal:** Systematic codebase audit and refactoring to improve maintainability, reduce log noise, and address technical debt
 
@@ -120,4 +120,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-02-04 after starting v0.7.1 milestone (code quality and logging cleanup)*
+*Last updated: 2026-02-04 after starting v0.8.0 milestone (code quality and logging cleanup)*

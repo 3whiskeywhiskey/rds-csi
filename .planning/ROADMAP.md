@@ -11,7 +11,7 @@ This roadmap tracks the journey from initial driver implementation through produ
 - ✅ **v0.5.0 KubeVirt Live Migration** - Phases 8-10 (shipped 2026-02-03)
 - ✅ **v0.6.0 Block Volume Support** - Phases 11-14 (shipped 2026-02-04)
 - ✅ **v0.7.0 State Management & Observability** - Phases 15-16 (shipped 2026-02-04)
-- 🚧 **v0.7.1 Code Quality and Logging Cleanup** - Phases 17-21 (in progress)
+- 🚧 **v0.8.0 Code Quality and Logging Cleanup** - Phases 17-21 (in progress)
 
 ## Phases
 
@@ -177,11 +177,11 @@ Plans:
 
 </details>
 
-## 🚧 v0.7.1 Code Quality and Logging Cleanup (In Progress)
+## 🚧 v0.8.0 Code Quality and Logging Cleanup (In Progress)
 
 **Milestone Goal:** Systematic codebase cleanup to improve maintainability, reduce log noise, and eliminate technical debt
 
-**Status:** Phase 17-18 complete, Phase 19 gap closure in progress
+**Status:** Phase 17-20 complete, Phase 21 planned
 
 ---
 
@@ -306,7 +306,7 @@ Plans:
 - [ ] 21-01-PLAN.md — Replace severity switch with table-driven severityMap
 - [ ] 21-02-PLAN.md — Configure complexity metrics in golangci-lint
 - [ ] 21-03-PLAN.md — Update CONCERNS.md and REQUIREMENTS.md documentation
-- [ ] 21-04-PLAN.md — Finalize phase and ship v0.7.1 milestone
+- [ ] 21-04-PLAN.md — Finalize phase and ship v0.8.0 milestone
 
 ---
 
@@ -333,11 +333,11 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 14. Mount Storm Prevention | v0.6.0 | 4/4 | Complete | 2026-02-04 |
 | 15. VolumeAttachment-Based State Rebuild | v0.7.0 | 4/4 | Complete | 2026-02-04 |
 | 16. Migration Metrics Emission | v0.7.0 | 1/1 | Complete | 2026-02-04 |
-| 17. Test Infrastructure Fix | v0.7.1 | 1/1 | Complete | 2026-02-04 |
-| 18. Logging Cleanup | v0.7.1 | 5/5 | Complete | 2026-02-04 |
-| 19. Error Handling Standardization | v0.7.1 | 5/5 | Complete | 2026-02-04 |
-| 20. Test Coverage Expansion | v0.7.1 | 5/5 | Complete | 2026-02-04 |
-| 21. Code Quality Improvements | v0.7.1 | 0/4 | Not started | - |
+| 17. Test Infrastructure Fix | v0.8.0 | 1/1 | Complete | 2026-02-04 |
+| 18. Logging Cleanup | v0.8.0 | 5/5 | Complete | 2026-02-04 |
+| 19. Error Handling Standardization | v0.8.0 | 5/5 | Complete | 2026-02-04 |
+| 20. Test Coverage Expansion | v0.8.0 | 5/5 | Complete | 2026-02-04 |
+| 21. Code Quality Improvements | v0.8.0 | 4/4 | Planned | - |
 
 ---
 

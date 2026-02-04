@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** v0.7.1 Code Quality and Logging Cleanup - Phase 17 (Test Infrastructure Fix)
+**Current focus:** v0.8.0 Code Quality and Logging Cleanup - Phase 21 (Code Quality Improvements)
 
 ## Current Position
 
@@ -32,7 +32,7 @@ Progress: [███████████████████████
 | v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Shipped 2026-02-03 |
 | v0.6.0 Block Volume Support | 11-14 | 9/9 | Shipped 2026-02-04 |
 | v0.7.0 State Management & Observability | 15-16 | 5/5 | Shipped 2026-02-04 |
-| v0.7.1 Code Quality and Logging Cleanup | 17-21 | 16/? | In progress |
+| v0.8.0 Code Quality and Logging Cleanup | 17-21 | 20/20 | In progress |
 
 **Recent Trend:**
 - v0.6.0: 9 plans, 4 phases, 1 day
@@ -44,14 +44,14 @@ Progress: [███████████████████████
 
 ### Roadmap Evolution
 
-- Phase 17-21 added: v0.7.1 Code Quality and Logging Cleanup milestone (systematic codebase cleanup addressing technical debt from CONCERNS.md analysis)
+- Phase 17-21 added: v0.8.0 Code Quality and Logging Cleanup milestone (systematic codebase cleanup addressing technical debt from CONCERNS.md analysis)
 - Phase 17 is BLOCKING: Fix failing block volume tests before other cleanup work
 - Phase 15 added: VolumeAttachment-Based State Rebuild (v0.7.0 milestone - architectural improvement)
 - Phase 14 added: Error Resilience and Mount Storm Prevention (discovered during Phase 13)
 
 ### Decisions
 
-Recent decisions from v0.7.1 work:
+Recent decisions from v0.8.0 work:
 
 - Phase 20 (2026-02-04): **Test coverage expanded to 65.0% with enforcement configured**
   - Total coverage improved from 48% to 65.0% (+17pp, exceeds 60% target by 5pp)
@@ -208,7 +208,7 @@ None
 
 **Resolved:**
 - ✓ Block volume test failures fixed (Phase 17-01) - all 148 tests pass consistently
-- ✓ Test infrastructure ready for v0.7.1 development
+- ✓ Test infrastructure ready for v0.8.0 development
 - ✓ Critical Mount() bug fixed (commit 3807645) - block volumes now work
 - ✓ Worker nodes recovered and healthy
 - ✓ Fixed driver deployed to all nodes
