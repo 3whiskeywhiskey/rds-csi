@@ -95,7 +95,10 @@ func (am *AttachmentManager) TrackAttachmentWithMode(ctx context.Context, volume
 
 	klog.V(2).Infof("Tracked attachment: volume=%s, node=%s, accessMode=%s (primary)", volumeID, nodeID, accessMode)
 
-	// Persist to PV annotations (outside of lock - I/O operation)
+	// Persist to PV annotations for debugging/observability (informational only)
+	// Note: If persistence fails, we rollback in-memory state because the
+	// annotation write is part of the operation contract, even though
+	// annotations are not authoritative.
 	if err := am.persistAttachment(ctx, volumeID, nodeID); err != nil {
 		am.mu.Lock()
 		delete(am.attachments, volumeID)
@@ -179,9 +182,9 @@ func (am *AttachmentManager) UntrackAttachment(ctx context.Context, volumeID str
 
 	klog.V(2).Infof("Untracked attachment: volume=%s", volumeID)
 
-	// Clear PV annotations (outside of lock - I/O operation)
+	// Clear PV annotations (informational only, outside of lock - I/O operation)
 	// Log warning if it fails but don't fail the operation
-	// (in-memory state is source of truth during runtime)
+	// (VolumeAttachment is source of truth during rebuild, not annotations)
 	if err := am.clearAttachment(ctx, volumeID); err != nil {
 		klog.Warningf("Failed to clear attachment annotation for volume %s: %v", volumeID, err)
 	}
@@ -343,8 +346,8 @@ func (am *AttachmentManager) RemoveNodeAttachment(ctx context.Context, volumeID,
 		delete(am.attachments, volumeID)
 		klog.V(2).Infof("Removed last node attachment for volume %s, volume now detached", volumeID)
 
-		// Clear PV annotations to prevent stale state after controller restart
-		// This ensures RebuildState doesn't resurrect detached volumes
+		// Clear PV annotations to keep them accurate for debugging
+		// Note: Even if this fails, rebuild uses VolumeAttachments not annotations
 		if err := am.clearAttachment(ctx, volumeID); err != nil {
 			klog.Warningf("Failed to clear attachment annotations for volume %s: %v", volumeID, err)
 			// Continue anyway - in-memory state is already cleared
