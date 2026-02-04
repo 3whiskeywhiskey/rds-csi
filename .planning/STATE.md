@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 17 of 21 (Test Infrastructure Fix)
-Plan: Ready to plan
-Status: Phase 17 ready to plan
-Last activity: 2026-02-04 — v0.7.1 roadmap created
+Plan: 1 of 1 complete
+Status: Phase 17 complete - ready for Phase 18
+Last activity: 2026-02-04 — Completed 17-01-PLAN.md
 
-Progress: [███████████████████████████░░░░░░░░░░] 76% (59/77 total plans across all phases)
+Progress: [███████████████████████████░░░░░░░░░░] 77% (60/77 total plans across all phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 59
-- Phases completed: 16
-- Average phase completion: 3.7 plans/phase
+- Total plans completed: 60
+- Phases completed: 17
+- Average phase completion: 3.5 plans/phase
 
 **By Milestone:**
 
@@ -32,7 +32,7 @@ Progress: [███████████████████████
 | v0.5.0 KubeVirt Live Migration | 8-10 | 12/12 | Shipped 2026-02-03 |
 | v0.6.0 Block Volume Support | 11-14 | 9/9 | Shipped 2026-02-04 |
 | v0.7.0 State Management & Observability | 15-16 | 5/5 | Shipped 2026-02-04 |
-| v0.7.1 Code Quality and Logging Cleanup | 17-21 | 0/? | In progress |
+| v0.7.1 Code Quality and Logging Cleanup | 17-21 | 1/? | In progress |
 
 **Recent Trend:**
 - v0.6.0: 9 plans, 4 phases, 1 day
@@ -51,7 +51,20 @@ Progress: [███████████████████████
 
 ### Decisions
 
-Recent decisions from PROJECT.md affecting v0.7.0 work:
+Recent decisions from v0.7.1 work:
+
+- Phase 17-01 (2026-02-04): **Block volume tests verify up to mknod permission error**
+  - mknod requires elevated privileges not available in CI/macOS test environment
+  - Tests verify nvmeConn usage pattern which is the critical logic
+  - Alternative of mocking syscall layer adds complexity for minimal value
+  - Impact: Tests validate the integration pattern (finding device by NQN)
+- Phase 17-01 (2026-02-04): **Remove metadata file assertions from block volume tests**
+  - Implementation never creates staging artifacts for block volumes per CSI spec
+  - Block volumes only connect NVMe device in NodeStageVolume
+  - NodePublishVolume finds device via nvmeConn.GetDevicePath(nqn)
+  - Tests now match CSI spec compliance and AWS EBS CSI driver pattern
+
+Recent decisions from v0.7.0 work:
 
 - Phase 15-03 (2026-02-04): **PV annotations are informational-only**
   - Annotations written during ControllerPublishVolume for debugging/observability
@@ -75,12 +88,11 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ### Blockers/Concerns
 
 **Active:**
-- **v0.7.1 starting point: Failing tests must be fixed first**
-  - TEST-01 is Phase 17 - block volume tests have nil pointer dereference
-  - Cannot reliably add new tests until existing tests pass consistently
-  - Phase 17 must complete before other cleanup work begins
+None
 
 **Resolved:**
+- ✓ Block volume test failures fixed (Phase 17-01) - all 148 tests pass consistently
+- ✓ Test infrastructure ready for v0.7.1 development
 - ✓ Critical Mount() bug fixed (commit 3807645) - block volumes now work
 - ✓ Worker nodes recovered and healthy
 - ✓ Fixed driver deployed to all nodes
@@ -90,6 +102,6 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: v0.7.1 roadmap created
+Stopped at: Completed Phase 17 (Test Infrastructure Fix)
 Resume file: None
-Next action: Plan Phase 17 (Test Infrastructure Fix) with `/gsd:plan-phase 17`
+Next action: Plan Phase 18 with `/gsd:plan-phase 18` or continue with next priority phase
