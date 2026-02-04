@@ -566,7 +566,7 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 
 				return nil, status.Errorf(codes.FailedPrecondition,
 					"Volume %s migration timeout exceeded (%v elapsed, %v max). "+
-					"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
+						"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
 					volumeID, elapsed.Round(time.Second), existing.MigrationTimeout)
 			}
 

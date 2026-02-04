@@ -227,11 +227,11 @@ func TestDefaultNVMEConnectionParams(t *testing.T) {
 
 func TestParseMigrationTimeout(t *testing.T) {
 	tests := []struct {
-		name           string
-		params         map[string]string
-		expectedMin    time.Duration
-		expectedMax    time.Duration
-		expectDefault  bool
+		name          string
+		params        map[string]string
+		expectedMin   time.Duration
+		expectedMax   time.Duration
+		expectDefault bool
 	}{
 		{
 			name:          "not specified - returns default",
