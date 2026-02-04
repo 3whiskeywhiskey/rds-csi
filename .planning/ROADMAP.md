@@ -181,7 +181,7 @@ Plans:
 
 **Milestone Goal:** Systematic codebase cleanup to improve maintainability, reduce log noise, and eliminate technical debt
 
-**Status:** Phase 17 complete, Phase 18 ready to plan
+**Status:** Phase 17 complete, Phase 18 planned (3 plans in 2 waves)
 
 ---
 
@@ -215,16 +215,18 @@ Plans:
 **Requirements**: LOG-01, LOG-02, LOG-03, LOG-04
 
 **Success Criteria** (what must be TRUE):
-1. Security logger consolidated from 300+ lines to <50 lines with configurable helper
-2. DeleteVolume operation produces maximum 2 log statements per operation (down from 4-6)
+1. Security logger consolidated from 540 lines to <200 lines with table-driven helper
+2. DeleteVolume operation produces maximum 2 log statements per operation (down from 6)
 3. All CSI operations audited with info=actionable, debug=diagnostic separation documented
-4. Severity mapping uses table-driven approach instead of switch statements
-5. Production logs contain only actionable information at info level
+4. V(3) usage eliminated or explicitly documented
+5. Production logs contain only actionable information at V(2) level
 
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 18-01: TBD during planning
+- [ ] 18-01-PLAN.md — Consolidate security logger with table-driven helper
+- [ ] 18-02-PLAN.md — Rationalize pkg/rds and controller verbosity
+- [ ] 18-03-PLAN.md — Complete codebase verbosity audit and document conventions
 
 ---
 
@@ -318,11 +320,11 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 15. VolumeAttachment-Based State Rebuild | v0.7.0 | 4/4 | Complete | 2026-02-04 |
 | 16. Migration Metrics Emission | v0.7.0 | 1/1 | Complete | 2026-02-04 |
 | 17. Test Infrastructure Fix | v0.7.1 | 1/1 | Complete | 2026-02-04 |
-| 18. Logging Cleanup | v0.7.1 | 0/? | Not started | - |
+| 18. Logging Cleanup | v0.7.1 | 0/3 | Planned | - |
 | 19. Error Handling Standardization | v0.7.1 | 0/? | Not started | - |
 | 20. Test Coverage Expansion | v0.7.1 | 0/? | Not started | - |
 | 21. Code Quality Improvements | v0.7.1 | 0/? | Not started | - |
 
 ---
 
-_Last updated: 2026-02-04 (Phase 17 complete)_
+_Last updated: 2026-02-04 (Phase 18 planned)_
