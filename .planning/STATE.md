@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 Phase: 13 of 14 (Hardware Validation)
 Plan: 1 of 1 in current phase
-Status: Testing fix - block volume symlink issue resolved
-Last activity: 2026-02-04 — Fixed block volume staging (create symlink for kubelet device discovery)
+Status: Testing fix - block volume staging follows AWS EBS pattern
+Last activity: 2026-02-04 — Fixed block volume implementation (no staging directory, NQN-based device lookup)
 
 Progress: [█████████████████████████████████] 92% (49/53 plans completed across all phases)
 
@@ -48,14 +48,14 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
 
-- Phase 13 (2026-02-04): **Block volume staging requires symlink for kubelet device discovery** (commit afd727e)
-  - NodeStageVolume must create symlink at `staging_path/device` pointing to actual NVMe device
-  - Kubelet calls EvalHostSymlinks on staging path to get devicePath for MapBlockVolume
-  - Previous implementation only stored metadata file, which kubelet cannot use for device mapping
-  - When MapBlockVolume couldn't find device, it fell back to losetup on empty file, failing with exit status 1
-  - CSI spec allows staging "however you like inside the staging_target_directory" - symlink is standard approach
-  - AWS EBS skips NodeStageVolume entirely for block volumes (no STAGE_UNSTAGE_VOLUME for block mode)
-  - Our implementation stages the NVMe connection, so we create symlink for kubelet to discover device
+- Phase 13 (2026-02-04): **Block volumes follow AWS EBS pattern - no staging directory** (root cause analysis)
+  - NodeStageVolume for block volumes connects NVMe device but creates NOTHING at staging_target_path
+  - NodePublishVolume finds device by NQN lookup (not from staging path) and bind mounts to target file
+  - Previous approach (symlink at staging_path/device) was wrong - kubelet never reads from staging path
+  - Kubelet calls AttachFileDevice on globalMapPath, which runs losetup if file isn't already a block device
+  - AWS EBS NodeStageVolume for block volumes just returns success immediately - no staging operations
+  - Our implementation stages NVMe connection (device appears on node) but mirrors EBS pattern for paths
+  - Losetup error was caused by trying to use directory/symlink instead of letting kubelet handle device mapping
 - Phase 13 (2026-02-04): **Smart orphaned mount cleanup** (commit dc4140f)
   - NodeUnstageVolume now cleans up orphaned bind mounts before device-in-use check
   - Prevents node wedging from self-detecting own bind mounts as "device in use"
@@ -110,12 +110,17 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ CI test failure fixed (commit 7728bd4) - health check now skips when device doesn't exist
 
 **Active:**
-- **CRITICAL: Kubernetes 1.34 / K3s 1.34.1 bug** - kubelet incorrectly calls MapBlockVolume for CSI block volumes, causing losetup failure
-  - CSI driver implementation is correct (verified by logs)
-  - Kubelet tries to run losetup on already-created block device file
-  - Error: "makeLoopDevice failed: losetup -f ... failed: exit status 1"
-  - Affects ALL CSI block volumes on K3s 1.34.1
-  - Options: downgrade K3s, wait for 1.34.2, or report bug upstream
+- **CRITICAL: Mount storm node wedge on r640** - confirmed Phase 14 mount storm issue in production
+  - 502MB unreclaimable kernel slab memory (mount namespaces)
+  - Soft lockup in mntput_no_expire (CPU stuck 26s in mount reference counting)
+  - OOM killed rds-csi-plugin (503MB kernel memory with only 9MB process memory)
+  - Call trace: propagate_mnt → copy_tree → clone_mnt (mount propagation creating thousands of objects)
+  - NVMe keepalive RTT very high (1283ms, 2081ms) suggesting network storage stress
+  - Node requires recovery, confirms Phase 14 resilience work is critical
+- **Testing: Block volume fix ready for deployment** - implementation corrected to follow AWS EBS pattern
+  - Previous symlink approach was wrong - kubelet doesn't read from staging path
+  - New approach: NodeStageVolume connects device, NodePublishVolume finds by NQN
+  - Ready to test on cluster once built and deployed
 - Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value (after Phase 14)
 
 **Critical Discovery:**
@@ -126,23 +131,25 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Phase 13 blocked by K3s 1.34.1 kubelet bug with block volumes
+Stopped at: Block volume implementation corrected, mount storm confirmed on r640
 Resume file: None
-Next action: Debug K3s losetup issue or consider downgrade/workaround
+Next action: Build and deploy block volume fix, then address mount storm issue
 
 **Phase 13 Hardware Validation Progress:**
 1. ✓ Created comprehensive validation runbook (test/e2e/PROGRESSIVE_VALIDATION.md)
 2. ✓ Fixed block volume losetup error (removed dev/ directory creation)
 3. ✓ Implemented smart orphaned mount cleanup (prevents node wedging)
 4. ✓ Deployed fixes to cluster (commits dae1c4f, dc4140f, 48630c2)
-5. ✓ Verified CSI driver implementation correct (logs show all operations succeeding)
-6. ❌ **BLOCKED:** K3s 1.34.1 kubelet bug - MapBlockVolume called for CSI volumes
-   - CSI driver creates bind mount correctly at publish path
-   - Kubelet creates block device file at globalMapPath (correct)
-   - Kubelet then tries losetup on already-existing block device (incorrect)
-   - Error: "makeLoopDevice failed: losetup -f ... failed: exit status 1"
-7. 🔍 **Investigation showed:**
-   - Same inode at publish path and globalMapPath (kubelet linked correctly)
-   - Device type 259,5 (/dev/nvme1n1) - already a block device
-   - kubelet.AttachFileDevice doesn't check if path is already block device
-   - This may be Kubernetes 1.34 regression (released Aug 2025, very recent)
+5. ✓ Root cause analysis - symlink approach was wrong, not K3s bug
+   - Researched AWS EBS CSI driver implementation (correct pattern)
+   - NodeStageVolume for block volumes does NOT create staging directory
+   - NodePublishVolume finds device by NQN, not from staging path
+   - Kubelet's AttachFileDevice expects nothing at staging path for CSI block volumes
+6. ✓ **Fixed block volume implementation** - follows AWS EBS pattern
+   - NodeStageVolume: connect NVMe, return success (no staging directory)
+   - NodePublishVolume: find device by NQN, bind mount to target file
+   - NodeUnstageVolume: detect block volumes by absence of mount, not symlink
+7. 🔍 **Mount storm confirmed on r640:**
+   - Kernel logs show 502MB unreclaimable slab memory, soft lockup, OOM
+   - Validates Phase 14 mount storm prevention work is critical
+   - Node wedged and needs recovery
