@@ -77,31 +77,184 @@ import (
 
 ## Error Handling
 
-**Patterns:**
-- CSI errors use `status.Error()` and `status.Errorf()` with gRPC codes: `codes.InvalidArgument`, `codes.Internal`, `codes.ResourceExhausted`
-- Internal errors use `fmt.Errorf()` with verb `%w` for error wrapping
-- Error wrapping adds context: `fmt.Errorf("failed to create volume: %w", err)`
-- All error paths must include context for troubleshooting
+### Quick Reference
 
-**CSI Service Layer (driver/controller.go, driver/node.go):**
+- Use `%w` for wrapping errors: `fmt.Errorf("op failed: %w", err)`
+- Use `%v` for formatting values: `fmt.Errorf("found %v items", count)`
+- Add context at each layer: operation + volumeID/nodeID + reason
+- Log errors once at boundaries, not at every layer
+- Convert to gRPC status at CSI method boundaries
+
+### Error Wrapping with %w
+
+Go 1.13+ introduced error wrapping with `%w`. Always use `%w` when wrapping errors to preserve the error chain for `errors.Is()` and `errors.As()`:
+
 ```go
-if req.GetName() == "" {
-	return nil, status.Error(codes.InvalidArgument, "volume name is required")
-}
+// ✓ CORRECT: Preserves error chain
 if err := someOperation(); err != nil {
-	return nil, status.Errorf(codes.Internal, "failed to operation: %v", err)
+    return fmt.Errorf("failed to create volume %s: %w", volumeID, err)
+}
+
+// ✗ WRONG: Breaks error chain
+if err := someOperation(); err != nil {
+    return fmt.Errorf("failed to create volume %s: %v", volumeID, err)
 }
 ```
 
-**Internal Packages (rds/commands.go, nvme/nvme.go):**
+**When to use %v:**
+- Formatting non-error values (integers, strings, slices, structs)
+- Example: `fmt.Errorf("pids in use: %v", pids)` where pids is `[]int`
+
+### Sentinel Errors
+
+Use sentinel errors in `pkg/utils/errors.go` for type-safe error classification:
+
 ```go
-if err := validateSlotName(slot); err != nil {
-	return err  // Already wrapped
+// Define in pkg/utils/errors.go
+var ErrVolumeNotFound = errors.New("volume not found")
+
+// Wrap with context
+return fmt.Errorf("volume %s: %w", volumeID, ErrVolumeNotFound)
+
+// Check with errors.Is
+if errors.Is(err, utils.ErrVolumeNotFound) {
+    return status.Error(codes.NotFound, "volume not found")
 }
-if newSizeBytes <= 0 {
-	return fmt.Errorf("new size must be positive")
+```
+
+Available sentinel errors: `ErrVolumeNotFound`, `ErrVolumeExists`, `ErrNodeNotFound`, `ErrInvalidParameter`, `ErrResourceExhausted`, `ErrOperationTimeout`, `ErrDeviceNotFound`, `ErrDeviceInUse`, `ErrMountFailed`, `ErrUnmountFailed`
+
+### Layered Context Pattern
+
+Each layer adds ONE piece of context. Don't duplicate information:
+
+```go
+// Bottom layer (nvme package): Device-specific context
+if err := connectDevice(nqn); err != nil {
+    return fmt.Errorf("nvme connect failed for NQN %s: %w", nqn, err)
 }
-return fmt.Errorf("failed to get volume info: %w", err)
+
+// Middle layer (node service): Volume context
+if err := stageVolume(volumeID, nqn); err != nil {
+    return fmt.Errorf("stage volume %s: %w", volumeID, err)
+}
+
+// Top layer (CSI gRPC): Convert to gRPC status
+if err := nodeStage(req); err != nil {
+    // Don't wrap - convert to gRPC
+    return nil, status.Errorf(codes.Internal, "failed: %v", err)
+}
+```
+
+### gRPC Boundary Conversion
+
+CSI methods (ControllerServer, NodeServer) return gRPC status errors:
+
+**CSI Service Layer (pkg/driver/controller.go, pkg/driver/node.go):**
+```go
+// Parameter validation - use status.Error directly
+if req.GetName() == "" {
+    return nil, status.Error(codes.InvalidArgument, "volume name is required")
+}
+
+// Internal operation errors - wrap message, not the error
+if err := someOperation(); err != nil {
+    klog.Errorf("operation failed: %v", err)  // Log full error
+    return nil, status.Errorf(codes.Internal, "operation failed: %v", err)
+}
+```
+
+**Internal Packages (pkg/rds, pkg/nvme, pkg/mount):**
+```go
+// Always use fmt.Errorf with %w
+if err := sshCommand(); err != nil {
+    return fmt.Errorf("ssh command failed: %w", err)
+}
+```
+
+### Error Context Requirements
+
+Every error should include:
+1. **Operation** - what was being attempted
+2. **Resource ID** - volumeID, nodeID, or devicePath (if applicable)
+3. **Reason** - underlying cause (from wrapped error)
+
+Use helper functions for consistent formatting:
+```go
+// pkg/utils/errors.go helpers
+utils.WrapVolumeError(err, volumeID, "failed to create")
+utils.WrapNodeError(err, nodeID, "failed to stage")
+utils.WrapDeviceError(err, devicePath, "not found")
+utils.WrapMountError(err, target, "already mounted")
+```
+
+### Common Mistakes
+
+1. **Using %v for errors:**
+   ```go
+   // ✗ WRONG
+   return fmt.Errorf("failed: %v", err)
+   // ✓ CORRECT
+   return fmt.Errorf("failed: %w", err)
+   ```
+
+2. **Double-wrapping at every layer:**
+   ```go
+   // ✗ WRONG - duplicates "failed to create volume"
+   // rds/client.go
+   return fmt.Errorf("failed to create volume: %w", err)
+   // driver/controller.go
+   if err := rds.CreateVolume(...); err != nil {
+       return fmt.Errorf("failed to create volume: %w", err)
+   }
+
+   // ✓ CORRECT - each layer adds NEW information
+   // rds/client.go
+   return fmt.Errorf("ssh command failed: %w", err)
+   // driver/controller.go
+   return fmt.Errorf("create volume %s: %w", volumeID, err)
+   ```
+
+3. **Wrapping gRPC status errors:**
+   ```go
+   // ✗ WRONG
+   return fmt.Errorf("failed: %w", status.Error(codes.NotFound, "not found"))
+
+   // ✓ CORRECT
+   return status.Error(codes.NotFound, "volume not found")
+   ```
+
+4. **Silent error handling:**
+   ```go
+   // ✗ WRONG - error silently ignored
+   _ = cleanupResource()
+
+   // ✓ CORRECT - log if ignoring
+   if err := cleanupResource(); err != nil {
+       klog.V(4).Infof("cleanup failed (non-critical): %v", err)
+   }
+   ```
+
+### Error Inspection
+
+Use `errors.Is()` and `errors.As()` for type-safe error checking:
+
+```go
+// Check for sentinel error
+if errors.Is(err, utils.ErrVolumeNotFound) {
+    // Handle not found case
+}
+
+// Extract typed error
+var sanitized *utils.SanitizedError
+if errors.As(err, &sanitized) {
+    // Access sanitized.GetOriginal() for logging
+}
+
+// Check for context timeout
+if errors.Is(err, context.DeadlineExceeded) {
+    // Handle timeout
+}
 ```
 
 ## Logging
