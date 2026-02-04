@@ -300,10 +300,13 @@ Plans:
 4. All code smells from CONCERNS.md either resolved or explicitly documented as deferred
 5. Codebase maintainability score improved (measured by golangci-lint complexity metrics)
 
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 21-01: TBD during planning
+- [ ] 21-01-PLAN.md — Replace severity switch with table-driven severityMap
+- [ ] 21-02-PLAN.md — Configure complexity metrics in golangci-lint
+- [ ] 21-03-PLAN.md — Update CONCERNS.md and REQUIREMENTS.md documentation
+- [ ] 21-04-PLAN.md — Finalize phase and ship v0.7.1 milestone
 
 ---
 
@@ -334,8 +337,8 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 18. Logging Cleanup | v0.7.1 | 5/5 | Complete | 2026-02-04 |
 | 19. Error Handling Standardization | v0.7.1 | 5/5 | Complete | 2026-02-04 |
 | 20. Test Coverage Expansion | v0.7.1 | 5/5 | Complete | 2026-02-04 |
-| 21. Code Quality Improvements | v0.7.1 | 0/? | Not started | - |
+| 21. Code Quality Improvements | v0.7.1 | 0/4 | Not started | - |
 
 ---
 
-_Last updated: 2026-02-04 (Phase 20 complete - test coverage expansion)_
+_Last updated: 2026-02-04 (Phase 21 planned - code quality improvements)_
