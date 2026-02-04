@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 Phase: 13 of 14 (Hardware Validation)
 Plan: 1 of 1 in current phase
-Status: Testing fix - block volume staging follows AWS EBS pattern
-Last activity: 2026-02-04 — Fixed block volume implementation (no staging directory, NQN-based device lookup)
+Status: Ready to deploy - block volumes + mount storm protection fixes
+Last activity: 2026-02-04 — Fixed block volumes and added mount storm pre-check (commits d33e09a, e2303ce)
 
 Progress: [█████████████████████████████████] 92% (49/53 plans completed across all phases)
 
@@ -56,6 +56,13 @@ Recent decisions from PROJECT.md affecting v0.6.0 work:
   - AWS EBS NodeStageVolume for block volumes just returns success immediately - no staging operations
   - Our implementation stages NVMe connection (device appears on node) but mirrors EBS pattern for paths
   - Losetup error was caused by trying to use directory/symlink instead of letting kubelet handle device mapping
+- Phase 13 (2026-02-04): **Pre-mount storm detection activated** (commit e2303ce)
+  - Mount() now calls DetectDuplicateMounts BEFORE attempting mount syscall
+  - Refuses to mount if device already has >= 100 mounts (fail-fast instead of wedging node)
+  - DetectDuplicateMounts existed since Phase 14-02 but was never called in production (only tests!)
+  - r640 mount storm validated need: 502MB slab memory, soft lockup, OOM kill
+  - With fix, Mount() fails fast with clear error instead of getting stuck in kernel mount propagation
+  - Complements circuit breaker and health check (prevents initial mount during storm, not just retries)
 - Phase 13 (2026-02-04): **Smart orphaned mount cleanup** (commit dc4140f)
   - NodeUnstageVolume now cleans up orphaned bind mounts before device-in-use check
   - Prevents node wedging from self-detecting own bind mounts as "device in use"
@@ -110,17 +117,15 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ CI test failure fixed (commit 7728bd4) - health check now skips when device doesn't exist
 
 **Active:**
-- **CRITICAL: Mount storm node wedge on r640** - confirmed Phase 14 mount storm issue in production
-  - 502MB unreclaimable kernel slab memory (mount namespaces)
-  - Soft lockup in mntput_no_expire (CPU stuck 26s in mount reference counting)
-  - OOM killed rds-csi-plugin (503MB kernel memory with only 9MB process memory)
-  - Call trace: propagate_mnt → copy_tree → clone_mnt (mount propagation creating thousands of objects)
-  - NVMe keepalive RTT very high (1283ms, 2081ms) suggesting network storage stress
-  - Node requires recovery, confirms Phase 14 resilience work is critical
-- **Testing: Block volume fix ready for deployment** - implementation corrected to follow AWS EBS pattern
-  - Previous symlink approach was wrong - kubelet doesn't read from staging path
-  - New approach: NodeStageVolume connects device, NodePublishVolume finds by NQN
-  - Ready to test on cluster once built and deployed
+- **Ready to deploy: Two critical fixes batched for single CI/CD run**
+  - Fix 1 (d33e09a): Block volumes corrected to follow AWS EBS pattern
+  - Fix 2 (e2303ce): Mount storm pre-detection activated (was implemented but never called!)
+  - Both fixes address issues discovered during Phase 13 hardware validation
+  - Single deployment minimizes CI/CD overhead as requested
+- **r640 node recovery needed** - mount storm wedged node, requires reboot or manual cleanup
+  - 502MB unreclaimable slab memory, soft lockup, OOM kill
+  - New mount storm fix would have prevented this
+  - Can recover after deploying fixes
 - Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value (after Phase 14)
 
 **Critical Discovery:**
