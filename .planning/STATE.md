@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 15 of 15 (VolumeAttachment-Based State Rebuild)
-Plan: 1 of 3 in current phase
+Plan: 2 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-04 — Completed 15-01-PLAN.md (VolumeAttachment listing helpers)
+Last activity: 2026-02-04 — Completed 15-02-PLAN.md (VA-based state rebuild)
 
-Progress: [██████████████████████████████████] 96% (51/53 plans completed across all phases)
+Progress: [███████████████████████████████████] 98% (52/53 plans completed across all phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 51
+- Total plans completed: 52
 - Phases completed: 13
-- Average phase completion: 3.92 plans/phase
+- Average phase completion: 4.00 plans/phase
 
 **By Milestone:**
 
@@ -49,6 +49,19 @@ Progress: [███████████████████████
 
 Recent decisions from PROJECT.md affecting v0.7.0 work:
 
+- Phase 15-02 (2026-02-04): **VA-based rebuild replaces annotation-based**
+  - RebuildStateFromVolumeAttachments is now the authoritative rebuild method
+  - VolumeAttachment objects are managed by external-attacher and never stale
+  - Old annotation-based rebuild renamed to RebuildStateFromAnnotations (deprecated)
+  - Eliminates stale state bugs, aligns with CSI best practices
+- Phase 15-02 (2026-02-04): **Conservative AccessMode default**
+  - Default to RWO if PV not found or access mode lookup fails
+  - RWO is safer default - prevents incorrect dual-attach allowance
+  - Volume may be rejected for RWX dual-attach if PV missing, but data safety preserved
+- Phase 15-02 (2026-02-04): **Migration detection from VA count**
+  - If volume has >1 attached VA, mark as migration state with MigrationStartedAt
+  - Multiple VAs only exist during migration window, older VA timestamp is start time
+  - Automatic migration state recovery without additional coordination
 - Phase 15-01 (2026-02-04): **Empty slice return convention**
   - VolumeAttachment listing functions return empty slice (not nil) when no results found
   - Allows safe iteration without nil checks, consistent Go idiom
@@ -173,9 +186,9 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Phase 15-01 complete (VolumeAttachment listing helpers)
+Stopped at: Phase 15-02 complete (VA-based state rebuild)
 Resume file: None
-Next action: Continue with Phase 15-02 (VolumeAttachment watcher)
+Next action: Continue with Phase 15-03 (PV annotation documentation)
 
 **Phase 13 Hardware Validation Progress:**
 1. ✓ Created comprehensive validation runbook (test/e2e/PROGRESSIVE_VALIDATION.md)
