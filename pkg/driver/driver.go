@@ -185,6 +185,9 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 	// Initialize attachment manager if controller is enabled
 	if config.EnableController && config.K8sClient != nil {
 		driver.attachmentManager = attachment.NewAttachmentManager(config.K8sClient)
+		if config.Metrics != nil {
+			driver.attachmentManager.SetMetrics(config.Metrics)
+		}
 		klog.Info("Attachment manager created")
 	}
 
