@@ -20,6 +20,11 @@ import (
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
+const (
+	// ShutdownTimeout is the maximum time to wait for graceful shutdown
+	ShutdownTimeout = 30 * time.Second
+)
+
 var (
 	// Driver configuration
 	endpoint   = flag.String("endpoint", "unix:///var/lib/kubelet/plugins/rds.csi.srvlab.io/csi.sock", "CSI endpoint")
@@ -132,19 +137,22 @@ func main() {
 		klog.Infof("Prometheus metrics enabled on %s", *metricsAddr)
 	}
 
+	// Read managed NQN prefix for node plugin
+	managedNQNPrefix := os.Getenv(nvme.EnvManagedNQNPrefix)
+
 	// Create driver configuration
 	config := driver.DriverConfig{
-		DriverName:             *driverName,
-		NodeID:                 *nodeID,
-		RDSAddress:             *rdsAddress,
-		RDSPort:                *rdsPort,
-		RDSUser:                *rdsUser,
-		RDSPrivateKey:          privateKey,
-		RDSHostKey:             hostKey,
-		RDSInsecureSkipVerify:  *rdsInsecure,
-		RDSVolumeBasePath:      *rdsVolumeBasePath,
-		K8sClient:              k8sClient,
-		Metrics:                promMetrics,
+		DriverName:                  *driverName,
+		NodeID:                      *nodeID,
+		RDSAddress:                  *rdsAddress,
+		RDSPort:                     *rdsPort,
+		RDSUser:                     *rdsUser,
+		RDSPrivateKey:               privateKey,
+		RDSHostKey:                  hostKey,
+		RDSInsecureSkipVerify:       *rdsInsecure,
+		RDSVolumeBasePath:           *rdsVolumeBasePath,
+		K8sClient:                   k8sClient,
+		Metrics:                     promMetrics,
 		EnableOrphanReconciler:      *enableOrphanReconciler,
 		OrphanCheckInterval:         *orphanCheckInterval,
 		OrphanGracePeriod:           *orphanGracePeriod,
@@ -154,6 +162,7 @@ func main() {
 		AttachmentReconcileInterval: *attachmentReconcileInterval,
 		EnableVMISerialization:      *enableVMISerialization,
 		VMICacheTTL:                 *vmiCacheTTL,
+		ManagedNQNPrefix:            managedNQNPrefix,
 		EnableController:            *controllerMode,
 		EnableNode:                  *nodeMode,
 	}
@@ -165,7 +174,7 @@ func main() {
 
 		// Create a connector for cleanup (same as node server uses internally)
 		cleanupConnector := nvme.NewConnector()
-		cleaner := nvme.NewOrphanCleaner(cleanupConnector)
+		cleaner := nvme.NewOrphanCleaner(cleanupConnector, managedNQNPrefix)
 
 		// Pass metrics to cleaner for recording orphan cleanup
 		if promMetrics != nil {
@@ -200,25 +209,38 @@ func main() {
 		}()
 	}
 
-	// Handle shutdown gracefully
+	// Handle shutdown gracefully with timeout
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Start driver in goroutine so we can handle signals
+	errChan := make(chan error, 1)
 	go func() {
-		sig := <-sigChan
-		klog.Infof("Received signal %s, shutting down", sig)
-		drv.Stop()
-		os.Exit(0)
+		klog.Infof("Starting driver in modes: controller=%v node=%v", *controllerMode, *nodeMode)
+		if err := drv.Run(*endpoint); err != nil {
+			errChan <- err
+		}
 	}()
 
-	// Run driver
-	klog.Infof("Starting driver in modes: controller=%v node=%v", *controllerMode, *nodeMode)
-	if err := drv.Run(*endpoint); err != nil {
-		klog.Fatalf("Failed to run driver: %v", err)
-	}
+	// Wait for signal or driver error
+	select {
+	case sig := <-sigChan:
+		klog.Infof("Received signal %s, initiating graceful shutdown", sig)
 
-	// Keep running
-	select {}
+		// Create shutdown context with timeout
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		defer shutdownCancel()
+
+		if err := drv.ShutdownWithContext(shutdownCtx); err != nil {
+			klog.Errorf("Graceful shutdown failed: %v", err)
+			os.Exit(1)
+		}
+		klog.Info("Driver stopped gracefully")
+		os.Exit(0)
+
+	case err := <-errChan:
+		klog.Fatalf("Driver failed: %v", err)
+	}
 }
 
 // createKubernetesClient creates a Kubernetes client using in-cluster config or kubeconfig file

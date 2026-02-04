@@ -566,7 +566,7 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 
 				return nil, status.Errorf(codes.FailedPrecondition,
 					"Volume %s migration timeout exceeded (%v elapsed, %v max). "+
-					"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
+						"Previous migration may be stuck. Detach source node to reset, or adjust migrationTimeoutSeconds in StorageClass.",
 					volumeID, elapsed.Round(time.Second), existing.MigrationTimeout)
 			}
 
@@ -581,6 +581,14 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			klog.V(2).Infof("Allowing second attachment of RWX volume %s to node %s (migration target, timeout=%v)", volumeID, nodeID, migrationTimeout)
 
 			// Capture source node before adding secondary attachment
+			// Defensive check: existing.Nodes should always have at least 1 entry if exists=true,
+			// but protect against state corruption (e.g., manual annotation edits, rebuild bugs)
+			if len(existing.Nodes) == 0 {
+				return nil, status.Errorf(codes.Internal,
+					"Volume %s has empty node list (corrupted state). "+
+						"Detach and reattach volume to recover.",
+					volumeID)
+			}
 			sourceNode := existing.Nodes[0].NodeID
 
 			if err := am.AddSecondaryAttachment(ctx, volumeID, nodeID, migrationTimeout); err != nil {

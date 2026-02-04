@@ -1,0 +1,57 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-vm-disk
+  namespace: default
+  labels:
+    test: rds-csi-validation
+spec:
+  accessModes:
+    - ReadWriteMany  # RWX for live migration
+  volumeMode: Block
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: rds-nvme
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: test-cirros-vm
+  namespace: default
+  labels:
+    test: rds-csi-validation
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: test-cirros-vm
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: containerdisk
+              disk:
+                bus: virtio
+            - name: rds-data-disk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: 128Mi
+            cpu: 1
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: quay.io/kubevirt/cirros-container-disk-demo:latest
+        - name: rds-data-disk
+          persistentVolumeClaim:
+            claimName: test-vm-disk

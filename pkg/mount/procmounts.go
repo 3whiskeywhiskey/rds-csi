@@ -2,11 +2,22 @@ package mount
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/moby/sys/mountinfo"
 	"k8s.io/klog/v2"
+)
+
+const (
+	// ProcmountsTimeout is the maximum time to wait for /proc/mounts parsing
+	ProcmountsTimeout = 10 * time.Second
+
+	// MaxDuplicateMountsPerDevice is the threshold for mount storm detection
+	MaxDuplicateMountsPerDevice = 100
 )
 
 // MountInfo represents a single mount point entry from /proc/self/mountinfo
@@ -24,7 +35,9 @@ type MountInfo struct {
 	Options string
 }
 
-// GetMounts parses /proc/self/mountinfo and returns all mount points
+// GetMounts parses /proc/self/mountinfo and returns all mount points.
+// Deprecated: Use GetMountsWithTimeout for production code to prevent hangs.
+//
 // Format: ID PARENT_ID MAJOR:MINOR ROOT MOUNT_POINT OPTIONS OPTIONAL_FIELDS - FSTYPE SOURCE SUPER_OPTIONS
 // Example: 36 35 0:34 / /sys/fs/cgroup/memory rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,memory
 func GetMounts() ([]MountInfo, error) {
@@ -145,4 +158,64 @@ func GetMountInfo(mountPath string) (*MountInfo, error) {
 	}
 
 	return nil, fmt.Errorf("mount point not found: %s", mountPath)
+}
+
+// GetMountsWithTimeout parses mount information with a timeout to prevent hangs
+// on corrupted filesystems. Returns error if parsing takes longer than ProcmountsTimeout.
+func GetMountsWithTimeout(ctx context.Context) ([]*mountinfo.Info, error) {
+	ctx, cancel := context.WithTimeout(ctx, ProcmountsTimeout)
+	defer cancel()
+
+	type result struct {
+		mounts []*mountinfo.Info
+		err    error
+	}
+	resultCh := make(chan result, 1)
+
+	go func() {
+		mounts, err := mountinfo.GetMounts(nil)
+		resultCh <- result{mounts: mounts, err: err}
+	}()
+
+	select {
+	case res := <-resultCh:
+		return res.mounts, res.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("procmounts parsing timed out after %v: %w. "+
+			"This may indicate filesystem corruption or an excessive number of mount entries. "+
+			"Check /proc/mounts manually and consider unmounting stale entries.",
+			ProcmountsTimeout, ctx.Err())
+	}
+}
+
+// DetectDuplicateMounts checks if a device has an excessive number of mount entries,
+// indicating a mount storm (often caused by filesystem corruption).
+// Returns (count, error) where error is non-nil if threshold exceeded.
+func DetectDuplicateMounts(mounts []*mountinfo.Info, devicePath string) (int, error) {
+	count := 0
+	for _, mount := range mounts {
+		if mount.Source == devicePath {
+			count++
+		}
+	}
+
+	if count >= MaxDuplicateMountsPerDevice {
+		return count, fmt.Errorf(
+			"mount storm detected: device %s has %d mount entries (threshold: %d). "+
+				"This indicates filesystem corruption or a runaway mount loop. "+
+				"Manual cleanup required: identify and unmount duplicate entries with 'findmnt' and 'umount'.",
+			devicePath, count, MaxDuplicateMountsPerDevice)
+	}
+
+	return count, nil
+}
+
+// ConvertMobyMount converts moby/sys/mountinfo.Info to our MountInfo type
+func ConvertMobyMount(m *mountinfo.Info) MountInfo {
+	return MountInfo{
+		Source:  m.Source,
+		Target:  m.Mountpoint,
+		FSType:  m.FSType,
+		Options: m.Options,
+	}
 }

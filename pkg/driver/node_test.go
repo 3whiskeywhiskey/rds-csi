@@ -11,6 +11,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/circuitbreaker"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
@@ -80,6 +81,10 @@ func (m *mockMounter) ForceUnmount(target string, timeout time.Duration) error {
 
 func (m *mockMounter) IsMountInUse(path string) (bool, []int, error) {
 	return false, nil, nil
+}
+
+func (m *mockMounter) MakeFile(pathname string) error {
+	return nil
 }
 
 // staleCheckBehavior defines the expected behavior of stale check
@@ -164,10 +169,11 @@ func createNodeServerWithStaleBehavior(mounter mount.Mounter, behavior staleChec
 	}
 
 	return &NodeServer{
-		driver:       driver,
-		mounter:      mounter,
-		nodeID:       "test-node",
-		staleChecker: checker,
+		driver:         driver,
+		mounter:        mounter,
+		nodeID:         "test-node",
+		staleChecker:   checker,
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 }
 
@@ -180,9 +186,10 @@ func createNodeServerNoStaleChecker(mounter mount.Mounter) *NodeServer {
 	}
 
 	return &NodeServer{
-		driver:  driver,
-		mounter: mounter,
-		nodeID:  "test-node",
+		driver:         driver,
+		mounter:        mounter,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 		// No stale checker - will default to healthy condition
 	}
 }
@@ -550,6 +557,674 @@ func TestNodeGetInfo(t *testing.T) {
 
 	if resp.MaxVolumesPerNode != 0 {
 		t.Errorf("MaxVolumesPerNode = %d, want 0 (unlimited)", resp.MaxVolumesPerNode)
+	}
+}
+
+// mockNVMEConnector implements nvme.Connector for testing
+type mockNVMEConnector struct {
+	connectCalled    bool
+	disconnectCalled bool
+	devicePath       string
+	connectErr       error
+	disconnectErr    error
+	getDevicePathErr error
+}
+
+func (m *mockNVMEConnector) Connect(target nvme.Target) (string, error) {
+	m.connectCalled = true
+	if m.connectErr != nil {
+		return "", m.connectErr
+	}
+	return m.devicePath, nil
+}
+
+func (m *mockNVMEConnector) ConnectWithContext(ctx context.Context, target nvme.Target) (string, error) {
+	m.connectCalled = true
+	if m.connectErr != nil {
+		return "", m.connectErr
+	}
+	return m.devicePath, nil
+}
+
+func (m *mockNVMEConnector) ConnectWithConfig(ctx context.Context, target nvme.Target, config nvme.ConnectionConfig) (string, error) {
+	m.connectCalled = true
+	if m.connectErr != nil {
+		return "", m.connectErr
+	}
+	return m.devicePath, nil
+}
+
+func (m *mockNVMEConnector) ConnectWithRetry(ctx context.Context, target nvme.Target, config nvme.ConnectionConfig) (string, error) {
+	m.connectCalled = true
+	if m.connectErr != nil {
+		return "", m.connectErr
+	}
+	return m.devicePath, nil
+}
+
+func (m *mockNVMEConnector) Disconnect(nqn string) error {
+	m.disconnectCalled = true
+	return m.disconnectErr
+}
+
+func (m *mockNVMEConnector) DisconnectWithContext(ctx context.Context, nqn string) error {
+	m.disconnectCalled = true
+	return m.disconnectErr
+}
+
+func (m *mockNVMEConnector) IsConnected(nqn string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockNVMEConnector) IsConnectedWithContext(ctx context.Context, nqn string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockNVMEConnector) GetDevicePath(nqn string) (string, error) {
+	if m.getDevicePathErr != nil {
+		return "", m.getDevicePathErr
+	}
+	return m.devicePath, nil
+}
+
+func (m *mockNVMEConnector) WaitForDevice(nqn string, timeout time.Duration) (string, error) {
+	return m.devicePath, nil
+}
+
+func (m *mockNVMEConnector) GetMetrics() *nvme.Metrics {
+	return nil
+}
+
+func (m *mockNVMEConnector) GetConfig() nvme.Config {
+	return nvme.Config{}
+}
+
+func (m *mockNVMEConnector) GetResolver() *nvme.DeviceResolver {
+	return nil
+}
+
+func (m *mockNVMEConnector) SetPromMetrics(metrics *observability.Metrics) {
+}
+
+// Helper function to create VolumeCapability for block volumes
+func createBlockVolumeCapability() *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Block{
+			Block: &csi.VolumeCapability_BlockVolume{},
+		},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+	}
+}
+
+// Helper function to create VolumeCapability for filesystem volumes
+func createFilesystemVolumeCapability() *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Mount{
+			Mount: &csi.VolumeCapability_MountVolume{
+				FsType: "ext4",
+			},
+		},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+	}
+}
+
+// TestNodeStageVolume_BlockVolume tests staging a block volume
+func TestNodeStageVolume_BlockVolume(t *testing.T) {
+	// Create temp directory for staging
+	tmpDir, err := os.MkdirTemp("", "node-test-block-stage-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+
+	// Setup mocks
+	mounter := &mockMounter{}
+	connector := &mockNVMEConnector{
+		devicePath: "/dev/nvme0n1",
+	}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+	}
+
+	// Create request
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+		VolumeCapability:  createBlockVolumeCapability(),
+		VolumeContext: map[string]string{
+			"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+			"nvmeAddress": "10.42.68.1",
+			"nvmePort":    "4420",
+		},
+	}
+
+	// Execute
+	ctx := context.Background()
+	_, err = ns.NodeStageVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("NodeStageVolume failed: %v", err)
+	}
+
+	// Verify: NVMe connect was called
+	if !connector.connectCalled {
+		t.Error("expected NVMe connect to be called")
+	}
+
+	// Verify: Format was NOT called for block volumes
+	if mounter.formatCalled {
+		t.Error("Format should not be called for block volumes")
+	}
+
+	// Verify: Mount was NOT called for block volumes
+	if mounter.mountCalled {
+		t.Error("Mount should not be called for block volumes")
+	}
+
+	// Verify: Staging directory was created
+	if _, err := os.Stat(stagingPath); os.IsNotExist(err) {
+		t.Error("staging directory should have been created")
+	}
+
+	// Verify: Device metadata file was created
+	metadataPath := filepath.Join(stagingPath, "device")
+	deviceBytes, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("failed to read device metadata file: %v", err)
+	}
+
+	// Verify: Metadata contains expected device path
+	devicePath := strings.TrimSpace(string(deviceBytes))
+	if devicePath != "/dev/nvme0n1" {
+		t.Errorf("device metadata = %q, want %q", devicePath, "/dev/nvme0n1")
+	}
+}
+
+// TestNodeStageVolume_FilesystemVolume_Unchanged tests that filesystem volumes still work
+func TestNodeStageVolume_FilesystemVolume_Unchanged(t *testing.T) {
+	// Create temp directory for staging
+	tmpDir, err := os.MkdirTemp("", "node-test-fs-stage-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+
+	// Setup mocks
+	mounter := &mockMounter{}
+	connector := &mockNVMEConnector{
+		devicePath: "/dev/nvme0n1",
+	}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+	}
+
+	// Create request for filesystem volume
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+		VolumeCapability:  createFilesystemVolumeCapability(),
+		VolumeContext: map[string]string{
+			"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+			"nvmeAddress": "10.42.68.1",
+			"nvmePort":    "4420",
+		},
+	}
+
+	// Execute
+	ctx := context.Background()
+	_, err = ns.NodeStageVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("NodeStageVolume failed: %v", err)
+	}
+
+	// Verify: Format WAS called for filesystem volumes
+	if !mounter.formatCalled {
+		t.Error("Format should be called for filesystem volumes")
+	}
+
+	// Verify: Mount WAS called for filesystem volumes
+	if !mounter.mountCalled {
+		t.Error("Mount should be called for filesystem volumes")
+	}
+
+	// Verify: Device metadata file was NOT created for filesystem volumes
+	metadataPath := filepath.Join(stagingPath, "device")
+	if _, err := os.Stat(metadataPath); err == nil {
+		t.Error("device metadata file should not exist for filesystem volumes")
+	}
+}
+
+// TestNodePublishVolume_BlockVolume tests publishing a block volume
+func TestNodePublishVolume_BlockVolume(t *testing.T) {
+	// Create temp directories for staging and target
+	tmpDir, err := os.MkdirTemp("", "node-test-block-publish-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Create mock device file (simulating /dev/nvmeXnY)
+	mockDevicePath := filepath.Join(tmpDir, "mock-nvme0n1")
+	if err := os.WriteFile(mockDevicePath, []byte{}, 0600); err != nil {
+		t.Fatalf("failed to create mock device: %v", err)
+	}
+
+	// Setup staging directory with device metadata
+	if err := os.MkdirAll(stagingPath, 0750); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	// Write mock device path (not real /dev/nvme0n1, but our temp file)
+	metadataPath := filepath.Join(stagingPath, "device")
+	if err := os.WriteFile(metadataPath, []byte(mockDevicePath+"\n"), 0600); err != nil {
+		t.Fatalf("failed to write device metadata: %v", err)
+	}
+
+	// Setup mocks
+	mounter := &mockMounter{}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+	}
+
+	// Create request
+	req := &csi.NodePublishVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+		TargetPath:        targetPath,
+		VolumeCapability:  createBlockVolumeCapability(),
+		Readonly:          false,
+	}
+
+	// Execute
+	ctx := context.Background()
+	_, err = ns.NodePublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("NodePublishVolume failed: %v", err)
+	}
+
+	// Verify: Mount was called (bind mount device to target file)
+	if !mounter.mountCalled {
+		t.Error("Mount should be called for block volume bind mount")
+	}
+}
+
+// TestNodePublishVolume_BlockVolume_MissingMetadata tests error when metadata is missing
+func TestNodePublishVolume_BlockVolume_MissingMetadata(t *testing.T) {
+	// Create temp directories for staging and target
+	tmpDir, err := os.MkdirTemp("", "node-test-block-publish-err-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Create staging directory but NO metadata file
+	if err := os.MkdirAll(stagingPath, 0750); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	// Setup mocks
+	mounter := &mockMounter{}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+	}
+
+	// Create request
+	req := &csi.NodePublishVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+		TargetPath:        targetPath,
+		VolumeCapability:  createBlockVolumeCapability(),
+		Readonly:          false,
+	}
+
+	// Execute - should fail
+	ctx := context.Background()
+	_, err = ns.NodePublishVolume(ctx, req)
+	if err == nil {
+		t.Fatal("expected error when metadata file is missing, got nil")
+	}
+
+	// Verify error mentions staging
+	if !strings.Contains(err.Error(), "staging") {
+		t.Errorf("error should mention staging: %v", err)
+	}
+}
+
+// TestNodeUnpublishVolume_BlockVolume tests unpublishing a block volume
+func TestNodeUnpublishVolume_BlockVolume(t *testing.T) {
+	// Create temp directory for target
+	tmpDir, err := os.MkdirTemp("", "node-test-block-unpublish-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Create target file (simulating block volume publish)
+	if err := os.WriteFile(targetPath, []byte{}, 0600); err != nil {
+		t.Fatalf("failed to create target file: %v", err)
+	}
+
+	// Setup mocks
+	mounter := &mockMounter{}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+	}
+
+	// Create request
+	req := &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+		TargetPath: targetPath,
+	}
+
+	// Execute
+	ctx := context.Background()
+	_, err = ns.NodeUnpublishVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("NodeUnpublishVolume failed: %v", err)
+	}
+
+	// Verify: Unmount was called
+	if !mounter.unmountCalled {
+		t.Error("Unmount should be called")
+	}
+
+	// Verify: Target file was removed
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Error("target file should have been removed")
+	}
+}
+
+// TestNodeUnstageVolume_BlockVolume tests unstaging a block volume
+func TestNodeUnstageVolume_BlockVolume(t *testing.T) {
+	// Create temp directory for staging
+	tmpDir, err := os.MkdirTemp("", "node-test-block-unstage-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+
+	// Setup staging directory with device metadata (simulating block volume stage)
+	if err := os.MkdirAll(stagingPath, 0750); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	metadataPath := filepath.Join(stagingPath, "device")
+	if err := os.WriteFile(metadataPath, []byte("/dev/nvme0n1\n"), 0600); err != nil {
+		t.Fatalf("failed to write device metadata: %v", err)
+	}
+
+	// Setup mocks
+	mounter := &mockMounter{}
+	connector := &mockNVMEConnector{
+		devicePath: "/dev/nvme0n1",
+	}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+	}
+
+	// Create request
+	req := &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+	}
+
+	// Execute
+	ctx := context.Background()
+	_, err = ns.NodeUnstageVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("NodeUnstageVolume failed: %v", err)
+	}
+
+	// Verify: Unmount was NOT called for block volumes
+	if mounter.unmountCalled {
+		t.Error("Unmount should not be called for block volumes")
+	}
+
+	// Verify: NVMe disconnect was called
+	if !connector.disconnectCalled {
+		t.Error("NVMe disconnect should be called")
+	}
+
+	// Verify: Metadata file was removed
+	if _, err := os.Stat(metadataPath); !os.IsNotExist(err) {
+		t.Error("metadata file should have been removed")
+	}
+
+	// Verify: Staging directory was removed
+	if _, err := os.Stat(stagingPath); !os.IsNotExist(err) {
+		t.Error("staging directory should have been removed")
+	}
+}
+
+// TestNodeUnstageVolume_FilesystemVolume_Unchanged tests that filesystem volumes still work
+func TestNodeUnstageVolume_FilesystemVolume_Unchanged(t *testing.T) {
+	// Create temp directory for staging
+	tmpDir, err := os.MkdirTemp("", "node-test-fs-unstage-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+
+	// Setup staging directory WITHOUT device metadata (simulating filesystem volume)
+	if err := os.MkdirAll(stagingPath, 0750); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	// Setup mocks
+	mounter := &mockMounter{}
+	connector := &mockNVMEConnector{
+		devicePath: "/dev/nvme0n1",
+	}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+	}
+
+	// Create request
+	req := &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+	}
+
+	// Execute
+	ctx := context.Background()
+	_, err = ns.NodeUnstageVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("NodeUnstageVolume failed: %v", err)
+	}
+
+	// Verify: Unmount WAS called for filesystem volumes
+	if !mounter.unmountCalled {
+		t.Error("Unmount should be called for filesystem volumes")
+	}
+
+	// Verify: NVMe disconnect was called
+	if !connector.disconnectCalled {
+		t.Error("NVMe disconnect should be called")
+	}
+}
+
+// TestNodePublishVolume_FilesystemVolume tests publishing a filesystem volume
+func TestNodePublishVolume_FilesystemVolume(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "node-test-fs-publish-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Setup staging directory (no device metadata file for filesystem volumes)
+	if err := os.MkdirAll(stagingPath, 0750); err != nil {
+		t.Fatalf("failed to create staging dir: %v", err)
+	}
+
+	// For filesystem volumes, staging path must report as mounted
+	mounter := &mockMounter{
+		isLikelyMounted: true, // Simulate staging path is mounted
+	}
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+		// No stale checker - will skip stale mount recovery check
+	}
+
+	// Use invalid volume ID format that won't derive NQN, skipping stale mount check
+	req := &csi.NodePublishVolumeRequest{
+		VolumeId:          "test-volume-no-nqn",
+		StagingTargetPath: stagingPath,
+		TargetPath:        targetPath,
+		VolumeCapability:  createFilesystemVolumeCapability(),
+		Readonly:          false,
+	}
+
+	_, err = ns.NodePublishVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("NodePublishVolume failed: %v", err)
+	}
+
+	// Verify: Mount WAS called for filesystem bind mount
+	if !mounter.mountCalled {
+		t.Error("Mount should be called for filesystem volume bind mount")
+	}
+}
+
+// TestNodeUnpublishVolume_FilesystemVolume tests unpublishing a filesystem volume
+func TestNodeUnpublishVolume_FilesystemVolume(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "node-test-fs-unpublish-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	targetPath := filepath.Join(tmpDir, "target")
+
+	// Create target directory (filesystem volumes use directories, not files)
+	if err := os.MkdirAll(targetPath, 0750); err != nil {
+		t.Fatalf("failed to create target dir: %v", err)
+	}
+
+	mounter := &mockMounter{}
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+	ns := &NodeServer{
+		driver:  driver,
+		mounter: mounter,
+		nodeID:  "test-node",
+	}
+
+	req := &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+		TargetPath: targetPath,
+	}
+
+	_, err = ns.NodeUnpublishVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf("NodeUnpublishVolume failed: %v", err)
+	}
+
+	// Verify: Unmount WAS called
+	if !mounter.unmountCalled {
+		t.Error("Unmount should be called for filesystem volume")
 	}
 }
 

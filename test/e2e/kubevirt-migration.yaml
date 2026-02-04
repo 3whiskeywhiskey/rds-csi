@@ -1,0 +1,8 @@
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstanceMigration
+metadata:
+  name: test-migration
+  namespace: default
+spec:
+  vmiName: test-cirros-vm

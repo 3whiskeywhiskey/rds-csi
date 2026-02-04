@@ -5,9 +5,12 @@ kind: CSIDriver
 metadata:
   name: rds.csi.srvlab.io
 spec:
-  # attachRequired: false means we don't need ControllerPublishVolume
-  # We handle attachment via NodeStageVolume (NVMe/TCP connection)
-  attachRequired: false
+  # attachRequired: true enables ControllerPublishVolume/ControllerUnpublishVolume
+  # Required for:
+  # - RWX block volumes (KubeVirt live migration)
+  # - Volume fencing (prevents dual-attach violations)
+  # - VolumeAttachment object creation by Kubernetes
+  attachRequired: true
 
   # podInfoOnMount: true makes pod info available to NodePublishVolume
   # Useful for future features like per-pod access control

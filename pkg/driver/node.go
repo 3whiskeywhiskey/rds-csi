@@ -3,15 +3,20 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/circuitbreaker"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
@@ -36,13 +41,14 @@ const (
 // NodeServer implements the CSI Node service
 type NodeServer struct {
 	csi.UnimplementedNodeServer
-	driver       *Driver
-	nvmeConn     nvme.Connector
-	mounter      mount.Mounter
-	nodeID       string
-	eventPoster  *EventPoster             // for posting K8s events
-	staleChecker *mount.StaleMountChecker // for detecting stale mounts
-	recoverer    *mount.MountRecoverer    // for recovering stale mounts
+	driver         *Driver
+	nvmeConn       nvme.Connector
+	mounter        mount.Mounter
+	nodeID         string
+	eventPoster    *EventPoster                         // for posting K8s events
+	staleChecker   *mount.StaleMountChecker             // for detecting stale mounts
+	recoverer      *mount.MountRecoverer                // for recovering stale mounts
+	circuitBreaker *circuitbreaker.VolumeCircuitBreaker // for preventing mount retry storms
 }
 
 // NewNodeServer creates a new Node service
@@ -83,13 +89,14 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 	}
 
 	return &NodeServer{
-		driver:       driver,
-		nvmeConn:     connector,
-		mounter:      m,
-		nodeID:       nodeID,
-		eventPoster:  eventPoster,
-		staleChecker: staleChecker,
-		recoverer:    recoverer,
+		driver:         driver,
+		nvmeConn:       connector,
+		mounter:        m,
+		nodeID:         nodeID,
+		eventPoster:    eventPoster,
+		staleChecker:   staleChecker,
+		recoverer:      recoverer,
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
 	}
 }
 
@@ -123,6 +130,9 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
+
+	// Detect volume mode early - block volumes don't have filesystems
+	isBlockVolume := req.GetVolumeCapability().GetBlock() != nil
 
 	// Extract volume context
 	volumeContext := req.GetVolumeContext()
@@ -158,11 +168,13 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe target context: %v", err)
 	}
 
-	// Get filesystem type from capability or use default
+	// Get filesystem type from capability or use default (only for filesystem volumes)
 	fsType := defaultFSType
-	if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
-		if mnt.FsType != "" {
-			fsType = mnt.FsType
+	if !isBlockVolume {
+		if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
+			if mnt.FsType != "" {
+				fsType = mnt.FsType
+			}
 		}
 	}
 
@@ -225,35 +237,59 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	klog.V(2).Infof("Connected to NVMe target, device: %s", devicePath)
 
-	// Step 2: Format filesystem if needed
-	if err := ns.mounter.Format(devicePath, fsType); err != nil {
-		// Post mount failure event (format is part of mount preparation, ignore error - best effort)
-		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to format device %s: %v", devicePath, err))
-		}
-		// Cleanup on failure
-		_ = ns.nvmeConn.Disconnect(nqn)
-		// Log volume stage failure
-		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to format device: %v", err)
+	if isBlockVolume {
+		// Block volume: device is connected above via nvme-tcp
+		// Per CSI spec and AWS EBS CSI driver pattern, NodeStageVolume for block volumes
+		// does NOT create anything at staging_target_path - it just ensures device is ready
+		// NodePublishVolume will find the device by NQN and bind mount to target path
+		klog.V(2).Infof("Successfully staged block volume %s (device: %s, NQN: %s)",
+			volumeID, devicePath, nqn)
+		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeSuccess, nil, time.Since(startTime))
+		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	// Step 3: Mount to staging path
-	mountOptions := []string{}
-	if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
-		mountOptions = mnt.MountFlags
-	}
-
-	if err := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); err != nil {
-		// Post mount failure event (ignore error - event posting is best effort)
-		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
-			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID, fmt.Sprintf("failed to mount %s to %s: %v", devicePath, stagingPath, err))
+	// Filesystem volume: format and mount with circuit breaker protection
+	// Wrap format and mount operations in circuit breaker to prevent retry storms
+	err = ns.circuitBreaker.Execute(ctx, volumeID, func() error {
+		// Step 2a: Check filesystem health before mount (only for existing filesystems)
+		formatted, formatErr := ns.mounter.IsFormatted(devicePath)
+		if formatErr != nil {
+			klog.Warningf("Could not check if device is formatted, skipping health check: %v", formatErr)
+		} else if formatted {
+			klog.V(2).Infof("Running filesystem health check for %s", devicePath)
+			if healthErr := mount.CheckFilesystemHealth(ctx, devicePath, fsType); healthErr != nil {
+				return fmt.Errorf("filesystem health check failed: %w", healthErr)
+			}
 		}
-		// Cleanup on failure
+
+		// Step 2b: Format filesystem if needed
+		if formatErr := ns.mounter.Format(devicePath, fsType); formatErr != nil {
+			return fmt.Errorf("failed to format device: %w", formatErr)
+		}
+
+		// Step 3: Mount to staging path
+		mountOptions := []string{}
+		if mnt := req.GetVolumeCapability().GetMount(); mnt != nil {
+			mountOptions = mnt.MountFlags
+		}
+
+		if mountErr := ns.mounter.Mount(devicePath, stagingPath, fsType, mountOptions); mountErr != nil {
+			return fmt.Errorf("failed to mount device: %w", mountErr)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		// Post failure event if this is a circuit breaker or mount error
+		if ns.eventPoster != nil && pvcNamespace != "" && pvcName != "" {
+			_ = ns.eventPoster.PostMountFailure(ctx, pvcNamespace, pvcName, volumeID, ns.nodeID,
+				fmt.Sprintf("stage volume failed: %v", err))
+		}
+		// Cleanup NVMe connection on failure
 		_ = ns.nvmeConn.Disconnect(nqn)
-		// Log volume stage failure
 		secLogger.LogVolumeStage(volumeID, ns.nodeID, nqn, nvmeAddress, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to mount device: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to stage filesystem volume: %v", err)
 	}
 
 	klog.V(2).Infof("Successfully staged volume %s to %s", volumeID, stagingPath)
@@ -302,56 +338,127 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 
 	startTime := time.Now()
 
-	// Step 1: Unmount from staging path
-	if err := ns.mounter.Unmount(stagingPath); err != nil {
-		// Log volume unstage failure
-		secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to unmount staging path: %v", err)
+	// Detect if this was a block volume by checking if staging path is mounted
+	// Filesystem volumes have a mounted filesystem at staging path
+	// Block volumes have nothing at staging path (device connected but not mounted)
+	isBlockVolume := false
+	if mounted, err := ns.mounter.IsLikelyMountPoint(stagingPath); err != nil || !mounted {
+		// If we can't check or it's not mounted, assume block volume
+		// (staging path may not even exist for block volumes)
+		isBlockVolume = true
 	}
 
-	klog.V(2).Infof("Unmounted volume %s from %s", volumeID, stagingPath)
+	klog.V(2).Infof("NodeUnstageVolume: volume %s, isBlock=%v", volumeID, isBlockVolume)
 
-	// SAFETY-04: Check device-in-use before NVMe disconnect
-	// This prevents data corruption if processes still have the device open
-	// (e.g., during forced pod termination or node failure scenarios)
-	if nqn != "" {
-		// GetDevicePath returns error (not empty string) if device not connected
-		// This is expected during recovery scenarios where device was already disconnected
-		devicePath, devErr := ns.nvmeConn.GetDevicePath(nqn)
-		if devErr != nil {
-			// Device not found/not connected - skip device-in-use check
-			// This can happen if:
-			// 1. Device was already disconnected (idempotent unstage)
-			// 2. Connection was lost (device unreachable)
-			// In both cases, proceed with disconnect attempt (which will be a no-op or cleanup)
-			klog.V(3).Infof("Could not get device path for NQN %s: %v (device may already be disconnected, proceeding)", nqn, devErr)
-		} else {
-			// Device path found - check if it's in use before disconnecting
-			result := nvme.CheckDeviceInUse(ctx, devicePath)
+	if isBlockVolume {
+		// Block volume: no filesystem to unmount, just disconnect NVMe device
+		klog.V(2).Infof("Unstaging block volume %s (NQN: %s)", volumeID, nqn)
 
-			if result.TimedOut {
-				// Device check timed out - device may be unresponsive
-				// Log warning and proceed with disconnect (device likely dead anyway)
-				klog.Warningf("Device %s busy check timed out, proceeding with disconnect (device may be unresponsive)",
-					devicePath)
-			} else if result.InUse {
-				// Device has open file descriptors - unsafe to disconnect
-				klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+		// Step 1: Clean up orphaned bind mounts BEFORE checking device-in-use
+		// This prevents the device-in-use check from detecting our own bind mounts
+		if nqn != "" {
+			// Find device path by NQN
+			devicePath, err := ns.nvmeConn.GetDevicePath(nqn)
+			if err == nil {
+				// Find and cleanup orphaned bind mounts to this device
+				cleanedCount, cleanupErr := ns.findAndCleanupOrphanedMounts(ctx, devicePath)
+				if cleanupErr != nil {
+					klog.Warningf("Error cleaning up orphaned mounts for %s: %v (proceeding)", devicePath, cleanupErr)
+				} else if cleanedCount > 0 {
+					klog.Infof("Cleaned up %d orphaned bind mount(s) for device %s before unstaging", cleanedCount, devicePath)
+				}
 
-				// Log failure
-				secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
-					fmt.Errorf("device in use"), time.Since(startTime))
+				// Step 2: NOW check device-in-use (after cleaning up our own mounts)
+				result := nvme.CheckDeviceInUse(ctx, devicePath)
 
-				return nil, status.Errorf(codes.FailedPrecondition,
-					"Device %s has open file descriptors, cannot safely unstage. "+
-						"Ensure pod using volume has terminated. Processes: %v",
-					devicePath, result.Processes)
-			} else if result.Error != nil {
-				// Check failed but not critical - log and proceed
-				klog.Warningf("Device busy check failed for %s: %v (proceeding with disconnect)",
-					devicePath, result.Error)
+				if result.TimedOut {
+					klog.Warningf("Device %s busy check timed out, proceeding with disconnect", devicePath)
+				} else if result.InUse {
+					// Device still in use after cleaning up bind mounts
+					// This means actual processes have it open
+
+					// During graceful shutdown, we need to clean up anyway to avoid wedging the node
+					// Check if we're in a terminating context (driver shutting down)
+					select {
+					case <-ctx.Done():
+						// Context cancelled - driver is shutting down
+						klog.Warningf("Device %s in use but driver shutting down, forcing cleanup to prevent node wedge. Processes: %v",
+							devicePath, result.Processes)
+						// Proceed with cleanup
+					default:
+						// Not shutting down - this is a normal unstage, don't force it
+						klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+						secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
+							fmt.Errorf("device in use"), time.Since(startTime))
+						return nil, status.Errorf(codes.FailedPrecondition,
+							"Device %s has open file descriptors, cannot safely unstage. "+
+								"Ensure pod using volume has terminated. Processes: %v",
+							devicePath, result.Processes)
+					}
+				} else if result.Error != nil {
+					klog.Warningf("Device busy check failed for %s: %v (proceeding)", devicePath, result.Error)
+				}
+			} else {
+				klog.Warningf("Failed to find device for NQN %s: %v (proceeding with disconnect)", nqn, err)
 			}
-			// If InUse=false and no error, proceed normally
+		}
+
+		// No staging directory or files to clean up for block volumes
+		// Proceed to NVMe disconnect (below)
+	} else {
+		// Filesystem volume: existing unmount logic
+
+		// Step 1: Unmount from staging path
+		if err := ns.mounter.Unmount(stagingPath); err != nil {
+			// Log volume unstage failure
+			secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to unmount staging path: %v", err)
+		}
+
+		klog.V(2).Infof("Unmounted volume %s from %s", volumeID, stagingPath)
+
+		// SAFETY-04: Check device-in-use before NVMe disconnect (filesystem volume path)
+		// This prevents data corruption if processes still have the device open
+		// (e.g., during forced pod termination or node failure scenarios)
+		if nqn != "" {
+			// GetDevicePath returns error (not empty string) if device not connected
+			// This is expected during recovery scenarios where device was already disconnected
+			devicePath, devErr := ns.nvmeConn.GetDevicePath(nqn)
+			if devErr != nil {
+				// Device not found/not connected - skip device-in-use check
+				// This can happen if:
+				// 1. Device was already disconnected (idempotent unstage)
+				// 2. Connection was lost (device unreachable)
+				// In both cases, proceed with disconnect attempt (which will be a no-op or cleanup)
+				klog.V(3).Infof("Could not get device path for NQN %s: %v (device may already be disconnected, proceeding)", nqn, devErr)
+			} else {
+				// Device path found - check if it's in use before disconnecting
+				result := nvme.CheckDeviceInUse(ctx, devicePath)
+
+				if result.TimedOut {
+					// Device check timed out - device may be unresponsive
+					// Log warning and proceed with disconnect (device likely dead anyway)
+					klog.Warningf("Device %s busy check timed out, proceeding with disconnect (device may be unresponsive)",
+						devicePath)
+				} else if result.InUse {
+					// Device has open file descriptors - unsafe to disconnect
+					klog.Errorf("Device %s in use by processes: %v", devicePath, result.Processes)
+
+					// Log failure
+					secLogger.LogVolumeUnstage(volumeID, ns.nodeID, nqn, security.OutcomeFailure,
+						fmt.Errorf("device in use"), time.Since(startTime))
+
+					return nil, status.Errorf(codes.FailedPrecondition,
+						"Device %s has open file descriptors, cannot safely unstage. "+
+							"Ensure pod using volume has terminated. Processes: %v",
+						devicePath, result.Processes)
+				} else if result.Error != nil {
+					// Check failed but not critical - log and proceed
+					klog.Warningf("Device busy check failed for %s: %v (proceeding with disconnect)",
+						devicePath, result.Error)
+				}
+				// If InUse=false and no error, proceed normally
+			}
 		}
 	}
 
@@ -404,6 +511,85 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
+
+	// Detect volume mode early
+	isBlockVolume := req.GetVolumeCapability().GetBlock() != nil
+
+	if isBlockVolume {
+		// Block volume: find NVMe device by NQN and bind mount to target file
+
+		// Get NQN from volume context or derive from volume ID
+		volumeContext := req.GetVolumeContext()
+		nqn := volumeContext[volumeContextNQN]
+		if nqn == "" {
+			var err error
+			nqn, err = volumeIDToNQN(volumeID)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to derive NQN from volume ID: %v", err)
+			}
+		}
+
+		// Find device path by NQN (device was connected in NodeStageVolume)
+		devicePath, err := ns.nvmeConn.GetDevicePath(nqn)
+		if err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"failed to find NVMe device for NQN %s: %v (was NodeStageVolume called?)",
+				nqn, err)
+		}
+
+		// Verify device exists before attempting mount
+		if _, err := os.Stat(devicePath); err != nil {
+			return nil, status.Errorf(codes.Internal, "block device not found: %s", devicePath)
+		}
+
+		klog.V(2).Infof("Publishing block volume %s: NQN %s, device %s -> target %s",
+			volumeID, nqn, devicePath, targetPath)
+
+		// Log volume publish request
+		secLogger := security.GetLogger()
+		secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeUnknown, nil, 0)
+		startTime := time.Now()
+
+		// Get device major:minor numbers for mknod
+		var stat syscall.Stat_t
+		if err := syscall.Stat(devicePath, &stat); err != nil {
+			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to stat device %s: %v", devicePath, err)
+		}
+
+		// Ensure parent directory exists
+		parentDir := filepath.Dir(targetPath)
+		if err := os.MkdirAll(parentDir, 0750); err != nil {
+			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to create parent directory: %v", err)
+		}
+
+		// Check if device node already exists (idempotency)
+		if _, err := os.Stat(targetPath); err == nil {
+			klog.V(4).Infof("Device node %s already exists, assuming idempotent retry", targetPath)
+		} else {
+			// Create device node using mknod (avoids devtmpfs bind mount storm)
+			// This creates a block device node with the same major:minor as the source device
+			mode := uint32(syscall.S_IFBLK | 0660)
+			if req.GetReadonly() {
+				mode = uint32(syscall.S_IFBLK | 0440)
+			}
+
+			if err := syscall.Mknod(targetPath, mode, int(stat.Rdev)); err != nil {
+				secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+				return nil, status.Errorf(codes.Internal, "failed to create device node via mknod: %v", err)
+			}
+
+			klog.V(2).Infof("Created block device node at %s (major:minor %d:%d)",
+				targetPath, unix.Major(uint64(stat.Rdev)), unix.Minor(uint64(stat.Rdev)))
+		}
+
+		klog.V(2).Infof("Successfully published block volume %s to %s", volumeID, targetPath)
+		secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	// Filesystem volume: existing bind mount from staging to target
 
 	// Check if staging path is mounted
 	mounted, err := ns.mounter.IsLikelyMountPoint(stagingPath)
@@ -495,14 +681,44 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 
 	startTime := time.Now()
 
-	// Unmount from target path
-	if err := ns.mounter.Unmount(targetPath); err != nil {
-		// Log volume unpublish failure
+	// Check if target is a block device (mknod approach) or mount (filesystem)
+	var stat syscall.Stat_t
+	if err := syscall.Stat(targetPath, &stat); err != nil {
+		if os.IsNotExist(err) {
+			// Already cleaned up - idempotent
+			klog.V(4).Infof("Target path %s does not exist, assuming already unpublished", targetPath)
+			secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
+			return &csi.NodeUnpublishVolumeResponse{}, nil
+		}
 		secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to unmount target path: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to stat target path: %v", err)
+	}
+
+	// Block device created with mknod - just remove the device node file
+	if stat.Mode&syscall.S_IFMT == syscall.S_IFBLK {
+		klog.V(4).Infof("Target %s is a block device node, removing via unlink", targetPath)
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to remove block device node: %v", err)
+		}
+	} else {
+		// Filesystem volume - unmount as usual
+		klog.V(4).Infof("Target %s is a mount point, unmounting", targetPath)
+		if err := ns.mounter.Unmount(targetPath); err != nil {
+			secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to unmount target path: %v", err)
+		}
 	}
 
 	klog.V(2).Infof("Successfully unpublished volume %s from %s", volumeID, targetPath)
+
+	// Clean up target path after unmount
+	// For block volumes, target is a file; for filesystem volumes, target is a directory
+	// Use os.RemoveAll which handles both cases
+	if err := os.RemoveAll(targetPath); err != nil {
+		// Log but don't fail - unmount succeeded, cleanup is best-effort
+		klog.Warningf("Failed to remove target path %s: %v", targetPath, err)
+	}
 
 	// Log volume unpublish success
 	secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
@@ -615,6 +831,43 @@ func (ns *NodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 		// MaxVolumesPerNode: 0 means unlimited
 		MaxVolumesPerNode: 0,
 	}, nil
+}
+
+// findAndCleanupOrphanedMounts finds all bind mounts pointing to a device and unmounts them
+// Returns the number of mounts cleaned up
+func (ns *NodeServer) findAndCleanupOrphanedMounts(ctx context.Context, devicePath string) (int, error) {
+	klog.V(4).Infof("Searching for orphaned bind mounts to device %s", devicePath)
+
+	// Get all mounts with timeout to prevent hanging
+	// Uses package-level function from mount package
+	mounts, err := mount.GetMountsWithTimeout(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get mounts: %w", err)
+	}
+
+	cleanedCount := 0
+	for _, mnt := range mounts {
+		// Check if this mount's source is our device
+		// mnt.Source is the source device for the mount
+		if mnt.Source == devicePath {
+			klog.V(2).Infof("Found orphaned bind mount: %s -> %s", devicePath, mnt.Mountpoint)
+
+			// Unmount it (force if needed)
+			if err := ns.mounter.Unmount(mnt.Mountpoint); err != nil {
+				klog.Warningf("Failed to unmount orphaned mount %s: %v", mnt.Mountpoint, err)
+				// Continue trying other mounts
+			} else {
+				klog.V(2).Infof("Successfully cleaned up orphaned mount %s", mnt.Mountpoint)
+				cleanedCount++
+			}
+		}
+	}
+
+	if cleanedCount > 0 {
+		klog.Infof("Cleaned up %d orphaned bind mount(s) for device %s", cleanedCount, devicePath)
+	}
+
+	return cleanedCount, nil
 }
 
 // NodeExpandVolume expands the filesystem on the node after volume expansion

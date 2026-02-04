@@ -77,6 +77,9 @@ func (am *AttachmentManager) RebuildState(ctx context.Context) error {
 			VolumeID:   volumeID,
 			NodeID:     nodeID,
 			AttachedAt: attachedAt,
+			Nodes: []NodeAttachment{
+				{NodeID: nodeID, AttachedAt: attachedAt},
+			},
 		}
 		am.attachments[volumeID] = state
 		rebuiltCount++

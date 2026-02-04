@@ -1,6 +1,7 @@
 package mount
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,6 +90,10 @@ type Mounter interface {
 	// IsMountInUse checks if any processes have open file handles under the mount path
 	// Returns (inUse bool, pids []int, err error)
 	IsMountInUse(path string) (bool, []int, error)
+
+	// MakeFile creates an empty file at the given path
+	// Used for block volume target paths where target must be a file, not directory
+	MakeFile(pathname string) error
 }
 
 // DeviceStats represents filesystem statistics
@@ -197,6 +202,28 @@ func SanitizeMountOptions(options []string, isBindMount bool) ([]string, error) 
 func (m *mounter) Mount(source, target, fsType string, options []string) error {
 	klog.V(2).Infof("Mounting %s to %s (fsType: %s, options: %v)", source, target, fsType, options)
 
+	// MOUNT STORM PROTECTION: Check for excessive duplicate mounts BEFORE attempting mount
+	// This prevents adding to an existing mount storm and wedging the node
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	mounts, err := GetMountsWithTimeout(ctx)
+	if err != nil {
+		// If we can't read mounts, log warning but proceed (don't block legitimate operations)
+		klog.Warningf("Failed to check for mount storm before mounting %s: %v (proceeding)", source, err)
+	} else {
+		// Check if source device already has too many mounts
+		count, stormErr := DetectDuplicateMounts(mounts, source)
+		if stormErr != nil {
+			// Mount storm detected - refuse to proceed
+			klog.Errorf("MOUNT STORM DETECTED: refusing to mount %s to %s: %v", source, target, stormErr)
+			return fmt.Errorf("mount operation aborted due to mount storm: %w", stormErr)
+		}
+		if count > 0 {
+			klog.V(4).Infof("Pre-mount check: %s has %d existing mount(s)", source, count)
+		}
+	}
+
 	// SECURITY: Validate and sanitize mount options
 	// Detect if this is a bind mount
 	isBindMount := false
@@ -215,9 +242,22 @@ func (m *mounter) Mount(source, target, fsType string, options []string) error {
 
 	klog.V(4).Infof("Sanitized mount options: %v", options)
 
-	// Create target directory if it doesn't exist
-	if err := os.MkdirAll(target, 0750); err != nil {
-		return fmt.Errorf("failed to create target directory: %w", err)
+	// Create target directory if it doesn't exist (unless target is already a file for block volumes)
+	if stat, err := os.Stat(target); err != nil {
+		// Target doesn't exist - create directory
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(target, 0750); err != nil {
+				return fmt.Errorf("failed to create target directory: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to stat target: %w", err)
+		}
+	} else if stat.IsDir() {
+		// Target exists and is a directory - this is fine
+		klog.V(4).Infof("Target %s is an existing directory", target)
+	} else {
+		// Target exists and is a file - this is expected for block volumes
+		klog.V(4).Infof("Target %s is an existing file (block volume)", target)
 	}
 
 	// Build mount command arguments
@@ -520,6 +560,33 @@ func (m *mounter) IsMountInUse(path string) (bool, []int, error) {
 	}
 
 	return inUse, pidsWithOpenFiles, nil
+}
+
+// MakeFile creates an empty file at the given path
+// Used for block volume target paths where target must be a file, not directory
+func (m *mounter) MakeFile(pathname string) error {
+	klog.V(4).Infof("Creating file at %s", pathname)
+
+	// Create parent directory if needed
+	parent := filepath.Dir(pathname)
+	if err := os.MkdirAll(parent, 0750); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+
+	// Create empty file - use O_CREATE|O_EXCL for atomic creation
+	f, err := os.OpenFile(pathname, os.O_CREATE|os.O_EXCL, 0640)
+	if err != nil {
+		if os.IsExist(err) {
+			// File already exists - this is OK for idempotency
+			klog.V(4).Infof("File %s already exists", pathname)
+			return nil
+		}
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	f.Close()
+
+	klog.V(4).Infof("Successfully created file at %s", pathname)
+	return nil
 }
 
 // ForceUnmount attempts normal unmount, then escalates to lazy unmount if needed

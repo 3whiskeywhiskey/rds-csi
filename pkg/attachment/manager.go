@@ -80,8 +80,8 @@ func (am *AttachmentManager) TrackAttachmentWithMode(ctx context.Context, volume
 	// Create new attachment state with first node
 	now := time.Now()
 	state := &AttachmentState{
-		VolumeID:   volumeID,
-		NodeID:     nodeID, // Keep for backward compat
+		VolumeID: volumeID,
+		NodeID:   nodeID, // Keep for backward compat
 		Nodes: []NodeAttachment{
 			{NodeID: nodeID, AttachedAt: now},
 		},
@@ -342,6 +342,14 @@ func (am *AttachmentManager) RemoveNodeAttachment(ctx context.Context, volumeID,
 		am.detachTimestamps[volumeID] = time.Now()
 		delete(am.attachments, volumeID)
 		klog.V(2).Infof("Removed last node attachment for volume %s, volume now detached", volumeID)
+
+		// Clear PV annotations to prevent stale state after controller restart
+		// This ensures RebuildState doesn't resurrect detached volumes
+		if err := am.clearAttachment(ctx, volumeID); err != nil {
+			klog.Warningf("Failed to clear attachment annotations for volume %s: %v", volumeID, err)
+			// Continue anyway - in-memory state is already cleared
+		}
+
 		return true, nil
 	}
 

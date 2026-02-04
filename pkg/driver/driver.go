@@ -10,6 +10,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/reconciler"
@@ -66,6 +67,9 @@ type Driver struct {
 	// VMI grouper for per-VMI operation serialization
 	vmiGrouper *VMIGrouper
 
+	// Managed NQN prefix for orphan cleaner filtering
+	managedNQNPrefix string
+
 	// Capabilities
 	vcaps  []*csi.VolumeCapability_AccessMode
 	cscaps []*csi.ControllerServiceCapability
@@ -108,6 +112,9 @@ type DriverConfig struct {
 	EnableVMISerialization bool          // Enable per-VMI operation locks
 	VMICacheTTL            time.Duration // Cache TTL for PVC->VMI mapping (default: 60s)
 
+	// NQN prefix for orphan cleaner filtering (required for node mode)
+	ManagedNQNPrefix string
+
 	// Mode flags
 	EnableController bool
 	EnableNode       bool
@@ -132,12 +139,24 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		klog.Infof("Volume base path configured: %s", config.RDSVolumeBasePath)
 	}
 
+	// Validate NQN prefix for node plugin (required for orphan cleaner safety)
+	if config.EnableNode {
+		if config.ManagedNQNPrefix == "" {
+			return nil, fmt.Errorf("managed NQN prefix is required for node plugin (set %s)", nvme.EnvManagedNQNPrefix)
+		}
+		if err := nvme.ValidateNQNPrefix(config.ManagedNQNPrefix); err != nil {
+			return nil, fmt.Errorf("invalid NQN prefix: %w", err)
+		}
+		klog.Infof("Driver managing volumes with NQN prefix: %s", config.ManagedNQNPrefix)
+	}
+
 	driver := &Driver{
-		name:      config.DriverName,
-		version:   config.Version,
-		nodeID:    config.NodeID,
-		k8sClient: config.K8sClient,
-		metrics:   config.Metrics,
+		name:             config.DriverName,
+		version:          config.Version,
+		nodeID:           config.NodeID,
+		k8sClient:        config.K8sClient,
+		metrics:          config.Metrics,
+		managedNQNPrefix: config.ManagedNQNPrefix,
 	}
 
 	// Initialize RDS client if controller is enabled
@@ -352,11 +371,16 @@ func (d *Driver) Run(endpoint string) error {
 
 	// Initialize attachment manager state
 	if d.attachmentManager != nil {
-		ctx := context.Background()
+		// Use a timeout context to avoid blocking indefinitely if Kubernetes API is slow
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
 		if err := d.attachmentManager.Initialize(ctx); err != nil {
-			return fmt.Errorf("failed to initialize attachment manager: %w", err)
+			// Log warning but don't fail - reconciler will rebuild state later
+			klog.Warningf("Failed to initialize attachment manager (will retry via reconciler): %v", err)
+		} else {
+			klog.Info("Attachment manager initialized")
 		}
-		klog.Info("Attachment manager initialized")
 	}
 
 	// Start attachment reconciler if configured
@@ -409,6 +433,29 @@ func (d *Driver) Stop() {
 		if err := d.rdsClient.Close(); err != nil {
 			klog.Errorf("Error closing RDS client: %v", err)
 		}
+	}
+}
+
+// ShutdownWithContext gracefully stops the driver within the given context timeout.
+// Returns error if shutdown does not complete within the timeout.
+func (d *Driver) ShutdownWithContext(ctx context.Context) error {
+	klog.Info("Initiating graceful shutdown")
+
+	// Create channel to signal shutdown complete
+	done := make(chan struct{})
+
+	go func() {
+		d.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		klog.Info("Graceful shutdown complete")
+		return nil
+	case <-ctx.Done():
+		klog.Warningf("Shutdown did not complete within timeout: %v", ctx.Err())
+		return ctx.Err()
 	}
 }
 

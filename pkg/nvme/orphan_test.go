@@ -333,7 +333,8 @@ func TestNewOrphanCleaner(t *testing.T) {
 	})
 	mockConnector.resolver = resolver
 
-	cleaner := NewOrphanCleaner(mockConnector)
+	prefix := "nqn.2000-02.com.mikrotik:pvc-"
+	cleaner := NewOrphanCleaner(mockConnector, prefix)
 
 	if cleaner == nil {
 		t.Fatal("NewOrphanCleaner returned nil")
@@ -343,5 +344,8 @@ func TestNewOrphanCleaner(t *testing.T) {
 	}
 	if cleaner.resolver != resolver {
 		t.Error("OrphanCleaner has wrong resolver")
+	}
+	if cleaner.managedNQNPrefix != prefix {
+		t.Errorf("OrphanCleaner has wrong managedNQNPrefix: got %q, want %q", cleaner.managedNQNPrefix, prefix)
 	}
 }
