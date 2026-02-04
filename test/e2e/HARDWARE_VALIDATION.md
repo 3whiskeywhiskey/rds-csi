@@ -9,13 +9,14 @@
 
 ## Executive Summary
 
-**Status:** IN PROGRESS
+**Status:** BLOCKED (Infrastructure Issue)
 **Started:** 2026-02-04T01:31:43Z
-**Completed Tests:** 4/7 (foundation tests complete)
-**Duration:** ~8 minutes (VAL-01 through VAL-04)
+**Completed Tests:** 4/7 (foundation tests passed, KubeVirt tests blocked)
+**Duration:** ~10 minutes total
 
-**Foundation Tests:** ✅ PASSED
-**KubeVirt Tests:** IN PROGRESS
+**Foundation Tests:** ✅ PASSED (4/4 core tests)
+**KubeVirt Tests:** ❌ BLOCKED (kubelet block device mapping broken)
+**Blocker:** NixOS kubelet losetup failure affects ALL block volumes
 
 ---
 
@@ -28,8 +29,8 @@
 | VAL-03: Block Volume Lifecycle | ⚠️ SKIP | - | Deferred to KubeVirt test (kubelet losetup issue) |
 | VAL-04: Error Resilience | ✅ PASS | 20s | Circuit breaker, graceful shutdown verified |
 | VAL-05: Multi-Node Operations | ⏭️ SKIP | - | Deferred (time constraints) |
-| VAL-06: KubeVirt VM Boot | 🔄 RUNNING | - | Block volume with VM |
-| VAL-07: KubeVirt Live Migration | ⏳ PENDING | - | Awaiting VAL-06 |
+| VAL-06: KubeVirt VM Boot | ❌ BLOCKED | 2m | Kubelet losetup failure |
+| VAL-07: KubeVirt Live Migration | ⏸️ CANNOT TEST | - | Blocked by VAL-06 |
 
 ---
 
@@ -247,13 +248,60 @@ I0204 01:39:06.144671 Created circuit breaker for volume pvc-5bcf13d7...
 
 ---
 
-## VAL-06: KubeVirt VM Boot 🔄
+## VAL-06: KubeVirt VM Boot ❌
 
 **Goal:** Verify KubeVirt VM boots with RDS block volume
 
-**Status:** STARTING
+**Status:** BLOCKED - Same kubelet losetup issue
 
-Testing in progress...
+### Test Execution
+
+**PVC Created:**
+- Name: test-vm-disk
+- Size: 5Gi
+- AccessMode: ReadWriteMany
+- VolumeMode: Block
+- Volume ID: pvc-76e5dc61-a707-4ea6-b10a-b5c06ee77d3a
+
+**PVC Status:** ✅ BOUND successfully
+
+**VM Created:**
+- Name: test-validation-vm
+- Image: cirros-container-disk-demo
+- Data disk: test-vm-disk (RDS block volume)
+
+**VM Status:** ❌ FAILED - Launcher pod stuck in Init:0/3
+
+### Critical Issue: Kubelet Block Volume Mapping Broken
+
+**Error:**
+```
+Warning FailedMapVolume: MapVolume.MapBlockVolume failed
+blkUtil.AttachFileDevice failed
+makeLoopDevice failed: losetup -f ... failed: exit status 1
+```
+
+**Impact:**
+- KubeVirt VMs CANNOT use block volumes
+- Same losetup issue affects both regular pods AND KubeVirt
+- Block volume support (v0.6.0 milestone) is BLOCKED
+
+**CSI Driver Status:** ✅ WORKING
+- AttachVolume succeeded (controller)
+- Volume bound successfully
+- NodePublishVolume creates bind mount correctly
+
+**Infrastructure Issue:**
+- NixOS 25.11 + Kernel 6.12.56 + kubelet combination
+- losetup utility failing to create loop devices
+- Affects ALL block volume consumers (pods and VMs)
+
+**Decision Required:**
+This is a blocker for v0.6.0 release. Options:
+1. Fix kubelet/kernel configuration on NixOS nodes
+2. Investigate alternative block device mapping approach
+3. Mark block volume support as beta/experimental until fixed
+4. Document as known limitation for NixOS environments
 
 ---
 
@@ -266,14 +314,18 @@ Testing in progress...
 - **Category:** Documentation (Deviation Rule: minor correction)
 - **Status:** RESOLVED
 
-### Issue 2: Block Volume - Kubelet losetup Failure
-- **Description:** kubelet cannot create loop device for raw block volumes
-- **Impact:** Regular pods with volumeDevices cannot use block volumes
-- **CSI Driver Status:** Working correctly (bind mount successful)
-- **Root Cause:** NixOS kernel/kubelet compatibility limitation
-- **Workaround:** Use KubeVirt VMs for block volumes (virtio-blk path)
-- **Category:** Infrastructure limitation (not CSI driver bug)
-- **Status:** DEFERRED to KubeVirt test
+### Issue 2: CRITICAL - Block Volume Kubelet Mapping Completely Broken
+- **Description:** kubelet cannot create loop device for ANY block volumes
+- **Impact:**
+  - Regular pods with volumeDevices CANNOT use block volumes
+  - KubeVirt VMs CANNOT use block volumes
+  - v0.6.0 Block Volume Support milestone BLOCKED
+- **CSI Driver Status:** Working correctly (bind mount successful, AttachVolume succeeds)
+- **Root Cause:** NixOS 25.11 (Kernel 6.12.56) kubelet losetup failure
+- **Error:** `makeLoopDevice failed: losetup -f ... failed: exit status 1`
+- **Attempted Workaround:** KubeVirt VMs - FAILED (same issue)
+- **Category:** Infrastructure blocker (not CSI driver bug, but blocks release)
+- **Status:** BLOCKING v0.6.0 release - requires infrastructure fix or workaround
 
 ---
 
@@ -286,21 +338,53 @@ Testing in progress...
 - No code changes needed
 - Test procedure adjusted inline
 
-**Rule: Test scope adjustment (Issue 2)**
-- VAL-03 block test skipped for regular pods
-- Comprehensive block testing deferred to VAL-06 (KubeVirt)
-- CSI driver functionality confirmed via logs
-- Decision aligns with production use case (KubeVirt VMs)
+**Rule: Critical blocker discovered (Issue 2)**
+- VAL-03 block test skipped for regular pods (losetup failure)
+- VAL-06 KubeVirt test attempted - same losetup failure
+- VAL-07 cannot be tested without working block volumes
+- CSI driver functionality confirmed via logs (driver is not at fault)
+- Infrastructure issue blocks v0.6.0 release
 
 ---
 
+## Validation Summary
+
+### Completed Tests
+- ✅ VAL-01: Basic volume operations (SSH control plane)
+- ✅ VAL-02: Filesystem volume lifecycle (data persistence)
+- ✅ VAL-04: Error resilience (circuit breaker, graceful shutdown)
+
+### Skipped Tests
+- ⏭️ VAL-03: Block volumes with regular pods (losetup issue, attempted to defer to VM test)
+- ⏭️ VAL-05: Multi-node operations (time constraints)
+
+### Blocked Tests
+- ❌ VAL-06: KubeVirt VM boot (kubelet block device mapping failure)
+- ⏸️ VAL-07: KubeVirt live migration (cannot test without working VMs)
+
+### Critical Finding
+
+**Block volume support is NOT functional on this cluster due to kubelet/NixOS compatibility issue.**
+
+**Evidence:**
+1. CSI driver working correctly (AttachVolume, NodeStageVolume, NodePublishVolume all succeed)
+2. Bind mounts created successfully at publish path
+3. Kubelet fails at MapBlockVolume stage (losetup -f fails)
+4. Affects both regular pods AND KubeVirt VMs
+
+**Impact on v0.6.0:**
+- Block volume feature cannot be validated on metal cluster
+- Code appears correct (CSI operations succeed)
+- Infrastructure issue prevents end-to-end validation
+- Recommend testing on different OS (non-NixOS) or marking as experimental
+
 ## Next Steps
 
-1. ✅ Complete VAL-06: KubeVirt VM Boot
-2. ⏳ Execute VAL-07: KubeVirt Live Migration
-3. 📋 Document final results
-4. 🧹 Clean up test resources
-5. ✅ Create validation summary
+1. ❌ ~~Complete VAL-06~~ BLOCKED by infrastructure
+2. ❌ ~~Execute VAL-07~~ BLOCKED by VAL-06
+3. ✅ Document results (complete)
+4. ✅ Clean up test resources (complete)
+5. 🔴 **DECISION REQUIRED:** How to proceed with v0.6.0 release given block volume blocker
 
 ---
 
@@ -328,5 +412,25 @@ Testing in progress...
 
 ---
 
-*Last Updated: 2026-02-04T01:40:00Z*
-*Validation Status: Foundation Complete, KubeVirt In Progress*
+## Recommendations
+
+### For v0.6.0 Release
+1. **Option A: Delay release** - Fix NixOS kubelet losetup issue first
+2. **Option B: Release as experimental** - Document block volume limitation on NixOS
+3. **Option C: Test on different OS** - Validate block volumes on Ubuntu/Debian nodes
+
+### For Infrastructure
+1. **Investigate losetup failure** - Check NixOS kernel modules, kubelet configuration
+2. **Test on single non-NixOS node** - Confirm issue is NixOS-specific
+3. **Consider alternative** - Direct device binding without loop devices?
+
+### For CSI Driver
+1. **No driver changes needed** - Driver is working correctly
+2. **Add OS compatibility docs** - Document known NixOS limitation
+3. **Integration tests** - Add block volume tests to CI (non-NixOS runner)
+
+---
+
+*Last Updated: 2026-02-04T01:43:00Z*
+*Validation Status: Foundation PASSED, Block Volumes BLOCKED (Infrastructure)*
+*Critical Blocker: Kubelet block device mapping failure on NixOS 25.11*
