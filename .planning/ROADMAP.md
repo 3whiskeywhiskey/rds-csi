@@ -181,7 +181,7 @@ Plans:
 
 **Milestone Goal:** Systematic codebase cleanup to improve maintainability, reduce log noise, and eliminate technical debt
 
-**Status:** Phase 17 planned
+**Status:** Phase 17 complete, Phase 18 ready to plan
 
 ---
 
@@ -202,7 +202,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 17-01-PLAN.md — Fix block volume test failures and document root cause
+- [x] 17-01-PLAN.md — Fix block volume test failures and document root cause
 
 ---
 
@@ -317,7 +317,7 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 14. Mount Storm Prevention | v0.6.0 | 4/4 | Complete | 2026-02-04 |
 | 15. VolumeAttachment-Based State Rebuild | v0.7.0 | 4/4 | Complete | 2026-02-04 |
 | 16. Migration Metrics Emission | v0.7.0 | 1/1 | Complete | 2026-02-04 |
-| 17. Test Infrastructure Fix | v0.7.1 | 0/1 | Planned | - |
+| 17. Test Infrastructure Fix | v0.7.1 | 1/1 | Complete | 2026-02-04 |
 | 18. Logging Cleanup | v0.7.1 | 0/? | Not started | - |
 | 19. Error Handling Standardization | v0.7.1 | 0/? | Not started | - |
 | 20. Test Coverage Expansion | v0.7.1 | 0/? | Not started | - |
@@ -325,4 +325,4 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 
 ---
 
-_Last updated: 2026-02-04 (Phase 17 planned)_
+_Last updated: 2026-02-04 (Phase 17 complete)_

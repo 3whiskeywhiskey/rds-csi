@@ -74,7 +74,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TEST-01 | Phase 17 | Pending |
+| TEST-01 | Phase 17 | Complete |
 | LOG-01 | Phase 18 | Pending |
 | LOG-02 | Phase 18 | Pending |
 | LOG-03 | Phase 18 | Pending |
