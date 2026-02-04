@@ -1,12 +1,47 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"k8s.io/klog/v2"
+)
+
+// Sentinel errors for common conditions.
+// Use errors.Is() to check for these rather than string matching.
+var (
+	// ErrVolumeNotFound indicates the requested volume does not exist
+	ErrVolumeNotFound = errors.New("volume not found")
+
+	// ErrVolumeExists indicates the volume already exists
+	ErrVolumeExists = errors.New("volume already exists")
+
+	// ErrNodeNotFound indicates the requested node does not exist
+	ErrNodeNotFound = errors.New("node not found")
+
+	// ErrInvalidParameter indicates an invalid parameter was provided
+	ErrInvalidParameter = errors.New("invalid parameter")
+
+	// ErrResourceExhausted indicates insufficient storage capacity
+	ErrResourceExhausted = errors.New("resource exhausted")
+
+	// ErrOperationTimeout indicates an operation timed out
+	ErrOperationTimeout = errors.New("operation timeout")
+
+	// ErrDeviceNotFound indicates NVMe device was not found
+	ErrDeviceNotFound = errors.New("device not found")
+
+	// ErrDeviceInUse indicates the device is currently in use
+	ErrDeviceInUse = errors.New("device in use")
+
+	// ErrMountFailed indicates a mount operation failed
+	ErrMountFailed = errors.New("mount failed")
+
+	// ErrUnmountFailed indicates an unmount operation failed
+	ErrUnmountFailed = errors.New("unmount failed")
 )
 
 // ErrorType classifies errors for sanitization purposes
