@@ -876,6 +876,123 @@ func TestForceUnmount(t *testing.T) {
 	}
 }
 
+func TestResizeFilesystem(t *testing.T) {
+	tests := []struct {
+		name        string
+		device      string
+		volumePath  string
+		mockResults []struct{ stdout, stderr string; exitCode int }
+		expectError bool
+		errContains string
+	}{
+		{
+			name:       "ext4 resize success",
+			device:     "/dev/nvme0n1",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid detects ext4
+				{stdout: "ext4\n", stderr: "", exitCode: 0},
+				// resize2fs succeeds
+				{stdout: "Resizing filesystem\n", stderr: "", exitCode: 0},
+			},
+			expectError: false,
+		},
+		{
+			name:       "xfs resize success",
+			device:     "/dev/nvme0n2",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid detects xfs
+				{stdout: "xfs\n", stderr: "", exitCode: 0},
+				// xfs_growfs succeeds
+				{stdout: "data blocks changed\n", stderr: "", exitCode: 0},
+			},
+			expectError: false,
+		},
+		{
+			name:       "ext4 resize fails",
+			device:     "/dev/nvme0n1",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid detects ext4
+				{stdout: "ext4\n", stderr: "", exitCode: 0},
+				// resize2fs fails
+				{stdout: "", stderr: "resize2fs: error resizing", exitCode: 1},
+			},
+			expectError: true,
+			errContains: "resize failed",
+		},
+		{
+			name:       "xfs resize fails",
+			device:     "/dev/nvme0n2",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid detects xfs
+				{stdout: "xfs\n", stderr: "", exitCode: 0},
+				// xfs_growfs fails
+				{stdout: "", stderr: "xfs_growfs: error", exitCode: 1},
+			},
+			expectError: true,
+			errContains: "resize failed",
+		},
+		{
+			name:       "unsupported filesystem",
+			device:     "/dev/nvme0n1",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid detects ntfs
+				{stdout: "ntfs\n", stderr: "", exitCode: 0},
+			},
+			expectError: true,
+			errContains: "unsupported filesystem type",
+		},
+		{
+			name:       "blkid fails - device not found",
+			device:     "/dev/nonexistent",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid fails
+				{stdout: "", stderr: "cannot access device", exitCode: 1},
+			},
+			expectError: true,
+			errContains: "failed to detect filesystem type",
+		},
+		{
+			name:       "blkid returns empty - no filesystem",
+			device:     "/dev/nvme0n1",
+			volumePath: "/mnt/volume",
+			mockResults: []struct{ stdout, stderr string; exitCode int }{
+				// blkid returns empty (no filesystem detected)
+				{stdout: "\n", stderr: "", exitCode: 0},
+			},
+			expectError: true,
+			errContains: "could not detect filesystem type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &mounter{
+				execCommand: mockMultiExecCommand(tt.mockResults),
+			}
+
+			err := m.ResizeFilesystem(tt.device, tt.volumePath)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if tt.expectError && err != nil && tt.errContains != "" {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error to contain %q, got: %v", tt.errContains, err)
+				}
+			}
+		})
+	}
+}
+
 // Benchmark mount option validation
 func BenchmarkValidateMountOptions(b *testing.B) {
 	options := []string{"nosuid", "nodev", "noexec", "ro"}
