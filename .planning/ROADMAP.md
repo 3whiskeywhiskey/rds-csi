@@ -277,11 +277,11 @@ Plans:
 **Plans**: 5 plans
 
 Plans:
-- [ ] 20-01-PLAN.md — RDS SSH client and client factory tests
-- [ ] 20-02-PLAN.md — Mount package error path tests (ForceUnmount, ResizeFilesystem, IsMountInUse)
-- [ ] 20-03-PLAN.md — NVMe connection and retry logic tests
-- [ ] 20-04-PLAN.md — RDS command execution and parsing tests
-- [ ] 20-05-PLAN.md — Coverage enforcement configuration and verification
+- [x] 20-01-PLAN.md — RDS SSH client and client factory tests
+- [x] 20-02-PLAN.md — Mount package error path tests (ForceUnmount, ResizeFilesystem, IsMountInUse)
+- [x] 20-03-PLAN.md — NVMe connection and retry logic tests
+- [x] 20-04-PLAN.md — RDS command execution and parsing tests
+- [x] 20-05-PLAN.md — Coverage enforcement configuration and verification
 
 ---
 
@@ -333,9 +333,9 @@ Phases execute in numeric order: 17 → 18 → 19 → 20 → 21
 | 17. Test Infrastructure Fix | v0.7.1 | 1/1 | Complete | 2026-02-04 |
 | 18. Logging Cleanup | v0.7.1 | 5/5 | Complete | 2026-02-04 |
 | 19. Error Handling Standardization | v0.7.1 | 5/5 | Complete | 2026-02-04 |
-| 20. Test Coverage Expansion | v0.7.1 | 0/? | Not started | - |
+| 20. Test Coverage Expansion | v0.7.1 | 5/5 | Complete | 2026-02-04 |
 | 21. Code Quality Improvements | v0.7.1 | 0/? | Not started | - |
 
 ---
 
-_Last updated: 2026-02-04 (Phase 19 gap closure plan created)_
+_Last updated: 2026-02-04 (Phase 20 complete - test coverage expansion)_

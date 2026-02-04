@@ -83,11 +83,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ERR-02 | Phase 19 | Complete |
 | ERR-03 | Phase 19 | Complete |
 | ERR-04 | Phase 19 | Complete |
-| TEST-02 | Phase 20 | Pending |
-| TEST-03 | Phase 20 | Pending |
-| TEST-04 | Phase 20 | Pending |
-| TEST-05 | Phase 20 | Pending |
-| TEST-06 | Phase 20 | Pending |
+| TEST-02 | Phase 20 | Complete |
+| TEST-03 | Phase 20 | Complete |
+| TEST-04 | Phase 20 | Complete |
+| TEST-05 | Phase 20 | Complete |
+| TEST-06 | Phase 20 | Complete |
 | QUAL-01 | Phase 21 | Pending |
 | QUAL-02 | Phase 21 | Pending |
 | QUAL-03 | Phase 21 | Pending |
