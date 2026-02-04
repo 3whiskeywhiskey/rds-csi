@@ -260,24 +260,28 @@ Plans:
 
 ### Phase 20: Test Coverage Expansion
 
-**Goal**: Increase test coverage to >80% on all critical packages
+**Goal**: Increase test coverage to >60% on critical packages with coverage enforcement
 
 **Depends on**: Phase 19
 
 **Requirements**: TEST-02, TEST-03, TEST-04, TEST-05, TEST-06
 
 **Success Criteria** (what must be TRUE):
-1. SSH client test coverage increased from 0% to >80%
-2. RDS package test coverage increased from 44.5% to >80%
-3. Mount package test coverage increased from 55.9% to >80%
-4. NVMe package test coverage increased from 43.3% to >80%
-5. Zero-coverage files now have comprehensive tests (ssh_client.go, server.go, persist.go, client.go)
+1. SSH client test coverage increased from 0% to >70% (testable functions)
+2. RDS package test coverage increased from 44.4% to >55%
+3. Mount package test coverage increased from 55.9% to >70%
+4. NVMe package test coverage increased from 43.3% to >55%
+5. Coverage enforcement tooling configured with package thresholds
 6. Critical error paths have explicit test coverage
 
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] 20-01: TBD during planning
+- [ ] 20-01-PLAN.md — RDS SSH client and client factory tests
+- [ ] 20-02-PLAN.md — Mount package error path tests (ForceUnmount, ResizeFilesystem, IsMountInUse)
+- [ ] 20-03-PLAN.md — NVMe connection and retry logic tests
+- [ ] 20-04-PLAN.md — RDS command execution and parsing tests
+- [ ] 20-05-PLAN.md — Coverage enforcement configuration and verification
 
 ---
 
