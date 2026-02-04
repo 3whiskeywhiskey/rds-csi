@@ -1,3 +1,18 @@
+// persist.go handles PV annotation persistence for attachment state.
+//
+// IMPORTANT: These annotations are INFORMATIONAL ONLY for debugging/observability.
+// They are written during ControllerPublishVolume but NEVER read during state rebuild.
+// VolumeAttachment objects are the authoritative source of truth for attachment state.
+//
+// Why write-only annotations?
+// - Backward compatibility: kubectl describe pv shows attachment info
+// - Debugging: Operators can see which node a volume is attached to
+// - Observability: External tools may read annotations for dashboards
+//
+// Why NOT read during rebuild?
+// - Annotations can become stale (clearing may fail, manual kubectl edits)
+// - VolumeAttachment objects are managed by external-attacher (authoritative)
+// - Reading annotations would contradict VolumeAttachment state
 package attachment
 
 import (
@@ -10,11 +25,18 @@ import (
 )
 
 const (
+	// AnnotationAttachedNode stores the node ID for debugging/observability.
+	// Informational only - never read during state rebuild.
 	AnnotationAttachedNode = "rds.csi.srvlab.io/attached-node"
-	AnnotationAttachedAt   = "rds.csi.srvlab.io/attached-at"
+
+	// AnnotationAttachedAt stores the attachment timestamp for debugging.
+	// Informational only - never read during state rebuild.
+	AnnotationAttachedAt = "rds.csi.srvlab.io/attached-at"
 )
 
-// persistAttachment updates the PersistentVolume annotations to record the attachment state.
+// persistAttachment writes attachment metadata to PV annotations for debugging.
+// These annotations are INFORMATIONAL ONLY - they are never read during state rebuild.
+// VolumeAttachment objects are the authoritative source of truth.
 // Uses retry.RetryOnConflict to handle concurrent updates safely.
 // Returns nil if k8sClient is nil (allows operation without k8s in tests).
 func (am *AttachmentManager) persistAttachment(ctx context.Context, volumeID, nodeID string) error {
@@ -57,7 +79,10 @@ func (am *AttachmentManager) persistAttachment(ctx context.Context, volumeID, no
 	return nil
 }
 
-// clearAttachment removes the attachment annotations from the PersistentVolume.
+// clearAttachment removes attachment annotations from a PV.
+// This is called when a volume is fully detached to keep annotations accurate.
+// Note: Even if clearing fails, behavior is correct because annotations are
+// never read during rebuild - VolumeAttachment absence is authoritative.
 // Uses retry.RetryOnConflict to handle concurrent updates safely.
 // Returns nil if k8sClient is nil (allows operation without k8s in tests).
 func (am *AttachmentManager) clearAttachment(ctx context.Context, volumeID string) error {
