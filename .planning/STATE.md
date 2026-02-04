@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 20 of 21 (Test Coverage Expansion)
-Plan: 5 of 5 complete
-Status: Phase complete - 65.0% total coverage, enforcement configured
-Last activity: 2026-02-04 — Completed Phase 20 with 5 plans, verification passed
+Phase: 21 of 21 (Code Quality Improvements)
+Plan: 1 of 4 complete
+Status: In progress - severity mapping refactored
+Last activity: 2026-02-04 — Completed 21-01-PLAN.md (severity mapping refactoring)
 
-Progress: [████████████████████████████████░░░░░] 93% (75/81 total plans across all phases)
+Progress: [████████████████████████████████░░░░░] 94% (76/81 total plans across all phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 75
+- Total plans completed: 76
 - Phases completed: 20
 - Average phase completion: 3.8 plans/phase
 
@@ -53,6 +53,13 @@ Progress: [███████████████████████
 
 Recent decisions from v0.8.0 work:
 
+- Phase 21-01 (2026-02-04): **Severity mapping refactored to table-driven design**
+  - Replaced 21-line switch statement with 4-line map lookup in LogEvent()
+  - severityMap struct with both verbosity and logFunc fields provides clearest 1:1 mapping
+  - Unknown severities default to Info level (safe, non-disruptive)
+  - Cyclomatic complexity reduced from 5 to 1 (-80%)
+  - TestLogEventSeverityMapping validates all severity levels and graceful fallback
+  - Impact: Maintainability improved, single source of truth for severity behavior
 - Phase 20 (2026-02-04): **Test coverage expanded to 65.0% with enforcement configured**
   - Total coverage improved from 48% to 65.0% (+17pp, exceeds 60% target by 5pp)
   - RDS package: 44.4% → 61.8% (+17.4pp) via SSH client mock server tests
@@ -218,6 +225,6 @@ None
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 20-05-PLAN.md (coverage enforcement) - Phase 20 complete (5/5 plans)
+Stopped at: Completed 21-01-PLAN.md (severity mapping refactoring) - Phase 21 in progress (1/4 plans)
 Resume file: None
-Next action: Execute Phase 21 plans with `/gsd:execute-phase 21`
+Next action: Continue Phase 21 with plan 21-02
