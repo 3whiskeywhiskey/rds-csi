@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 13 of 14 (Hardware Validation)
-Plan: 1 of 1 in current phase
-Status: ✅ COMPLETE - KubeVirt validation passed
-Last activity: 2026-02-04 — Phase 13 complete: KubeVirt VM boot + live migration validated (commit 5b57388)
+Phase: 15 of 15 (VolumeAttachment-Based State Rebuild)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-04 — Completed 15-01-PLAN.md (VolumeAttachment listing helpers)
 
-Progress: [██████████████████████████████████] 94% (50/53 plans completed across all phases)
+Progress: [██████████████████████████████████] 96% (51/53 plans completed across all phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 49
+- Total plans completed: 51
 - Phases completed: 13
-- Average phase completion: 3.77 plans/phase
+- Average phase completion: 3.92 plans/phase
 
 **By Milestone:**
 
@@ -47,7 +47,22 @@ Progress: [███████████████████████
 
 ### Decisions
 
-Recent decisions from PROJECT.md affecting v0.6.0 work:
+Recent decisions from PROJECT.md affecting v0.7.0 work:
+
+- Phase 15-01 (2026-02-04): **Empty slice return convention**
+  - VolumeAttachment listing functions return empty slice (not nil) when no results found
+  - Allows safe iteration without nil checks, consistent Go idiom
+  - Applied to: ListDriverVolumeAttachments, FilterAttachedVolumeAttachments, GroupVolumeAttachmentsByVolume
+- Phase 15-01 (2026-02-04): **Skip invalid VAs instead of failing**
+  - GroupVolumeAttachmentsByVolume skips VAs with nil PersistentVolumeName
+  - Logs warning but continues processing other VAs
+  - Rationale: Partial data better than complete failure in state rebuild
+- Phase 15-01 (2026-02-04): **Client-side VA filtering**
+  - List all VolumeAttachments, filter client-side by Spec.Attacher
+  - Could use field selectors but not all fields indexed
+  - Rationale: Simpler, works across all Kubernetes versions, acceptable for small VA counts
+
+Recent decisions from v0.6.0 work:
 
 - Phase 15 planning (2026-02-04): **VolumeAttachment-based rebuild deferred to v0.7.0**
   - Bug report suggested using VolumeAttachment objects as source of truth instead of PV annotations
@@ -158,9 +173,9 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Block volume implementation corrected, mount storm confirmed on r640
+Stopped at: Phase 15-01 complete (VolumeAttachment listing helpers)
 Resume file: None
-Next action: Build and deploy block volume fix, then address mount storm issue
+Next action: Continue with Phase 15-02 (VolumeAttachment watcher)
 
 **Phase 13 Hardware Validation Progress:**
 1. ✓ Created comprehensive validation runbook (test/e2e/PROGRESSIVE_VALIDATION.md)
