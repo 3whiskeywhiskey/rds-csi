@@ -6,158 +6,68 @@
 
 ### Excessive Logging in Helper Methods
 
-**Issue:** `pkg/security/logger.go` contains 11 nearly-identical helper methods (LogVolumeCreate, LogVolumeDelete, LogVolumeStage, LogVolumeUnstage, LogVolumePublish, LogVolumeUnpublish, LogNVMEConnect, LogNVMEDisconnect, etc.) that follow identical patterns.
+**Status:** RESOLVED (Phase 18)
 
-**Files:** `pkg/security/logger.go` (lines 221-506)
+**Resolution:** Consolidated 11 nearly-identical helper methods using table-driven LogOperation helper (operationConfigs map). Reduced from 300+ lines to 47 lines. See Phase 18 summary.
 
-**Code Pattern (repeated 6+ times):**
-```go
-// LogVolumeCreate, LogVolumeDelete, LogVolumeStage, LogVolumeUnstage, LogVolumePublish, LogVolumeUnpublish all follow:
-func (l *Logger) LogVolume{Op}(...outcome..., ...err..., ...duration...) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
+**Original Issue:** `pkg/security/logger.go` contained 11 nearly-identical helper methods (LogVolumeCreate, LogVolumeDelete, LogVolumeStage, LogVolumeUnstage, LogVolumePublish, LogVolumeUnpublish, LogNVMEConnect, LogNVMEDisconnect, etc.) that followed identical patterns.
 
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventVolume{Op}Success
-		severity = SeverityInfo
-		message = "Volume {op} successfully"
-	case OutcomeFailure:
-		eventType = EventVolume{Op}Failure
-		severity = SeverityError
-		message = "Volume {op} failed"
-	default:
-		eventType = EventVolume{Op}Request
-		severity = SeverityInfo
-		message = "Volume {op} requested"
-	}
-
-	event := NewSecurityEvent(...)
-		.WithVolume(volumeID, ...)
-		.WithOutcome(outcome)
-		.WithOperation("{Op}", duration)
-	if err != nil {
-		event.WithError(err)
-	}
-	l.LogEvent(event)
-}
-```
-
-**Impact:** 300+ lines of duplicated logic; difficult to maintain consistency; changes to event format require updates in 6+ places
-
-**Fix for v0.7.1:**
-- Extract generic `LogVolumeOperation(op string, volumeID string, outcome EventOutcome, err error, duration time.Duration)` helper
-- Reduce 6 methods to 1 configurable method
-- Apply same pattern to `LogNVMEConnect` and `LogNVMEDisconnect` (similar duplication)
-- Target: Remove 150+ lines of duplication
+**Impact:** 300+ lines of duplicated logic eliminated; significantly improved maintainability
 
 ---
 
 ### Inconsistent Error Message Format
 
-**Issue:** Error wrapping inconsistent between `status.Errorf()` and direct string format.
+**Status:** RESOLVED (Phase 19)
 
-**Files:**
-- `pkg/driver/controller.go` (61 error returns)
-- `pkg/driver/node.go` (58 error returns)
-- `pkg/rds/commands.go` (40+ error returns)
+**Resolution:** Established consistent error wrapping with %w format verb (96.1% compliance). Created sentinel errors for type-safe classification. Documented patterns in CONVENTIONS.md.
 
-**Examples:**
-```go
-// controller.go - using %v (verbose)
-return nil, status.Errorf(codes.Internal, "failed to create volume on RDS: %v", err)
+**Original Issue:** Error wrapping was inconsistent between `status.Errorf()` and direct string format, using both %v and %w across 160+ error returns.
 
-// node.go - using %v
-return nil, status.Errorf(codes.Internal, "failed to stage volume: %v", err)
-
-// rds/commands.go - using %w (wrapped, loses original format)
-return fmt.Errorf("failed to create volume: %w", err)
-```
-
-**Impact:** Inconsistent error messages in logs make parsing/alerting difficult; loses context in some paths
-
-**Fix for v0.7.1:**
-- Establish standard: Use `status.Errorf(codes.X, "operation failed: %w", err)` consistently
-- Standardize all internal errors to use `fmt.Errorf()` with `%w`
-- Create lint rule or script to enforce this pattern
+**Impact:** Consistent error wrapping now enables proper error chain inspection and context preservation throughout the codebase
 
 ---
 
 ### Logging Verbosity Inconsistency
 
-**Issue:** V() level usage inconsistent across modules; V(3) logs intermediate steps on every error path, creating noise.
+**Status:** RESOLVED (Phase 18)
 
-**Files:**
-- `pkg/driver/controller.go` - DeleteVolume logs 4 separate V(3) statements per operation
-- `pkg/rds/commands.go` - DeleteVolume logs volume existence check, then file cleanup steps
-- `pkg/mount/mount.go` - Mount recovery logs multiple V(3) statements per path
+**Resolution:** Audited all V(3) logs, moved intermediate steps to V(4). DeleteVolume reduced from 6 V(3) statements to 1 outcome log at V(2). V(3) eliminated from codebase.
 
-**Examples:**
-```go
-// controller.go DeleteVolume
-klog.V(3).Infof("Deleting volume %s (path=%s, size=%d bytes, nvme_export=%v)", volumeID, filePath, size, export)
-klog.V(3).Infof("Successfully removed disk slot for volume %s", slot)
-klog.V(3).Infof("Successfully deleted backing file for volume %s", filePath)
-// Plus 2+ more per operation
+**Original Issue:** V() level usage was inconsistent across modules; V(3) logged intermediate steps on every error path, creating excessive noise.
 
-// Result: Single operation produces 4-6 log lines at V(3) - excessive even for debug mode
-```
-
-**Impact:** With cluster verbosity at V(3), operational logs become 5-10x larger; makes troubleshooting harder, not easier
-
-**Fix for v0.7.1:**
-- Audit all V(3) logs - keep only those essential for troubleshooting
-- Move "intermediate step" logs to V(4) (detailed)
-- Keep V(3) for: errors, major phase transitions, idempotency checks only
-- DeleteVolume: Reduce from 6 V(3) statements to 2 (start and any error)
-- Target: 30-40% reduction in V(3) output
+**Impact:** Operational logs at V(2) now provide clean outcome-focused logging; V(4) available for detailed diagnostic traces when needed
 
 ---
 
 ### Duplication in Attachment Manager Logger
 
-**Issue:** `pkg/security/logger.go` also duplicates the switch pattern within `LogEvent()` itself (lines 49-69).
+**Status:** RESOLVED (Phase 21-01)
 
-**Files:** `pkg/security/logger.go` (lines 49-69)
+**Resolution:** Replaced switch statement in LogEvent() (lines 49-69) with severityMap table lookup. Reduced cyclomatic complexity from 5 to 1, eliminated 17 lines of duplicated switch logic.
 
-```go
-switch event.Severity {
-case SeverityInfo:
-	verbosity = 2
-	logFunc = func(args ...interface{}) {
-		klog.V(verbosity).Info(args...)
-	}
-case SeverityWarning:
-	verbosity = 1
-	logFunc = klog.Warning
-case SeverityError:
-	verbosity = 0
-	logFunc = klog.Error
-case SeverityCritical:
-	verbosity = 0
-	logFunc = klog.Error
-default:
-	verbosity = 2
-	logFunc = func(args ...interface{}) {
-		klog.V(verbosity).Info(args...)
-	}
-}
-```
+**Original Issue:** `pkg/security/logger.go` duplicated the switch pattern within `LogEvent()` for severity-to-verbosity mapping.
 
-**Impact:** Severity-to-klog mapping should be table-driven; if mapping changes, must update in two places
+**Impact:** Table-driven approach provides single source of truth for severity mappings; adding new severities now requires single map entry instead of multiple case statements
 
-**Fix for v0.7.1:**
-- Extract severity mapping to package-level map:
-  ```go
-  var severityToVerbosity = map[EventSeverity]klog.Level{
-      SeverityInfo: 2,
-      SeverityWarning: 1,
-      SeverityError: 0,
-      SeverityCritical: 0,
-  }
-  ```
-- Replace switch with table lookup
+---
+
+### Large Package Sizes
+
+**Status:** DEFERRED to v0.9.0
+
+**Issue:** pkg/driver (3552 lines), pkg/rds (1834 lines), pkg/nvme (1655 lines) exceed typical package thresholds.
+
+**Rationale for deferral:**
+- Packages have clear responsibilities aligned with CSI architecture (Controller, Node, Identity)
+- Splitting would increase import complexity without clear benefit
+- Current structure is well-tested with 65% coverage
+- Refactoring risk outweighs maintainability benefit at current scale
+
+**Review criteria:** Reconsider if:
+- Package exceeds 5000 lines
+- Adding new feature would blur responsibility boundaries
+- Test coverage drops due to package complexity
 
 ---
 
@@ -411,4 +321,4 @@ default:
 
 ---
 
-*Concerns audit: 2026-02-04*
+*Concerns audit: 2026-02-04 (Phase 21 code smell resolution)*
