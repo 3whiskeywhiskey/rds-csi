@@ -430,7 +430,7 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 				// 1. Device was already disconnected (idempotent unstage)
 				// 2. Connection was lost (device unreachable)
 				// In both cases, proceed with disconnect attempt (which will be a no-op or cleanup)
-				klog.V(3).Infof("Could not get device path for NQN %s: %v (device may already be disconnected, proceeding)", nqn, devErr)
+				klog.V(4).Infof("Could not get device path for NQN %s: %v (device may already be disconnected, proceeding)", nqn, devErr)
 			} else {
 				// Device path found - check if it's in use before disconnecting
 				result := nvme.CheckDeviceInUse(ctx, devicePath)

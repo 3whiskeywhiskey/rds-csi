@@ -131,7 +131,7 @@ func TestNewInternalError(t *testing.T) {
 		t.Errorf("Expected sanitized message %q, got %q", userMsg, err.Error())
 	}
 
-	if err.GetOriginal() != originalErr {
+	if !errors.Is(err.GetOriginal(), originalErr) {
 		t.Error("Original error not preserved")
 	}
 
@@ -426,7 +426,7 @@ func TestErrorUnwrapping(t *testing.T) {
 
 	// Unwrap should return the original wrapped error
 	unwrapped := errors.Unwrap(sanitizedErr)
-	if unwrapped != wrappedErr {
+	if !errors.Is(unwrapped, wrappedErr) {
 		t.Error("Expected Unwrap to return original wrapped error")
 	}
 }
@@ -476,6 +476,107 @@ func TestComplexSanitization(t *testing.T) {
 	for _, safe := range safeData {
 		if !strings.Contains(result, safe) {
 			t.Errorf("Result should contain %q, but got: %s", safe, result)
+		}
+	}
+}
+
+// TestWrapErrorPreservesChain verifies that WrapError preserves error chains
+// for errors.Is/As compatibility, which is essential for error handling with %w format verb
+func TestWrapErrorPreservesChain(t *testing.T) {
+	// Create a sentinel error
+	sentinel := errors.New("sentinel error")
+
+	// Wrap it using WrapError
+	wrapped := WrapError(sentinel, "context: %s", "test")
+
+	// Verify errors.Is still works - this is the critical test for %w preservation
+	if !errors.Is(wrapped, sentinel) {
+		t.Errorf("WrapError broke error chain: errors.Is returned false")
+	}
+
+	// Verify errors.As still works for SanitizedError type
+	var se *SanitizedError
+	if !errors.As(wrapped, &se) {
+		t.Errorf("WrapError should return SanitizedError type")
+	}
+
+	// Verify the chain is complete - GetOriginal() returns the wrapped error
+	// which itself contains the sentinel via %w
+	originalWrapped := se.GetOriginal()
+	if !errors.Is(originalWrapped, sentinel) {
+		t.Errorf("SanitizedError.GetOriginal() should preserve error chain to sentinel")
+	}
+
+	// Verify Unwrap also works correctly
+	unwrapped := errors.Unwrap(wrapped)
+	if !errors.Is(unwrapped, sentinel) {
+		t.Errorf("Unwrapped error should preserve chain to sentinel")
+	}
+}
+
+func TestSentinelErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		sentinel error
+		wantMsg  string
+	}{
+		{"ErrVolumeNotFound", ErrVolumeNotFound, "volume not found"},
+		{"ErrVolumeExists", ErrVolumeExists, "volume already exists"},
+		{"ErrNodeNotFound", ErrNodeNotFound, "node not found"},
+		{"ErrInvalidParameter", ErrInvalidParameter, "invalid parameter"},
+		{"ErrResourceExhausted", ErrResourceExhausted, "resource exhausted"},
+		{"ErrOperationTimeout", ErrOperationTimeout, "operation timeout"},
+		{"ErrDeviceNotFound", ErrDeviceNotFound, "device not found"},
+		{"ErrDeviceInUse", ErrDeviceInUse, "device in use"},
+		{"ErrMountFailed", ErrMountFailed, "mount failed"},
+		{"ErrUnmountFailed", ErrUnmountFailed, "unmount failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify error message
+			if tt.sentinel.Error() != tt.wantMsg {
+				t.Errorf("got %q, want %q", tt.sentinel.Error(), tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestSentinelErrorsWithWrapping(t *testing.T) {
+	// Test that wrapped sentinel errors can be detected with errors.Is
+	wrapped := fmt.Errorf("failed to create volume vol-123: %w", ErrResourceExhausted)
+
+	if !errors.Is(wrapped, ErrResourceExhausted) {
+		t.Error("errors.Is failed for wrapped ErrResourceExhausted")
+	}
+
+	// Test double wrapping
+	doubleWrapped := fmt.Errorf("controller error: %w", wrapped)
+	if !errors.Is(doubleWrapped, ErrResourceExhausted) {
+		t.Error("errors.Is failed for double-wrapped error")
+	}
+}
+
+func TestSentinelErrorsAreDistinct(t *testing.T) {
+	// Ensure sentinel errors are distinct from each other
+	sentinels := []error{
+		ErrVolumeNotFound,
+		ErrVolumeExists,
+		ErrNodeNotFound,
+		ErrInvalidParameter,
+		ErrResourceExhausted,
+		ErrOperationTimeout,
+		ErrDeviceNotFound,
+		ErrDeviceInUse,
+		ErrMountFailed,
+		ErrUnmountFailed,
+	}
+
+	for i, s1 := range sentinels {
+		for j, s2 := range sentinels {
+			if i != j && errors.Is(s1, s2) {
+				t.Errorf("sentinel errors should be distinct: %v and %v", s1, s2)
+			}
 		}
 	}
 }

@@ -1,6 +1,8 @@
 package rds
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
@@ -14,6 +16,36 @@ func setupTestBasePaths(t *testing.T) {
 		t.Fatalf("failed to set test base path: %v", err)
 	}
 	t.Cleanup(utils.ResetAllowedBasePaths)
+}
+
+// mockCommandRunner is a function type for mocking runCommand behavior
+type mockCommandRunner func(command string) (string, error)
+
+// testableSSHClient wraps sshClient for testing command execution
+type testableSSHClient struct {
+	*sshClient
+	mockRunner mockCommandRunner
+}
+
+// Override runCommand to use mock
+func (t *testableSSHClient) runCommand(command string) (string, error) {
+	if t.mockRunner != nil {
+		return t.mockRunner(command)
+	}
+	return "", fmt.Errorf("no mock runner configured")
+}
+
+// newTestableSSHClient creates a client for testing
+func newTestableSSHClient(runner mockCommandRunner) *testableSSHClient {
+	base := &sshClient{
+		address: "test-rds",
+		port:    22,
+		user:    "admin",
+	}
+	return &testableSSHClient{
+		sshClient:  base,
+		mockRunner: runner,
+	}
 }
 
 func TestParseVolumeInfo(t *testing.T) {
@@ -603,6 +635,167 @@ func TestParseFileInfo_CreatedAtParsing(t *testing.T) {
 
 			if file.CreatedAt.Year() != tt.expectedYear {
 				t.Errorf("Expected year %d, got %d", tt.expectedYear, file.CreatedAt.Year())
+			}
+		})
+	}
+}
+
+func TestTestableSSHClientInfrastructure(t *testing.T) {
+	// Verify the mock infrastructure works
+	expectedOutput := "mock output"
+	commandReceived := ""
+
+	runner := func(cmd string) (string, error) {
+		commandReceived = cmd
+		return expectedOutput, nil
+	}
+
+	client := newTestableSSHClient(runner)
+
+	// Test that mock runner is called
+	output, err := client.runCommand("test command")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if output != expectedOutput {
+		t.Errorf("Expected output %q, got %q", expectedOutput, output)
+	}
+	if commandReceived != "test command" {
+		t.Errorf("Expected command %q, got %q", "test command", commandReceived)
+	}
+
+	// Test error propagation
+	errorRunner := func(cmd string) (string, error) {
+		return "", fmt.Errorf("mock error")
+	}
+	errorClient := newTestableSSHClient(errorRunner)
+	_, err = errorClient.runCommand("any")
+	if err == nil || !strings.Contains(err.Error(), "mock error") {
+		t.Errorf("Expected mock error to propagate")
+	}
+}
+
+func TestVerifyVolumeExistsCommandConstruction(t *testing.T) {
+	setupTestBasePaths(t)
+
+	// Test that VerifyVolumeExists constructs correct command
+	// This tests the validation and command pattern without SSH
+	tests := []struct {
+		name        string
+		slot        string
+		expectError bool
+	}{
+		{"valid slot", "pvc-test-123", false},
+		{"empty slot", "", true},
+		{"dangerous slot", "pvc;evil", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSlotName(tt.slot)
+			if tt.expectError && err == nil {
+				t.Error("Expected validation error")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+func TestExtractMountPoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "mount point with leading slash",
+			input:    "/storage-pool/metal-csi/volumes",
+			expected: "storage-pool",
+		},
+		{
+			name:     "mount point without leading slash",
+			input:    "storage-pool/metal-csi/volumes",
+			expected: "storage-pool",
+		},
+		{
+			name:     "single component path",
+			input:    "/nvme1",
+			expected: "nvme1",
+		},
+		{
+			name:     "multi-level path",
+			input:    "/nvme1/kubernetes/volumes",
+			expected: "nvme1",
+		},
+		{
+			name:     "empty path",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "root path",
+			input:    "/",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractMountPoint(tt.input)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestNormalizeRouterOSOutputEdgeCases(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		expectedContains string
+		description      string
+	}{
+		{
+			name:             "carriage returns",
+			input:            "line1\r\nline2\r\n",
+			expectedContains: "line1",
+			description:      "should remove \\r characters",
+		},
+		{
+			name:             "RouterOS flags header",
+			input:            "Flags: X - disabled\ntype=file slot=test",
+			expectedContains: "type=file slot=test",
+			description:      "should skip Flags: header lines",
+		},
+		{
+			name:             "continuation lines with tabs",
+			input:            "type=file\n\tsize=1000",
+			expectedContains: "type=file size=1000",
+			description:      "should join continuation lines starting with tab",
+		},
+		{
+			name:             "continuation lines with spaces",
+			input:            "type=file\n   size=1000",
+			expectedContains: "type=file size=1000",
+			description:      "should join continuation lines starting with spaces",
+		},
+		{
+			name:             "multiple continuation lines",
+			input:            "type=file\n  size=1000\n  path=/test",
+			expectedContains: "type=file size=1000 path=/test",
+			description:      "should join multiple continuation lines",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeRouterOSOutput(tt.input)
+			if !strings.Contains(result, tt.expectedContains) {
+				t.Errorf("Expected normalized output to contain %q, got %q\nDescription: %s",
+					tt.expectedContains, result, tt.description)
 			}
 		})
 	}

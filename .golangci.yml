@@ -1,0 +1,88 @@
+# golangci-lint configuration for RDS CSI Driver
+# Run with: make lint (or golangci-lint run)
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  enable:
+    # Error handling linters
+    - errcheck      # Check for unchecked errors
+    - errorlint     # Enforce Go 1.13+ error patterns
+
+    # Complexity linters
+    - gocyclo       # Cyclomatic complexity per function
+    - cyclop        # Function and package complexity
+
+    # Code quality (already used)
+    - gofmt
+    - goimports
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  disable:
+    # Disabled intentionally
+    - wrapcheck     # Too strict for this codebase - many internal errors don't need wrapping
+
+linters-settings:
+  errcheck:
+    # Check for unchecked errors in type assertions
+    check-type-assertions: true
+    # Check for unchecked errors in blank assignments
+    check-blank: false
+    # Don't require checking Close() errors (common pattern)
+    exclude-functions:
+      - (io.Closer).Close
+      - (*os.File).Close
+
+  errorlint:
+    # Require %w for error wrapping in fmt.Errorf
+    errorf: true
+    # Suggest errors.Is instead of == comparison
+    comparison: true
+    # Suggest errors.As instead of type assertion
+    asserts: true
+
+  gocyclo:
+    # Threshold based on current baseline (max: 44 in RecordEvent)
+    # Set to 50 to allow existing code, catch new violations
+    # Target: Ratchet down to 30 by v0.8, 20 by v1.0
+    min-complexity: 50
+
+  cyclop:
+    # Match gocyclo threshold for consistency
+    max-complexity: 50
+    # Don't skip tests - they should also have reasonable complexity
+    skip-tests: false
+
+  goimports:
+    # Group local imports separately
+    local-prefixes: git.srvlab.io/whiskey/rds-csi-driver
+
+issues:
+  # Don't limit issues per linter
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Allow %v in test files (test error messages don't need chains)
+    - path: _test\.go
+      linters:
+        - errorlint
+      text: "non-wrapping format verb"
+
+    # Ignore errcheck in test files
+    - path: _test\.go
+      linters:
+        - errcheck
+
+    # Allow type assertions in test mocks
+    - path: test/mock/
+      linters:
+        - errorlint
+      text: "type assertion"

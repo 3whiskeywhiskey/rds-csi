@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockExecCommand creates a mock exec.Cmd for testing
@@ -30,6 +32,16 @@ func mockExecCommand(stdout, stderr string, exitCode int) func(string, ...string
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
+	}
+
+	// Suppress any coverage warnings or other test infrastructure output
+	// by reopening stderr to /dev/null if we're not explicitly writing to it
+	if os.Getenv("STDERR") == "" {
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err == nil {
+			os.Stderr = devNull
+			defer devNull.Close()
+		}
 	}
 
 	// Output mock data
@@ -723,6 +735,281 @@ func TestMakeFile(t *testing.T) {
 
 			if !tt.expectError && tt.validate != nil {
 				tt.validate(t, path)
+			}
+		})
+	}
+}
+
+// mockMultiExecCommand returns different results for sequential calls
+// This is needed to mock complex operations like ForceUnmount that make multiple exec calls
+func mockMultiExecCommand(results []struct {
+	stdout, stderr string
+	exitCode       int
+}) func(string, ...string) *exec.Cmd {
+	callCount := 0
+	return func(command string, args ...string) *exec.Cmd {
+		if callCount >= len(results) {
+			// Repeat last result if we run out
+			callCount = len(results) - 1
+		}
+		r := results[callCount]
+		callCount++
+		return mockExecCommand(r.stdout, r.stderr, r.exitCode)(command, args...)
+	}
+}
+
+func TestIsMountInUse(t *testing.T) {
+	// IsMountInUse requires /proc filesystem (Linux-specific)
+	if runtime.GOOS != "linux" {
+		t.Skipf("IsMountInUse requires Linux /proc filesystem, skipping on %s", runtime.GOOS)
+	}
+
+	tests := []struct {
+		name          string
+		path          string
+		expectInUse   bool
+		expectPIDsLen int
+		expectError   bool
+	}{
+		{
+			name:          "mount not in use - no processes",
+			path:          t.TempDir(),
+			expectInUse:   false,
+			expectPIDsLen: 0,
+			expectError:   false,
+		},
+		{
+			name:          "nonexistent path returns not in use",
+			path:          "/nonexistent-mount-path-12345",
+			expectInUse:   false,
+			expectPIDsLen: 0,
+			expectError:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewMounter()
+
+			inUse, pids, err := m.IsMountInUse(tt.path)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if inUse != tt.expectInUse {
+				t.Errorf("Expected inUse %v, got %v", tt.expectInUse, inUse)
+			}
+			if len(pids) != tt.expectPIDsLen {
+				t.Errorf("Expected %d PIDs, got %d: %v", tt.expectPIDsLen, len(pids), pids)
+			}
+		})
+	}
+}
+
+func TestForceUnmount(t *testing.T) {
+	tests := []struct {
+		name        string
+		target      string
+		setupTarget bool
+		mockResults []struct {
+			stdout, stderr string
+			exitCode       int
+		}
+		expectError bool
+		errContains string
+	}{
+		{
+			name:        "normal unmount succeeds immediately",
+			target:      "/mnt/test",
+			setupTarget: true,
+			mockResults: []struct {
+				stdout, stderr string
+				exitCode       int
+			}{
+				// findmnt check - is mounted
+				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
+				// umount succeeds
+				{stdout: "", stderr: "", exitCode: 0},
+			},
+			expectError: false,
+		},
+		{
+			name:        "target not mounted - succeeds idempotently",
+			target:      "/mnt/test",
+			setupTarget: true,
+			mockResults: []struct {
+				stdout, stderr string
+				exitCode       int
+			}{
+				// findmnt check - not mounted
+				{stdout: "", stderr: "", exitCode: 1},
+			},
+			expectError: false,
+		},
+		{
+			name:        "unmount fails then lazy unmount succeeds",
+			target:      "/mnt/test",
+			setupTarget: true,
+			mockResults: []struct {
+				stdout, stderr string
+				exitCode       int
+			}{
+				// First unmount attempt: findmnt check - is mounted
+				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
+				// umount fails (device busy)
+				{stdout: "", stderr: "target is busy", exitCode: 1},
+				// Poll check: findmnt - still mounted
+				{stdout: "/mnt/test\n", stderr: "", exitCode: 0},
+				// After timeout, no fuser output (not in use - note: IsMountInUse doesn't use fuser in real impl)
+				// Lazy unmount succeeds
+				{stdout: "", stderr: "", exitCode: 0},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var target string
+			if tt.setupTarget {
+				target = t.TempDir()
+			} else {
+				target = tt.target
+			}
+
+			m := &mounter{
+				execCommand: mockMultiExecCommand(tt.mockResults),
+			}
+
+			err := m.ForceUnmount(target, 100*time.Millisecond)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if tt.expectError && err != nil && tt.errContains != "" {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error to contain %q, got: %v", tt.errContains, err)
+				}
+			}
+		})
+	}
+}
+
+func TestResizeFilesystem(t *testing.T) {
+	tests := []struct {
+		name        string
+		device      string
+		volumePath  string
+		fsType      string // What blkid should return
+		blkidExit   int
+		resizeExit  int
+		expectError bool
+		errContains string
+	}{
+		{
+			name:        "ext4 resize success",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "ext4",
+			blkidExit:   0,
+			resizeExit:  0,
+			expectError: false,
+		},
+		{
+			name:        "xfs resize success",
+			device:      "/dev/nvme0n2",
+			volumePath:  "/mnt/volume",
+			fsType:      "xfs",
+			blkidExit:   0,
+			resizeExit:  0,
+			expectError: false,
+		},
+		{
+			name:        "ext4 resize fails",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "ext4",
+			blkidExit:   0,
+			resizeExit:  1,
+			expectError: true,
+			errContains: "resize failed",
+		},
+		{
+			name:        "xfs resize fails",
+			device:      "/dev/nvme0n2",
+			volumePath:  "/mnt/volume",
+			fsType:      "xfs",
+			blkidExit:   0,
+			resizeExit:  1,
+			expectError: true,
+			errContains: "resize failed",
+		},
+		{
+			name:        "unsupported filesystem",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "ntfs",
+			blkidExit:   0,
+			resizeExit:  0,
+			expectError: true,
+			errContains: "unsupported filesystem type",
+		},
+		{
+			name:        "blkid fails - device not found",
+			device:      "/dev/nonexistent",
+			volumePath:  "/mnt/volume",
+			fsType:      "",
+			blkidExit:   1,
+			resizeExit:  0,
+			expectError: true,
+			errContains: "failed to detect filesystem type",
+		},
+		{
+			name:        "blkid returns empty - no filesystem",
+			device:      "/dev/nvme0n1",
+			volumePath:  "/mnt/volume",
+			fsType:      "",
+			blkidExit:   0,
+			resizeExit:  0,
+			expectError: true,
+			errContains: "could not detect filesystem type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create command-aware mock that returns different results based on command
+			m := &mounter{
+				execCommand: func(name string, args ...string) *exec.Cmd {
+					switch name {
+					case "blkid":
+						return mockExecCommand(tt.fsType, "", tt.blkidExit)(name, args...)
+					case "resize2fs", "xfs_growfs":
+						return mockExecCommand("", "", tt.resizeExit)(name, args...)
+					default:
+						return mockExecCommand("", "", 0)(name, args...)
+					}
+				},
+			}
+
+			err := m.ResizeFilesystem(tt.device, tt.volumePath)
+
+			if tt.expectError && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if tt.expectError && err != nil && tt.errContains != "" {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error to contain %q, got: %v", tt.errContains, err)
+				}
 			}
 		})
 	}

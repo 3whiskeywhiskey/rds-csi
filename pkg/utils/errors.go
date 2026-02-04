@@ -1,12 +1,47 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"k8s.io/klog/v2"
+)
+
+// Sentinel errors for common conditions.
+// Use errors.Is() to check for these rather than string matching.
+var (
+	// ErrVolumeNotFound indicates the requested volume does not exist
+	ErrVolumeNotFound = errors.New("volume not found")
+
+	// ErrVolumeExists indicates the volume already exists
+	ErrVolumeExists = errors.New("volume already exists")
+
+	// ErrNodeNotFound indicates the requested node does not exist
+	ErrNodeNotFound = errors.New("node not found")
+
+	// ErrInvalidParameter indicates an invalid parameter was provided
+	ErrInvalidParameter = errors.New("invalid parameter")
+
+	// ErrResourceExhausted indicates insufficient storage capacity
+	ErrResourceExhausted = errors.New("resource exhausted")
+
+	// ErrOperationTimeout indicates an operation timed out
+	ErrOperationTimeout = errors.New("operation timeout")
+
+	// ErrDeviceNotFound indicates NVMe device was not found
+	ErrDeviceNotFound = errors.New("device not found")
+
+	// ErrDeviceInUse indicates the device is currently in use
+	ErrDeviceInUse = errors.New("device in use")
+
+	// ErrMountFailed indicates a mount operation failed
+	ErrMountFailed = errors.New("mount failed")
+
+	// ErrUnmountFailed indicates an unmount operation failed
+	ErrUnmountFailed = errors.New("unmount failed")
 )
 
 // ErrorType classifies errors for sanitization purposes
@@ -271,7 +306,8 @@ func SanitizeError(err error) error {
 	}
 
 	// If it's already a SanitizedError, return as-is
-	if _, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return err
 	}
 
@@ -310,7 +346,8 @@ func WrapError(err error, format string, args ...interface{}) error {
 
 	// Get original error
 	originalErr := err
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		originalErr = se.GetOriginal()
 	}
 
@@ -334,7 +371,8 @@ func WrapError(err error, format string, args ...interface{}) error {
 
 // IsInternalError checks if an error is an internal error
 func IsInternalError(err error) bool {
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.errorType == ErrorTypeInternal
 	}
 	return false
@@ -342,7 +380,8 @@ func IsInternalError(err error) bool {
 
 // IsUserError checks if an error is a user-facing error
 func IsUserError(err error) bool {
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.errorType == ErrorTypeUser
 	}
 	return false
@@ -350,7 +389,8 @@ func IsUserError(err error) bool {
 
 // IsValidationError checks if an error is a validation error
 func IsValidationError(err error) bool {
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.errorType == ErrorTypeValidation
 	}
 	return false
@@ -362,7 +402,8 @@ func LogErrorDetails(err error) {
 		return
 	}
 
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		se.Log()
 	} else {
 		klog.Errorf("Error: %v", err)
@@ -375,10 +416,44 @@ func GetSanitizedMessage(err error) string {
 		return ""
 	}
 
-	if se, ok := err.(*SanitizedError); ok {
+	var se *SanitizedError
+	if errors.As(err, &se) {
 		return se.sanitizedMsg
 	}
 
 	// Sanitize unsanitized errors
 	return SanitizeErrorMessage(err.Error())
+}
+
+// WrapVolumeError wraps a sentinel error with volume-specific context.
+// This preserves the error chain so errors.Is() still works.
+func WrapVolumeError(sentinel error, volumeID, details string) error {
+	if details != "" {
+		return fmt.Errorf("volume %s: %s: %w", volumeID, details, sentinel)
+	}
+	return fmt.Errorf("volume %s: %w", volumeID, sentinel)
+}
+
+// WrapNodeError wraps a sentinel error with node-specific context.
+func WrapNodeError(sentinel error, nodeID, details string) error {
+	if details != "" {
+		return fmt.Errorf("node %s: %s: %w", nodeID, details, sentinel)
+	}
+	return fmt.Errorf("node %s: %w", nodeID, sentinel)
+}
+
+// WrapDeviceError wraps a sentinel error with device-specific context.
+func WrapDeviceError(sentinel error, devicePath, details string) error {
+	if details != "" {
+		return fmt.Errorf("device %s: %s: %w", devicePath, details, sentinel)
+	}
+	return fmt.Errorf("device %s: %w", devicePath, sentinel)
+}
+
+// WrapMountError wraps a sentinel error with mount-specific context.
+func WrapMountError(sentinel error, target, details string) error {
+	if details != "" {
+		return fmt.Errorf("mount %s: %s: %w", target, details, sentinel)
+	}
+	return fmt.Errorf("mount %s: %w", target, sentinel)
 }

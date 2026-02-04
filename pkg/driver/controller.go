@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -51,7 +52,7 @@ func NewControllerServer(driver *Driver) *ControllerServer {
 
 // CreateVolume provisions a new volume on RDS
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	klog.V(2).Infof("CreateVolume called with name: %s", req.GetName())
+	klog.V(4).Infof("CreateVolume CSI call for %s", req.GetName())
 
 	// Validate request
 	if req.GetName() == "" {
@@ -95,13 +96,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err := utils.ValidateVolumeID(volumeID); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume name format: %v", err)
 	}
-	klog.V(2).Infof("Using volume ID: %s (from volume name: %s)", volumeID, req.GetName())
+	klog.V(4).Infof("Using volume ID: %s (from volume name: %s)", volumeID, req.GetName())
 
 	// Check if volume already exists (idempotency)
 	existingVolume, err := cs.driver.rdsClient.GetVolume(volumeID)
 	if err == nil {
 		// Volume already exists, verify it matches requirements
-		klog.V(2).Infof("Volume %s already exists, returning existing volume", volumeID)
+		klog.V(2).Infof("Volume %s already exists (idempotent)", volumeID)
 
 		// Get parameters from StorageClass for response context
 		params := req.GetParameters()
@@ -173,7 +174,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// Create volume on RDS
-	klog.V(2).Infof("Creating volume %s on RDS (size: %d bytes, path: %s, nqn: %s)", volumeID, requiredBytes, filePath, nqn)
+	klog.V(4).Infof("Creating volume %s on RDS (size: %d bytes, path: %s, nqn: %s)", volumeID, requiredBytes, filePath, nqn)
 
 	// Log volume create request
 	secLogger := security.GetLogger()
@@ -193,13 +194,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeFailure, err, time.Since(startTime))
 
 		// Check if this is a capacity error
-		if containsString(err.Error(), "not enough space") {
+		if stderrors.Is(err, utils.ErrResourceExhausted) {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS: %v", err)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to create volume on RDS: %v", err)
 	}
 
-	klog.V(2).Infof("Successfully created volume %s on RDS", volumeID)
+	// RDS layer already logged "Created volume X" at V(2) - no duplicate needed
+	klog.V(4).Infof("CreateVolume CSI call completed for %s", volumeID)
 
 	// Log volume create success
 	secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeSuccess, nil, time.Since(startTime))
@@ -227,7 +229,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 // DeleteVolume removes a volume from RDS
 func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
-	klog.V(2).Infof("DeleteVolume called for volume: %s", volumeID)
+	klog.V(4).Infof("DeleteVolume CSI call for %s", volumeID)
 
 	// Validate request
 	if volumeID == "" {
@@ -244,12 +246,12 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	volume, err := cs.driver.rdsClient.GetVolume(volumeID)
 	if err != nil {
 		// If volume doesn't exist, deletion is idempotent - return success
-		klog.V(3).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
+		klog.V(4).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
 	// Log volume details for audit trail
-	klog.V(3).Infof("Deleting volume %s (path=%s, size=%d bytes, nvme_export=%v)",
+	klog.V(4).Infof("Deleting volume %s (path=%s, size=%d bytes, nvme_export=%v)",
 		volumeID, volume.FilePath, volume.FileSizeBytes, volume.NVMETCPExport)
 
 	// Log volume delete request
@@ -267,7 +269,8 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.Internal, "failed to delete volume: %v", err)
 	}
 
-	klog.V(2).Infof("Successfully deleted volume %s", volumeID)
+	// RDS layer already logged "Deleted volume X" at V(2) - no duplicate needed
+	klog.V(4).Infof("DeleteVolume CSI call completed for %s", volumeID)
 
 	// Log volume delete success
 	secLogger.LogVolumeDelete(volumeID, "", security.OutcomeSuccess, nil, time.Since(startTime))
@@ -385,7 +388,7 @@ func (cs *ControllerServer) postAttachmentConflictEvent(ctx context.Context, req
 	pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
 
 	if pvcNamespace == "" || pvcName == "" {
-		klog.V(3).Infof("Cannot post attachment conflict event: PVC info not in volume context")
+		klog.V(4).Infof("Cannot post attachment conflict event: PVC info not in volume context")
 		return
 	}
 
@@ -408,7 +411,7 @@ func (cs *ControllerServer) postVolumeAttachedEvent(ctx context.Context, req *cs
 	pvcName := volCtx["csi.storage.k8s.io/pvc/name"]
 
 	if pvcNamespace == "" || pvcName == "" {
-		klog.V(3).Infof("Cannot post volume attached event: PVC info not in volume context")
+		klog.V(4).Infof("Cannot post volume attached event: PVC info not in volume context")
 		return
 	}
 
@@ -433,13 +436,13 @@ func (cs *ControllerServer) postVolumeDetachedEvent(ctx context.Context, req *cs
 	// We need to look up the PV to get the claimRef
 	pv, err := cs.driver.k8sClient.CoreV1().PersistentVolumes().Get(ctx, req.GetVolumeId(), metav1.GetOptions{})
 	if err != nil {
-		klog.V(3).Infof("Cannot get PV %s for detached event: %v", req.GetVolumeId(), err)
+		klog.V(4).Infof("Cannot get PV %s for detached event: %v", req.GetVolumeId(), err)
 		return
 	}
 
 	claimRef := pv.Spec.ClaimRef
 	if claimRef == nil {
-		klog.V(3).Infof("PV %s has no claimRef for detached event", req.GetVolumeId())
+		klog.V(4).Infof("PV %s has no claimRef for detached event", req.GetVolumeId())
 		return
 	}
 
@@ -492,7 +495,7 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			vmiKey, unlock := vmiGrouper.LockVMI(ctx, pvcNamespace, pvcName)
 			if vmiKey != "" {
 				defer unlock()
-				klog.V(3).Infof("VMI serialization active for volume %s (VMI: %s)", volumeID, vmiKey)
+				klog.V(4).Infof("VMI serialization active for volume %s (VMI: %s)", volumeID, vmiKey)
 			}
 		}
 	}
@@ -507,7 +510,7 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	am := cs.driver.GetAttachmentManager()
 	if am == nil {
 		// No attachment manager = skip tracking (single-node scenario or disabled)
-		klog.V(3).Infof("Attachment manager not available, skipping tracking for volume %s", volumeID)
+		klog.V(4).Infof("Attachment manager not available, skipping tracking for volume %s", volumeID)
 		return &csi.ControllerPublishVolumeResponse{
 			PublishContext: cs.buildPublishContext(volume, req.GetVolumeContext()),
 		}, nil
@@ -732,7 +735,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	am := cs.driver.GetAttachmentManager()
 	if am == nil {
 		// No attachment manager = nothing to untrack
-		klog.V(3).Infof("Attachment manager not available, skipping untrack for volume %s", volumeID)
+		klog.V(4).Infof("Attachment manager not available, skipping untrack for volume %s", volumeID)
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
@@ -794,7 +797,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 					}
 				}
 			} else {
-				klog.V(3).Infof("Could not get PVC for migration completed event: %v", err)
+				klog.V(4).Infof("Could not get PVC for migration completed event: %v", err)
 			}
 		}
 	}
@@ -821,7 +824,7 @@ func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 // ControllerExpandVolume expands a volume on the backend storage
 func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
-	klog.V(2).Infof("ControllerExpandVolume called for volume: %s", volumeID)
+	klog.V(4).Infof("ControllerExpandVolume CSI call for %s", volumeID)
 
 	// Validate request
 	if volumeID == "" {
@@ -861,7 +864,7 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 
 	// Check if expansion is needed
 	if existingVolume.FileSizeBytes >= requiredBytes {
-		klog.V(2).Infof("Volume %s already at or above requested size (%d >= %d), no expansion needed",
+		klog.V(4).Infof("Volume %s already at or above requested size (%d >= %d), no expansion needed",
 			volumeID, existingVolume.FileSizeBytes, requiredBytes)
 		return &csi.ControllerExpandVolumeResponse{
 			CapacityBytes:         existingVolume.FileSizeBytes,
@@ -870,17 +873,18 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	}
 
 	// Resize volume on RDS
-	klog.V(2).Infof("Expanding volume %s from %d to %d bytes", volumeID, existingVolume.FileSizeBytes, requiredBytes)
+	klog.V(4).Infof("Expanding volume %s from %d to %d bytes", volumeID, existingVolume.FileSizeBytes, requiredBytes)
 
 	if err := cs.driver.rdsClient.ResizeVolume(volumeID, requiredBytes); err != nil {
 		// Check if this is a capacity error
-		if containsString(err.Error(), "not enough space") {
+		if stderrors.Is(err, utils.ErrResourceExhausted) {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS for expansion: %v", err)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to resize volume on RDS: %v", err)
 	}
 
-	klog.V(2).Infof("Successfully expanded volume %s on RDS to %d bytes", volumeID, requiredBytes)
+	// RDS layer already logged "Resized volume X" at V(2) - no duplicate needed
+	klog.V(4).Infof("ControllerExpandVolume CSI call completed for %s", volumeID)
 
 	// Return response indicating node expansion is required to resize the filesystem
 	return &csi.ControllerExpandVolumeResponse{
@@ -983,19 +987,4 @@ func (cs *ControllerServer) getNVMEAddress(params map[string]string) string {
 	}
 	// Fall back to RDS address if nvmeAddress not specified
 	return cs.getRDSAddress(params)
-}
-
-// containsString checks if a string contains a substring
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && indexString(s, substr) >= 0)
-}
-
-// indexString finds the index of substr in s
-func indexString(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }

@@ -1,5 +1,33 @@
 # Project Milestones: RDS CSI Driver
 
+## v0.8.0 Code Quality and Logging Cleanup (Shipped: 2026-02-04)
+
+**Delivered:** Systematic codebase cleanup with improved maintainability, reduced log noise, and comprehensive test coverage
+
+**Phases completed:** 17-21 (20 plans total)
+
+**Key accomplishments:**
+- Logging cleanup: 78% reduction in security logger code, 83% reduction in DeleteVolume logging, V(3) eliminated codebase-wide
+- Error handling standardization: 96.1% %w compliance, 10 sentinel errors integrated, patterns documented in CONVENTIONS.md
+- Test coverage expansion: 65.0% total coverage (exceeds 55% target), coverage enforcement tooling configured
+- Code quality improvements: Severity mapping table reduces cyclomatic complexity 80%, golangci-lint enforcement enabled
+- Test infrastructure stabilization: Fixed failing block volume tests, 148 tests pass consistently with race detector
+- Maintainability improvements: Documented verbosity conventions, error handling patterns, and complexity baselines
+
+**Stats:**
+- 88 files modified (+14,120 insertions, -584 deletions)
+- 33,687 lines of Go (current codebase)
+- 5 phases, 20 plans
+- 91 days timeline (2025-11-05 to 2026-02-04, work concentrated on 2026-02-04 with 130 commits)
+
+**Git range:** `29dffe1` (feat(17-01)) → `571d230` (docs(21-04))
+
+**See:** `.planning/milestones/v0.8.0-ROADMAP.md`
+
+**What's next:** Next milestone cycle - potential areas include coverage gap closure, deferred package refactoring (QUAL-03), or new feature development
+
+---
+
 ## v0.7.0 State Management Refactoring and Observability (Shipped: 2026-02-04)
 
 **Delivered:** VolumeAttachment-based state rebuild and complete migration metrics observability

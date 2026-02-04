@@ -228,7 +228,7 @@ func TestPoolMaxSize(t *testing.T) {
 
 	// Try to get one more - should fail
 	_, err = pool.Get(ctx)
-	if err != ErrPoolExhausted {
+	if !errors.Is(err, ErrPoolExhausted) {
 		t.Errorf("Expected ErrPoolExhausted, got: %v", err)
 	}
 
@@ -332,7 +332,7 @@ func TestPoolCircuitBreaker(t *testing.T) {
 
 	// Next request should be rejected by circuit breaker
 	_, err = pool.Get(ctx)
-	if err != ErrCircuitOpen {
+	if !errors.Is(err, ErrCircuitOpen) {
 		t.Errorf("Expected ErrCircuitOpen, got: %v", err)
 	}
 
@@ -379,7 +379,7 @@ func TestPoolConcurrency(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
 				client, err := pool.Get(ctx)
-				if err != nil && err != ErrPoolExhausted {
+				if err != nil && !errors.Is(err, ErrPoolExhausted) {
 					t.Errorf("Failed to get connection: %v", err)
 					return
 				}
@@ -445,7 +445,7 @@ func TestPoolClose(t *testing.T) {
 
 	// Try to get connection from closed pool
 	_, err = pool.Get(ctx)
-	if err != ErrPoolClosed {
+	if !errors.Is(err, ErrPoolClosed) {
 		t.Errorf("Expected ErrPoolClosed, got: %v", err)
 	}
 }

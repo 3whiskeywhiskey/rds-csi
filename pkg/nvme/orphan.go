@@ -44,7 +44,7 @@ func (oc *OrphanCleaner) CleanupOrphanedConnections(ctx context.Context) error {
 		return fmt.Errorf("failed to list connected subsystems: %w", err)
 	}
 
-	klog.V(3).Infof("Found %d connected NVMe subsystems", len(nqns))
+	klog.V(4).Infof("Found %d connected NVMe subsystems", len(nqns))
 
 	orphanCount := 0
 	for _, nqn := range nqns {

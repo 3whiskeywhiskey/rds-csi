@@ -172,13 +172,13 @@ func (r *OrphanReconciler) reconcile(ctx context.Context) error {
 
 	// Build a map of active volume IDs from Kubernetes PVs
 	activeVolumeIDs := make(map[string]bool)
-	klog.V(3).Infof("Scanning %d PersistentVolumes in Kubernetes", len(pvList.Items))
+	klog.V(4).Infof("Scanning %d PersistentVolumes in Kubernetes", len(pvList.Items))
 	for _, pv := range pvList.Items {
 		// Only consider PVs from this CSI driver
 		if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == "rds.csi.srvlab.io" {
 			volumeID := pv.Spec.CSI.VolumeHandle
 			activeVolumeIDs[volumeID] = true
-			klog.V(3).Infof("  Found active PV: %s → VolumeHandle=%s, Phase=%s, ClaimRef=%s/%s",
+			klog.V(4).Infof("  Found active PV: %s → VolumeHandle=%s, Phase=%s, ClaimRef=%s/%s",
 				pv.Name, volumeID, pv.Status.Phase,
 				getNamespace(pv.Spec.ClaimRef), getName(pv.Spec.ClaimRef))
 		}
@@ -190,7 +190,7 @@ func (r *OrphanReconciler) reconcile(ctx context.Context) error {
 	for _, vol := range rdsVolumes {
 		if strings.HasPrefix(vol.Slot, VolumeIDPrefix) {
 			hasActivePV := activeVolumeIDs[vol.Slot]
-			klog.V(3).Infof("  RDS volume: %s (size=%d bytes, path=%s, hasActivePV=%v)",
+			klog.V(4).Infof("  RDS volume: %s (size=%d bytes, path=%s, hasActivePV=%v)",
 				vol.Slot, vol.FileSizeBytes, vol.FilePath, hasActivePV)
 		}
 	}
@@ -218,7 +218,7 @@ func (r *OrphanReconciler) reconcile(ctx context.Context) error {
 func (r *OrphanReconciler) reconcileOrphanedDisks(rdsVolumes []rds.VolumeInfo, activeVolumeIDs map[string]bool) []OrphanedVolume {
 	orphans := []OrphanedVolume{}
 
-	klog.V(3).Infof("Checking %d RDS volumes for orphans (CSI-managed volumes must start with '%s')", len(rdsVolumes), VolumeIDPrefix)
+	klog.V(4).Infof("Checking %d RDS volumes for orphans (CSI-managed volumes must start with '%s')", len(rdsVolumes), VolumeIDPrefix)
 
 	for _, vol := range rdsVolumes {
 		// Skip volumes that don't match our CSI-managed pattern
@@ -249,7 +249,7 @@ func (r *OrphanReconciler) reconcileOrphanedDisks(rdsVolumes []rds.VolumeInfo, a
 	}
 
 	if len(orphans) == 0 {
-		klog.V(2).Info("No orphaned disk objects found")
+		klog.V(4).Info("No orphaned disk objects found")
 		return orphans
 	}
 
@@ -259,7 +259,7 @@ func (r *OrphanReconciler) reconcileOrphanedDisks(rdsVolumes []rds.VolumeInfo, a
 		age := time.Since(orphan.CreatedAt)
 
 		if age < r.config.GracePeriod {
-			klog.V(3).Infof("Orphaned volume %s is too young (age=%v, grace=%v), skipping",
+			klog.V(4).Infof("Orphaned volume %s is too young (age=%v, grace=%v), skipping",
 				orphan.VolumeID, age, r.config.GracePeriod)
 			continue
 		}
@@ -286,7 +286,7 @@ func (r *OrphanReconciler) reconcileOrphanedDisks(rdsVolumes []rds.VolumeInfo, a
 
 // reconcileOrphanedFiles identifies orphaned files (files without disk objects AND without PVs)
 func (r *OrphanReconciler) reconcileOrphanedFiles(rdsVolumes []rds.VolumeInfo, activeVolumeIDs map[string]bool) ([]OrphanedFile, error) {
-	klog.V(3).Infof("Checking for orphaned files in %s", r.config.BasePath)
+	klog.V(4).Infof("Checking for orphaned files in %s", r.config.BasePath)
 
 	// Get all files in the base path
 	files, err := r.config.RDSClient.ListFiles(r.config.BasePath)
@@ -338,7 +338,7 @@ func (r *OrphanReconciler) reconcileOrphanedFiles(rdsVolumes []rds.VolumeInfo, a
 	}
 
 	if len(orphans) == 0 {
-		klog.V(2).Info("No orphaned files found")
+		klog.V(4).Info("No orphaned files found")
 		return orphans, nil
 	}
 

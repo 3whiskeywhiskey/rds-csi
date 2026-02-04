@@ -2,15 +2,18 @@ package rds
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/security"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 // sshClient implements RDSClient using SSH protocol to connect to RouterOS
@@ -186,7 +189,8 @@ func (c *sshClient) runCommand(command string) (string, error) {
 	// Run command
 	if err := session.Run(command); err != nil {
 		// Check if it's an exit error (command failed)
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+		var exitErr *ssh.ExitError
+		if errors.As(err, &exitErr) {
 			return stdout.String(), fmt.Errorf("command failed (exit %d): %s", exitErr.ExitStatus(), stderr.String())
 		}
 		return "", fmt.Errorf("failed to run command: %w", err)
@@ -227,6 +231,11 @@ func (c *sshClient) runCommandWithRetry(command string, maxRetries int) (string,
 		// Check if error is retryable
 		if !isRetryableError(err) {
 			klog.V(4).Infof("Non-retryable error: %v", err)
+			// Wrap with sentinel if it's a known error type
+			errStr := lastErr.Error()
+			if strings.Contains(errStr, "not enough space") {
+				return "", fmt.Errorf("%w: %s", utils.ErrResourceExhausted, errStr)
+			}
 			return "", lastErr
 		}
 
@@ -243,12 +252,13 @@ func isRetryableError(err error) bool {
 	}
 
 	// Network errors are retryable
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 
 	// EOF and connection reset errors are retryable
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return true
 	}
 

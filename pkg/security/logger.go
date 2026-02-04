@@ -37,36 +37,32 @@ func NewLogger() *Logger {
 	}
 }
 
+// severityMapping defines how a severity level maps to klog behavior
+type severityMapping struct {
+	verbosity klog.Level
+	logFunc   func(args ...interface{})
+}
+
+// severityMap maps EventSeverity to klog verbosity and logging function
+// This is a table-driven replacement for the switch in LogEvent()
+var severityMap = map[EventSeverity]severityMapping{
+	SeverityInfo:     {verbosity: 2, logFunc: func(args ...interface{}) { klog.V(2).Info(args...) }},
+	SeverityWarning:  {verbosity: 1, logFunc: klog.Warning},
+	SeverityError:    {verbosity: 0, logFunc: klog.Error},
+	SeverityCritical: {verbosity: 0, logFunc: klog.Error},
+}
+
 // LogEvent logs a security event with structured logging
 func (l *Logger) LogEvent(event *SecurityEvent) {
 	// Record in metrics
 	l.metrics.RecordEvent(event)
 
-	// Determine klog verbosity and logging function based on severity
-	var logFunc func(args ...interface{})
-	var verbosity klog.Level
-
-	switch event.Severity {
-	case SeverityInfo:
-		verbosity = 2
-		logFunc = func(args ...interface{}) {
-			klog.V(verbosity).Info(args...)
-		}
-	case SeverityWarning:
-		verbosity = 1
-		logFunc = klog.Warning
-	case SeverityError:
-		verbosity = 0
-		logFunc = klog.Error
-	case SeverityCritical:
-		verbosity = 0
-		logFunc = klog.Error
-	default:
-		verbosity = 2
-		logFunc = func(args ...interface{}) {
-			klog.V(verbosity).Info(args...)
-		}
+	// Look up severity mapping (default to Info if unknown)
+	mapping, ok := severityMap[event.Severity]
+	if !ok {
+		mapping = severityMap[SeverityInfo]
 	}
+	logFunc := mapping.logFunc
 
 	// Build structured log message
 	logMsg := l.formatLogMessage(event)
@@ -217,277 +213,183 @@ func (l *Logger) LogSSHHostKeyMismatch(address, expectedFingerprint, actualFinge
 	l.LogEvent(event)
 }
 
-// LogVolumeCreate logs volume creation events
-func (l *Logger) LogVolumeCreate(volumeID, volumeName string, outcome EventOutcome, err error, duration time.Duration) {
+// OperationLogConfig defines the configuration for a logging operation
+type OperationLogConfig struct {
+	Operation   string
+	Category    EventCategory
+	SuccessType EventType
+	FailureType EventType
+	RequestType EventType
+	SuccessSev  EventSeverity
+	FailureSev  EventSeverity
+	SuccessMsg  string
+	FailureMsg  string
+	RequestMsg  string
+}
+
+// operationConfigs defines the logging configuration for all operations
+var operationConfigs = map[string]OperationLogConfig{
+	"VolumeCreate":    {Operation: "CreateVolume", Category: CategoryVolumeOperation, SuccessType: EventVolumeCreateSuccess, FailureType: EventVolumeCreateFailure, RequestType: EventVolumeCreateRequest, SuccessSev: SeverityInfo, FailureSev: SeverityError, SuccessMsg: "Volume created successfully", FailureMsg: "Volume creation failed", RequestMsg: "Volume creation requested"},
+	"VolumeDelete":    {Operation: "DeleteVolume", Category: CategoryVolumeOperation, SuccessType: EventVolumeDeleteSuccess, FailureType: EventVolumeDeleteFailure, RequestType: EventVolumeDeleteRequest, SuccessSev: SeverityInfo, FailureSev: SeverityWarning, SuccessMsg: "Volume deleted successfully", FailureMsg: "Volume deletion failed", RequestMsg: "Volume deletion requested"},
+	"VolumeStage":     {Operation: "NodeStageVolume", Category: CategoryVolumeOperation, SuccessType: EventVolumeStageSuccess, FailureType: EventVolumeStageFailure, RequestType: EventVolumeStageRequest, SuccessSev: SeverityInfo, FailureSev: SeverityError, SuccessMsg: "Volume staged successfully", FailureMsg: "Volume staging failed", RequestMsg: "Volume staging requested"},
+	"VolumeUnstage":   {Operation: "NodeUnstageVolume", Category: CategoryVolumeOperation, SuccessType: EventVolumeUnstageSuccess, FailureType: EventVolumeUnstageFailure, RequestType: EventVolumeUnstageRequest, SuccessSev: SeverityInfo, FailureSev: SeverityWarning, SuccessMsg: "Volume unstaged successfully", FailureMsg: "Volume unstaging failed", RequestMsg: "Volume unstaging requested"},
+	"VolumePublish":   {Operation: "NodePublishVolume", Category: CategoryVolumeOperation, SuccessType: EventVolumePublishSuccess, FailureType: EventVolumePublishFailure, RequestType: EventVolumePublishRequest, SuccessSev: SeverityInfo, FailureSev: SeverityError, SuccessMsg: "Volume published successfully", FailureMsg: "Volume publish failed", RequestMsg: "Volume publish requested"},
+	"VolumeUnpublish": {Operation: "NodeUnpublishVolume", Category: CategoryVolumeOperation, SuccessType: EventVolumeUnpublishSuccess, FailureType: EventVolumeUnpublishFailure, RequestType: EventVolumeUnpublishRequest, SuccessSev: SeverityInfo, FailureSev: SeverityWarning, SuccessMsg: "Volume unpublished successfully", FailureMsg: "Volume unpublish failed", RequestMsg: "Volume unpublish requested"},
+	"NVMEConnect":     {Operation: "NVMEConnect", Category: CategoryNetworkAccess, SuccessType: EventNVMEConnectSuccess, FailureType: EventNVMEConnectFailure, RequestType: EventNVMEConnectAttempt, SuccessSev: SeverityInfo, FailureSev: SeverityError, SuccessMsg: "NVMe connection established", FailureMsg: "NVMe connection failed", RequestMsg: "NVMe connection attempt"},
+}
+
+// EventField is a functional option for configuring SecurityEvent fields
+type EventField func(*SecurityEvent)
+
+// WithVolume sets volume information
+func WithVolume(volumeID, volumeName string) EventField {
+	return func(e *SecurityEvent) {
+		e.VolumeID = volumeID
+		e.VolumeName = volumeName
+	}
+}
+
+// WithNode sets node information
+func WithNode(nodeID string) EventField {
+	return func(e *SecurityEvent) {
+		e.NodeID = nodeID
+	}
+}
+
+// WithTarget sets target information
+func WithTarget(ip, nqn string) EventField {
+	return func(e *SecurityEvent) {
+		e.TargetIP = ip
+		e.NQN = nqn
+	}
+}
+
+// WithDuration sets operation duration
+func WithDuration(d time.Duration) EventField {
+	return func(e *SecurityEvent) {
+		e.Duration = d
+	}
+}
+
+// WithMountPath sets mount path
+func WithMountPath(path string) EventField {
+	return func(e *SecurityEvent) {
+		e.MountPath = path
+	}
+}
+
+// WithError sets error information
+func WithError(err error) EventField {
+	return func(e *SecurityEvent) {
+		if err != nil {
+			e.Error = err.Error()
+		}
+	}
+}
+
+// LogOperation logs an operation using the table-driven configuration
+func (l *Logger) LogOperation(config OperationLogConfig, outcome EventOutcome, fields ...EventField) {
 	var eventType EventType
 	var severity EventSeverity
 	var message string
 
 	switch outcome {
 	case OutcomeSuccess:
-		eventType = EventVolumeCreateSuccess
-		severity = SeverityInfo
-		message = "Volume created successfully"
+		eventType = config.SuccessType
+		severity = config.SuccessSev
+		message = config.SuccessMsg
 	case OutcomeFailure:
-		eventType = EventVolumeCreateFailure
-		severity = SeverityError
-		message = "Volume creation failed"
+		eventType = config.FailureType
+		severity = config.FailureSev
+		message = config.FailureMsg
 	default:
-		eventType = EventVolumeCreateRequest
+		eventType = config.RequestType
 		severity = SeverityInfo
-		message = "Volume creation requested"
+		message = config.RequestMsg
 	}
 
-	event := NewSecurityEvent(
-		eventType,
-		CategoryVolumeOperation,
-		severity,
-		message,
-	).WithVolume(volumeID, volumeName).
-		WithOutcome(outcome).
-		WithOperation("CreateVolume", duration)
+	event := NewSecurityEvent(eventType, config.Category, severity, message)
+	event.Operation = config.Operation
+	event.Outcome = outcome
 
-	if err != nil {
-		event.WithError(err)
+	for _, field := range fields {
+		field(event)
 	}
 
 	l.LogEvent(event)
+}
+
+// LogVolumeCreate logs volume creation events
+func (l *Logger) LogVolumeCreate(volumeID, volumeName string, outcome EventOutcome, err error, duration time.Duration) {
+	l.LogOperation(operationConfigs["VolumeCreate"], outcome,
+		WithVolume(volumeID, volumeName),
+		WithDuration(duration),
+		WithError(err))
 }
 
 // LogVolumeDelete logs volume deletion events
 func (l *Logger) LogVolumeDelete(volumeID, volumeName string, outcome EventOutcome, err error, duration time.Duration) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
-
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventVolumeDeleteSuccess
-		severity = SeverityInfo
-		message = "Volume deleted successfully"
-	case OutcomeFailure:
-		eventType = EventVolumeDeleteFailure
-		severity = SeverityWarning
-		message = "Volume deletion failed"
-	default:
-		eventType = EventVolumeDeleteRequest
-		severity = SeverityInfo
-		message = "Volume deletion requested"
-	}
-
-	event := NewSecurityEvent(
-		eventType,
-		CategoryVolumeOperation,
-		severity,
-		message,
-	).WithVolume(volumeID, volumeName).
-		WithOutcome(outcome).
-		WithOperation("DeleteVolume", duration)
-
-	if err != nil {
-		event.WithError(err)
-	}
-
-	l.LogEvent(event)
+	l.LogOperation(operationConfigs["VolumeDelete"], outcome,
+		WithVolume(volumeID, volumeName),
+		WithDuration(duration),
+		WithError(err))
 }
 
 // LogVolumeStage logs volume staging events
 func (l *Logger) LogVolumeStage(volumeID, nodeID, nqn, targetIP string, outcome EventOutcome, err error, duration time.Duration) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
-
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventVolumeStageSuccess
-		severity = SeverityInfo
-		message = "Volume staged successfully"
-	case OutcomeFailure:
-		eventType = EventVolumeStageFailure
-		severity = SeverityError
-		message = "Volume staging failed"
-	default:
-		eventType = EventVolumeStageRequest
-		severity = SeverityInfo
-		message = "Volume staging requested"
-	}
-
-	event := NewSecurityEvent(
-		eventType,
-		CategoryVolumeOperation,
-		severity,
-		message,
-	).WithVolume(volumeID, "").
-		WithIdentity("", "", nodeID).
-		WithTarget(targetIP, nqn).
-		WithOutcome(outcome).
-		WithOperation("NodeStageVolume", duration)
-
-	if err != nil {
-		event.WithError(err)
-	}
-
-	l.LogEvent(event)
+	l.LogOperation(operationConfigs["VolumeStage"], outcome,
+		WithVolume(volumeID, ""),
+		WithNode(nodeID),
+		WithTarget(targetIP, nqn),
+		WithDuration(duration),
+		WithError(err))
 }
 
 // LogVolumeUnstage logs volume unstaging events
 func (l *Logger) LogVolumeUnstage(volumeID, nodeID, nqn string, outcome EventOutcome, err error, duration time.Duration) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
-
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventVolumeUnstageSuccess
-		severity = SeverityInfo
-		message = "Volume unstaged successfully"
-	case OutcomeFailure:
-		eventType = EventVolumeUnstageFailure
-		severity = SeverityWarning
-		message = "Volume unstaging failed"
-	default:
-		eventType = EventVolumeUnstageRequest
-		severity = SeverityInfo
-		message = "Volume unstaging requested"
-	}
-
-	event := NewSecurityEvent(
-		eventType,
-		CategoryVolumeOperation,
-		severity,
-		message,
-	).WithVolume(volumeID, "").
-		WithIdentity("", "", nodeID).
-		WithTarget("", nqn).
-		WithOutcome(outcome).
-		WithOperation("NodeUnstageVolume", duration)
-
-	if err != nil {
-		event.WithError(err)
-	}
-
-	l.LogEvent(event)
+	l.LogOperation(operationConfigs["VolumeUnstage"], outcome,
+		WithVolume(volumeID, ""),
+		WithNode(nodeID),
+		WithTarget("", nqn),
+		WithDuration(duration),
+		WithError(err))
 }
 
 // LogVolumePublish logs volume publish events
 func (l *Logger) LogVolumePublish(volumeID, nodeID, mountPath string, outcome EventOutcome, err error, duration time.Duration) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
-
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventVolumePublishSuccess
-		severity = SeverityInfo
-		message = "Volume published successfully"
-	case OutcomeFailure:
-		eventType = EventVolumePublishFailure
-		severity = SeverityError
-		message = "Volume publish failed"
-	default:
-		eventType = EventVolumePublishRequest
-		severity = SeverityInfo
-		message = "Volume publish requested"
-	}
-
-	event := NewSecurityEvent(
-		eventType,
-		CategoryVolumeOperation,
-		severity,
-		message,
-	).WithVolume(volumeID, "").
-		WithIdentity("", "", nodeID).
-		WithOutcome(outcome).
-		WithOperation("NodePublishVolume", duration)
-
-	event.MountPath = mountPath
-
-	if err != nil {
-		event.WithError(err)
-	}
-
-	l.LogEvent(event)
+	l.LogOperation(operationConfigs["VolumePublish"], outcome,
+		WithVolume(volumeID, ""),
+		WithNode(nodeID),
+		WithMountPath(mountPath),
+		WithDuration(duration),
+		WithError(err))
 }
 
 // LogVolumeUnpublish logs volume unpublish events
 func (l *Logger) LogVolumeUnpublish(volumeID, nodeID, mountPath string, outcome EventOutcome, err error, duration time.Duration) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
-
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventVolumeUnpublishSuccess
-		severity = SeverityInfo
-		message = "Volume unpublished successfully"
-	case OutcomeFailure:
-		eventType = EventVolumeUnpublishFailure
-		severity = SeverityWarning
-		message = "Volume unpublish failed"
-	default:
-		eventType = EventVolumeUnpublishRequest
-		severity = SeverityInfo
-		message = "Volume unpublish requested"
-	}
-
-	event := NewSecurityEvent(
-		eventType,
-		CategoryVolumeOperation,
-		severity,
-		message,
-	).WithVolume(volumeID, "").
-		WithIdentity("", "", nodeID).
-		WithOutcome(outcome).
-		WithOperation("NodeUnpublishVolume", duration)
-
-	event.MountPath = mountPath
-
-	if err != nil {
-		event.WithError(err)
-	}
-
-	l.LogEvent(event)
+	l.LogOperation(operationConfigs["VolumeUnpublish"], outcome,
+		WithVolume(volumeID, ""),
+		WithNode(nodeID),
+		WithMountPath(mountPath),
+		WithDuration(duration),
+		WithError(err))
 }
 
 // LogNVMEConnect logs NVMe connection attempts
 func (l *Logger) LogNVMEConnect(nqn, address, nodeID string, outcome EventOutcome, err error) {
-	var eventType EventType
-	var severity EventSeverity
-	var message string
-
-	switch outcome {
-	case OutcomeSuccess:
-		eventType = EventNVMEConnectSuccess
-		severity = SeverityInfo
-		message = "NVMe connection established"
-	case OutcomeFailure:
-		eventType = EventNVMEConnectFailure
-		severity = SeverityError
-		message = "NVMe connection failed"
-	default:
-		eventType = EventNVMEConnectAttempt
-		severity = SeverityInfo
-		message = "NVMe connection attempt"
-	}
-
-	event := NewSecurityEvent(
-		eventType,
-		CategoryNetworkAccess,
-		severity,
-		message,
-	).WithTarget(address, nqn).
-		WithIdentity("", "", nodeID).
-		WithOutcome(outcome)
-
-	if err != nil {
-		event.WithError(err)
-	}
-
-	l.LogEvent(event)
+	l.LogOperation(operationConfigs["NVMEConnect"], outcome,
+		WithTarget(address, nqn),
+		WithNode(nodeID),
+		WithError(err))
 }
 
 // LogNVMEDisconnect logs NVMe disconnections
 func (l *Logger) LogNVMEDisconnect(nqn, nodeID string, err error) {
+	outcome := OutcomeSuccess
+	if err != nil {
+		outcome = OutcomeFailure
+	}
+
 	event := NewSecurityEvent(
 		EventNVMEDisconnect,
 		CategoryNetworkAccess,
@@ -495,11 +397,10 @@ func (l *Logger) LogNVMEDisconnect(nqn, nodeID string, err error) {
 		"NVMe disconnected",
 	).WithTarget("", nqn).
 		WithIdentity("", "", nodeID).
-		WithOutcome(OutcomeSuccess)
+		WithOutcome(outcome)
 
 	if err != nil {
 		event.WithError(err)
-		event.Outcome = OutcomeFailure
 	}
 
 	l.LogEvent(event)

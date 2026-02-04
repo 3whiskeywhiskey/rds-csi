@@ -63,7 +63,7 @@ func (c *StaleMountChecker) IsMountStale(mountPath string, nqn string) (bool, St
 	mountDevice, err := c.getMountDev(mountPath)
 	if err != nil {
 		// Mount not found - this is a stale condition
-		klog.V(3).Infof("Mount %s not found in /proc/mountinfo: %v", mountPath, err)
+		klog.V(4).Infof("Mount %s not found in /proc/mountinfo: %v", mountPath, err)
 		return true, StaleReasonMountNotFound, nil
 	}
 
@@ -109,7 +109,7 @@ func (c *StaleMountChecker) IsMountStale(mountPath string, nqn string) (bool, St
 		return true, StaleReasonDeviceMismatch, nil
 	}
 
-	klog.V(3).Infof("Mount %s is not stale: device %s matches current NQN %s device %s",
+	klog.V(4).Infof("Mount %s is not stale: device %s matches current NQN %s device %s",
 		mountPath, mountDevice, nqn, currentDevice)
 	return false, StaleReasonNotStale, nil
 }

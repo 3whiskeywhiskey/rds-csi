@@ -133,7 +133,7 @@ func GetMountDevice(mountPath string) (string, error) {
 
 	for _, mount := range mounts {
 		if mount.Target == mountPath {
-			klog.V(3).Infof("Found mount device for %s: %s", mountPath, mount.Source)
+			klog.V(4).Infof("Found mount device for %s: %s", mountPath, mount.Source)
 			return mount.Source, nil
 		}
 	}
@@ -151,7 +151,7 @@ func GetMountInfo(mountPath string) (*MountInfo, error) {
 
 	for _, mount := range mounts {
 		if mount.Target == mountPath {
-			klog.V(3).Infof("Found mount info for %s: source=%s, fstype=%s, options=%s",
+			klog.V(4).Infof("Found mount info for %s: source=%s, fstype=%s, options=%s",
 				mountPath, mount.Source, mount.FSType, mount.Options)
 			return &mount, nil
 		}
