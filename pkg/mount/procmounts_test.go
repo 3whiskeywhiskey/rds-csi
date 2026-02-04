@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -209,6 +210,11 @@ func TestGetMountDevice_FindsExistingMount(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
+	// Skip on non-Linux systems (no /proc/self/mountinfo)
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping test on non-Linux system (requires /proc/self/mountinfo)")
+	}
+
 	// Root mount should always exist
 	device, err := GetMountDevice("/")
 	if err != nil {
@@ -226,6 +232,11 @@ func TestGetMountDevice_FindsExistingMount(t *testing.T) {
 func TestGetMountDevice_MountNotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
+	}
+
+	// Skip on non-Linux systems (no /proc/self/mountinfo)
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping test on non-Linux system (requires /proc/self/mountinfo)")
 	}
 
 	// Try to get device for a path that definitely doesn't exist as a mount
@@ -246,6 +257,11 @@ func TestGetMountDevice_MountNotFound(t *testing.T) {
 func TestGetMounts_RealSystem(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
+	}
+
+	// Skip on non-Linux systems (no /proc/self/mountinfo)
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping test on non-Linux system (requires /proc/self/mountinfo)")
 	}
 
 	mounts, err := GetMounts()
@@ -330,6 +346,11 @@ func TestGetMountInfo_FindsExistingMount(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
+	// Skip on non-Linux systems (no /proc/self/mountinfo)
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping test on non-Linux system (requires /proc/self/mountinfo)")
+	}
+
 	// Test with root mount
 	info, err := GetMountInfo("/")
 	if err != nil {
@@ -359,6 +380,11 @@ func TestGetMountInfo_FindsExistingMount(t *testing.T) {
 func TestGetMountInfo_MountNotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
+	}
+
+	// Skip on non-Linux systems (no /proc/self/mountinfo)
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping test on non-Linux system (requires /proc/self/mountinfo)")
 	}
 
 	nonexistentPath := "/this/path/should/never/be/a/mount/point"
