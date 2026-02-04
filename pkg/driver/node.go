@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/client-go/kubernetes"
@@ -547,25 +550,38 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeUnknown, nil, 0)
 		startTime := time.Now()
 
-		// Create target FILE (not directory) - kubelet creates parent directory
-		// CSI spec: target_path for block volumes must be a file
-		if err := ns.mounter.MakeFile(targetPath); err != nil {
+		// Get device major:minor numbers for mknod
+		var stat syscall.Stat_t
+		if err := syscall.Stat(devicePath, &stat); err != nil {
 			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
-			return nil, status.Errorf(codes.Internal, "failed to create target file: %v", err)
+			return nil, status.Errorf(codes.Internal, "failed to stat device %s: %v", devicePath, err)
 		}
 
-		// Bind mount device to target file
-		mountOptions := []string{"bind"}
-		if req.GetReadonly() {
-			mountOptions = append(mountOptions, "ro")
+		// Ensure parent directory exists
+		parentDir := filepath.Dir(targetPath)
+		if err := os.MkdirAll(parentDir, 0750); err != nil {
+			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to create parent directory: %v", err)
 		}
 
-		// Use empty fstype for bind mount of block device
-		if err := ns.mounter.Mount(devicePath, targetPath, "", mountOptions); err != nil {
-			// Clean up created file on failure
-			_ = os.Remove(targetPath)
-			secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
-			return nil, status.Errorf(codes.Internal, "failed to bind mount block device: %v", err)
+		// Check if device node already exists (idempotency)
+		if _, err := os.Stat(targetPath); err == nil {
+			klog.V(4).Infof("Device node %s already exists, assuming idempotent retry", targetPath)
+		} else {
+			// Create device node using mknod (avoids devtmpfs bind mount storm)
+			// This creates a block device node with the same major:minor as the source device
+			mode := uint32(syscall.S_IFBLK | 0660)
+			if req.GetReadonly() {
+				mode = uint32(syscall.S_IFBLK | 0440)
+			}
+
+			if err := syscall.Mknod(targetPath, mode, int(stat.Rdev)); err != nil {
+				secLogger.LogVolumePublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+				return nil, status.Errorf(codes.Internal, "failed to create device node via mknod: %v", err)
+			}
+
+			klog.V(2).Infof("Created block device node at %s (major:minor %d:%d)",
+				targetPath, unix.Major(uint64(stat.Rdev)), unix.Minor(uint64(stat.Rdev)))
 		}
 
 		klog.V(2).Infof("Successfully published block volume %s to %s", volumeID, targetPath)
@@ -665,11 +681,33 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 
 	startTime := time.Now()
 
-	// Unmount from target path
-	if err := ns.mounter.Unmount(targetPath); err != nil {
-		// Log volume unpublish failure
+	// Check if target is a block device (mknod approach) or mount (filesystem)
+	var stat syscall.Stat_t
+	if err := syscall.Stat(targetPath, &stat); err != nil {
+		if os.IsNotExist(err) {
+			// Already cleaned up - idempotent
+			klog.V(4).Infof("Target path %s does not exist, assuming already unpublished", targetPath)
+			secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeSuccess, nil, time.Since(startTime))
+			return &csi.NodeUnpublishVolumeResponse{}, nil
+		}
 		secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
-		return nil, status.Errorf(codes.Internal, "failed to unmount target path: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to stat target path: %v", err)
+	}
+
+	// Block device created with mknod - just remove the device node file
+	if stat.Mode&syscall.S_IFMT == syscall.S_IFBLK {
+		klog.V(4).Infof("Target %s is a block device node, removing via unlink", targetPath)
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to remove block device node: %v", err)
+		}
+	} else {
+		// Filesystem volume - unmount as usual
+		klog.V(4).Infof("Target %s is a mount point, unmounting", targetPath)
+		if err := ns.mounter.Unmount(targetPath); err != nil {
+			secLogger.LogVolumeUnpublish(volumeID, ns.nodeID, targetPath, security.OutcomeFailure, err, time.Since(startTime))
+			return nil, status.Errorf(codes.Internal, "failed to unmount target path: %v", err)
+		}
 	}
 
 	klog.V(2).Infof("Successfully unpublished volume %s from %s", volumeID, targetPath)
