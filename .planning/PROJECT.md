@@ -8,6 +8,17 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
+## Current Milestone: v0.7.1 Code Quality and Logging Cleanup
+
+**Goal:** Systematic codebase audit and refactoring to improve maintainability, reduce log noise, and address technical debt
+
+**Target outcomes:**
+- Logging cleanup: Reduce production log noise by rationalizing debug/info levels across all packages
+- Error handling: Consistent error patterns with proper context propagation
+- Code duplication: Extract common patterns into reusable utilities
+- Code organization: Refactor overgrown packages for better separation of concerns
+- Test coverage: Fill gaps in critical paths (especially error scenarios)
+
 ## Latest Milestone: v0.7.0 State Management Refactoring and Observability (Shipped: 2026-02-04)
 
 **Delivered:** VolumeAttachment-based state rebuild and complete migration metrics observability
@@ -76,7 +87,11 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 ### Active
 
-(No active requirements - all v0.7.0 work complete)
+- [ ] Production logs contain only actionable information at info level
+- [ ] Error handling follows consistent patterns throughout codebase
+- [ ] Test coverage >85% on critical paths
+- [ ] Common patterns extracted into reusable utilities
+- [ ] Code smells from analysis resolved or explicitly deferred
 
 ### Out of Scope
 
@@ -105,4 +120,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-02-04 after completing v0.7.0 milestone (state management refactoring and observability)*
+*Last updated: 2026-02-04 after starting v0.7.1 milestone (code quality and logging cleanup)*

@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** v0.7.0 shipped - all phases complete
+**Current focus:** v0.7.1 Code Quality and Logging Cleanup - defining requirements
 
 ## Current Position
 
-Phase: All phases complete (16/16)
-Plan: All plans complete (59/59)
-Status: ✅ SHIPPED - v0.7.0 milestone complete
-Last activity: 2026-02-04 — v0.7.0 milestone complete and archived
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements for v0.7.1
+Last activity: 2026-02-04 — Milestone v0.7.1 started
 
-Progress: [████████████████████████████████████] 100% (59/59 plans completed)
+Progress: [                                    ] 0% (requirements definition in progress)
 
 ## Performance Metrics
 
