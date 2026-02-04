@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 14 of 14 (Error Resilience and Mount Storm Prevention)
-Plan: 4 of 4 in current phase
-Status: Complete - all error resilience features implemented and verified
-Last activity: 2026-02-03 — Phase 14 complete, all safety features verified
+Phase: 13 of 14 (Hardware Validation)
+Plan: 1 of 1 in current phase
+Status: Blocked - Kubernetes 1.34 / K3s bug prevents block volume testing
+Last activity: 2026-02-04 — Phase 13 validation blocked by kubelet losetup bug
 
 Progress: [█████████████████████████████████] 92% (49/53 plans completed across all phases)
 
@@ -47,6 +47,22 @@ Progress: [███████████████████████
 ### Decisions
 
 Recent decisions from PROJECT.md affecting v0.6.0 work:
+
+- Phase 13 (2026-02-04): **Removed dev/ directory and symlink from NodeStageVolume** (commit dae1c4f)
+  - Previous code incorrectly created dev/ directory with symlink in staging path
+  - Kubelet interpreted symlink as file needing losetup, causing "Permission denied"
+  - Now follows AWS EBS CSI pattern: NodeStageVolume only connects NVMe and stores metadata
+  - NodePublishVolume handles bind mount to target path
+- Phase 13 (2026-02-04): **Smart orphaned mount cleanup** (commit dc4140f)
+  - NodeUnstageVolume now cleans up orphaned bind mounts before device-in-use check
+  - Prevents node wedging from self-detecting own bind mounts as "device in use"
+  - Forces cleanup during graceful shutdown (ctx.Done()) to prevent mount namespace wedging
+  - Eliminates need for node reboots when cleanup fails
+- Phase 13 (2026-02-04): **Discovered Kubernetes 1.34 / K3s bug**
+  - Kubelet incorrectly calls MapBlockVolume (local volume path) for CSI block volumes
+  - Should use CSI NodePublishVolume bind mount, not create loop devices
+  - Bug appears specific to K3s 1.34.1 (Kubernetes 1.34 released August 2025)
+  - CSI driver implementation verified correct per spec
 
 - Phase 14-03: Circuit breaker opens after 3 consecutive failures with 5-minute timeout
 - Phase 14-03: Per-volume isolation - one volume failure doesn't affect others
@@ -96,8 +112,12 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 - ✓ CI test failure fixed (commit 7728bd4) - health check now skips when device doesn't exist
 
 **Active:**
-- Phase 13 hardware validation interrupted due to node r640 instability
-- Need to redeploy driver with Phase 14 safety features before resuming validation
+- **CRITICAL: Kubernetes 1.34 / K3s 1.34.1 bug** - kubelet incorrectly calls MapBlockVolume for CSI block volumes, causing losetup failure
+  - CSI driver implementation is correct (verified by logs)
+  - Kubelet tries to run losetup on already-created block device file
+  - Error: "makeLoopDevice failed: losetup -f ... failed: exit status 1"
+  - Affects ALL CSI block volumes on K3s 1.34.1
+  - Options: downgrade K3s, wait for 1.34.2, or report bug upstream
 - Helm chart needs update to expose CSI_MANAGED_NQN_PREFIX as configurable value (after Phase 14)
 
 **Critical Discovery:**
@@ -107,17 +127,24 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 
 ## Session Continuity
 
-Last session: 2026-02-03
-Stopped at: Fixed CI test failure in health check (commit 7728bd4), waiting for CI to confirm fix
+Last session: 2026-02-04
+Stopped at: Phase 13 blocked by K3s 1.34.1 kubelet bug with block volumes
 Resume file: None
-Next action: After CI passes, proceed with Phase 13 hardware validation
+Next action: Debug K3s losetup issue or consider downgrade/workaround
 
-**CI Investigation Complete:**
-1. ✓ Fixed pkg/mount tests (Linux-only procmounts integration tests)
-2. ✓ Identified pkg/driver as consistent failure point
-3. ✓ Confirmed all tests pass locally (145 tests run successfully)
-4. ✓ Added verbose test logging with JSON output and test file listing (commit 65fb14c)
-5. ✓ Analyzed CI logs - found TestNodeStageVolume_FilesystemVolume_Unchanged failing
-6. ✓ Root cause: health check didn't skip when device doesn't exist (fsck error in output not err)
-7. ✓ Fixed in pkg/mount/health.go (commit 7728bd4) - now checks output for device-not-found
-8. ✓ CI passing - fix confirmed working
+**Phase 13 Hardware Validation Progress:**
+1. ✓ Created comprehensive validation runbook (test/e2e/PROGRESSIVE_VALIDATION.md)
+2. ✓ Fixed block volume losetup error (removed dev/ directory creation)
+3. ✓ Implemented smart orphaned mount cleanup (prevents node wedging)
+4. ✓ Deployed fixes to cluster (commits dae1c4f, dc4140f, 48630c2)
+5. ✓ Verified CSI driver implementation correct (logs show all operations succeeding)
+6. ❌ **BLOCKED:** K3s 1.34.1 kubelet bug - MapBlockVolume called for CSI volumes
+   - CSI driver creates bind mount correctly at publish path
+   - Kubelet creates block device file at globalMapPath (correct)
+   - Kubelet then tries losetup on already-existing block device (incorrect)
+   - Error: "makeLoopDevice failed: losetup -f ... failed: exit status 1"
+7. 🔍 **Investigation showed:**
+   - Same inode at publish path and globalMapPath (kubelet linked correctly)
+   - Device type 259,5 (/dev/nvme1n1) - already a block device
+   - kubelet.AttachFileDevice doesn't check if path is already block device
+   - This may be Kubernetes 1.34 regression (released Aug 2025, very recent)
