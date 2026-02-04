@@ -1,6 +1,7 @@
 package mount
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -200,6 +201,28 @@ func SanitizeMountOptions(options []string, isBindMount bool) ([]string, error) 
 // Mount mounts source to target with the given filesystem type and options
 func (m *mounter) Mount(source, target, fsType string, options []string) error {
 	klog.V(2).Infof("Mounting %s to %s (fsType: %s, options: %v)", source, target, fsType, options)
+
+	// MOUNT STORM PROTECTION: Check for excessive duplicate mounts BEFORE attempting mount
+	// This prevents adding to an existing mount storm and wedging the node
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	mounts, err := GetMountsWithTimeout(ctx)
+	if err != nil {
+		// If we can't read mounts, log warning but proceed (don't block legitimate operations)
+		klog.Warningf("Failed to check for mount storm before mounting %s: %v (proceeding)", source, err)
+	} else {
+		// Check if source device already has too many mounts
+		count, stormErr := DetectDuplicateMounts(mounts, source)
+		if stormErr != nil {
+			// Mount storm detected - refuse to proceed
+			klog.Errorf("MOUNT STORM DETECTED: refusing to mount %s to %s: %v", source, target, stormErr)
+			return fmt.Errorf("mount operation aborted due to mount storm: %w", stormErr)
+		}
+		if count > 0 {
+			klog.V(4).Infof("Pre-mount check: %s has %d existing mount(s)", source, count)
+		}
+	}
 
 	// SECURITY: Validate and sanitize mount options
 	// Detect if this is a bind mount
