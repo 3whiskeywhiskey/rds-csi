@@ -145,6 +145,81 @@ defer mockRDS.Stop()
 // Run tests against localhost:12222
 ```
 
+### Mock RDS Server Configuration
+
+The mock RDS server supports environment-based configuration for timing simulation and error injection, enabling various testing scenarios without modifying code.
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MOCK_RDS_REALISTIC_TIMING` | `false` | Enable realistic operation delays |
+| `MOCK_RDS_SSH_LATENCY_MS` | `200` | Base SSH connection latency (ms) |
+| `MOCK_RDS_SSH_LATENCY_JITTER_MS` | `50` | Latency jitter range +/- (ms) |
+| `MOCK_RDS_DISK_ADD_DELAY_MS` | `500` | Disk add operation delay (ms) |
+| `MOCK_RDS_DISK_REMOVE_DELAY_MS` | `300` | Disk remove operation delay (ms) |
+| `MOCK_RDS_ERROR_MODE` | `none` | Error injection mode |
+| `MOCK_RDS_ERROR_AFTER_N` | `0` | Fail after N operations (0 = immediate) |
+| `MOCK_RDS_ENABLE_HISTORY` | `true` | Enable command history logging |
+| `MOCK_RDS_HISTORY_DEPTH` | `100` | Max commands in history |
+| `MOCK_RDS_ROUTEROS_VERSION` | `7.16` | RouterOS version to simulate |
+
+#### Error Injection Modes
+
+| Mode | Description | Error Message |
+|------|-------------|---------------|
+| `none` | No errors injected | - |
+| `disk_full` | Simulate disk full condition | `failure: not enough space` |
+| `ssh_timeout` | Simulate SSH connection timeout | (connection hangs) |
+| `command_fail` | Simulate command execution failure | `failure: execution error` |
+
+#### Usage Examples
+
+**Run sanity tests with error injection:**
+```bash
+MOCK_RDS_ERROR_MODE=disk_full make test-sanity-mock
+```
+
+**Run tests with realistic timing:**
+```bash
+MOCK_RDS_REALISTIC_TIMING=true go test ./test/sanity/... -v
+```
+
+**Fail after 3rd operation (for idempotency testing):**
+```bash
+MOCK_RDS_ERROR_MODE=disk_full MOCK_RDS_ERROR_AFTER_N=3 make test-sanity-mock
+```
+
+**Test with realistic SSH latency (150-250ms):**
+```bash
+MOCK_RDS_REALISTIC_TIMING=true \
+  MOCK_RDS_SSH_LATENCY_MS=200 \
+  MOCK_RDS_SSH_LATENCY_JITTER_MS=50 \
+  go test ./test/integration/... -v
+```
+
+#### Stress Testing
+
+Run concurrent connection stress tests to validate MOCK-07 (concurrent SSH connections without state corruption):
+
+```bash
+# Run all stress tests
+go test ./test/mock/... -run TestConcurrent -v
+
+# Run with race detector
+go test ./test/mock/... -run TestConcurrent -v -race
+
+# Skip timing tests (faster CI)
+go test ./test/mock/... -short -v
+```
+
+**Available stress tests:**
+- `TestConcurrentConnections` - 50 parallel volume operations
+- `TestConcurrentSameVolume` - Idempotency validation (10 goroutines, 1 volume)
+- `TestConcurrentCreateDelete` - Race between create/delete operations
+- `TestConcurrentMixedOperations` - Concurrent create/query/delete mix
+- `TestConcurrentCommandHistory` - History tracking with concurrency
+
 ### Sanity Test Configuration
 
 The sanity tests use the official `csi-test/v5/pkg/sanity` package with these settings:
