@@ -103,13 +103,59 @@
 
 ## Traceability
 
-Updated during roadmap creation.
-
 **Coverage:**
-- v0.9.0 requirements: 43 total
-- Mapped to phases: (pending roadmap)
-- Unmapped: (pending roadmap)
+- v0.9.0 requirements: 45 total
+- Mapped to phases: 45/45 (100%)
+- Unmapped: 0
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| COMP-01 | Phase 22 | Pending |
+| COMP-02 | Phase 22 | Pending |
+| COMP-03 | Phase 22 | Pending |
+| COMP-04 | Phase 22 | Pending |
+| COMP-05 | Phase 22 | Pending |
+| COMP-06 | Phase 22 | Pending |
+| MOCK-01 | Phase 23 | Pending |
+| MOCK-02 | Phase 23 | Pending |
+| MOCK-03 | Phase 23 | Pending |
+| MOCK-04 | Phase 23 | Pending |
+| MOCK-05 | Phase 23 | Pending |
+| MOCK-06 | Phase 23 | Pending |
+| MOCK-07 | Phase 23 | Pending |
+| E2E-01 | Phase 24 | Pending |
+| E2E-02 | Phase 24 | Pending |
+| E2E-03 | Phase 24 | Pending |
+| E2E-04 | Phase 24 | Pending |
+| E2E-05 | Phase 24 | Pending |
+| E2E-06 | Phase 24 | Pending |
+| E2E-07 | Phase 24 | Pending |
+| E2E-08 | Phase 24 | Pending |
+| E2E-09 | Phase 24 | Pending |
+| COV-01 | Phase 25 | Pending |
+| COV-02 | Phase 25 | Pending |
+| COV-03 | Phase 25 | Pending |
+| COV-04 | Phase 25 | Pending |
+| COV-05 | Phase 25 | Pending |
+| COV-06 | Phase 25 | Pending |
+| SNAP-01 | Phase 26 | Pending |
+| SNAP-02 | Phase 26 | Pending |
+| SNAP-03 | Phase 26 | Pending |
+| SNAP-04 | Phase 26 | Pending |
+| SNAP-05 | Phase 26 | Pending |
+| SNAP-06 | Phase 26 | Pending |
+| SNAP-07 | Phase 26 | Pending |
+| SNAP-08 | Phase 26 | Pending |
+| SNAP-09 | Phase 26 | Pending |
+| SNAP-10 | Phase 26 | Pending |
+| DOC-01 | Phase 27 | Pending |
+| DOC-02 | Phase 27 | Pending |
+| DOC-03 | Phase 27 | Pending |
+| DOC-04 | Phase 27 | Pending |
+| DOC-05 | Phase 27 | Pending |
+| DOC-06 | Phase 27 | Pending |
+| DOC-07 | Phase 27 | Pending |
 
 ---
 *Requirements defined: 2026-02-04*
-*Last updated: 2026-02-04 after initial definition*
+*Last updated: 2026-02-04 after roadmap creation*
