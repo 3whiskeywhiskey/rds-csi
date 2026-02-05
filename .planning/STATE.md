@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 25 of 27 (Coverage & Quality Improvements)
-Plan: 03 of TBD
+Plan: 04 of TBD
 Status: In progress
-Last activity: 2026-02-05 — Completed 25-03-PLAN.md (CSI negative test scenarios)
+Last activity: 2026-02-05 — Completed 25-04-PLAN.md (Coverage enforcement & quality documentation)
 
-Progress: [███░░░░░░░] ~29% (13/TBD plans complete in v0.9.0)
+Progress: [███░░░░░░░] ~31% (14/TBD plans complete in v0.9.0)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 92 (79 previous + 13 v0.9.0)
-- v0.9.0 plans completed: 13/TBD
+- Total plans completed: 93 (79 previous + 14 v0.9.0)
+- v0.9.0 plans completed: 14/TBD
 - Average duration: 6 min (v0.9.0)
-- Total execution time: 1.08 hours (v0.9.0)
+- Total execution time: 1.21 hours (v0.9.0)
 
 **By Milestone:**
 
@@ -32,7 +32,7 @@ Progress: [███░░░░░░░] ~29% (13/TBD plans complete in v0.9.0
 | v0.9.0 Production Readiness | 22-27 | 13/TBD | 🚧 In Progress |
 
 **Recent Trend:**
-- v0.9.0 Phase 25: 3 plans, 20 minutes, in progress
+- v0.9.0 Phase 25: 4 plans, 28 minutes, in progress
 - v0.9.0 Phase 24: 4 plans, 10 minutes, completed 2026-02-05
 - v0.9.0 Phase 23: 2 plans, 9 minutes, completed 2026-02-04
 
@@ -45,6 +45,8 @@ Progress: [███░░░░░░░] ~29% (13/TBD plans complete in v0.9.0
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.9.0 (Phase 25-04): CI threshold increased to 65% based on current 68.6% coverage
+- v0.9.0 (Phase 25-04): No flaky tests detected after extensive stress testing
 - v0.9.0 (Phase 25-01): Map connection/timeout errors to codes.Unavailable per CSI spec
 - v0.9.0 (Phase 25-01): DeleteVolume distinguishes VolumeNotFoundError from connection errors
 - v0.9.0 (Phase 25-01): MockClient SetPersistentError() for multi-operation error scenarios
@@ -55,7 +57,6 @@ Recent decisions affecting current work:
 - v0.9.0 (Phase 24-04): E2E tests run in CI via dedicated job (parallel execution)
 - v0.9.0 (Phase 24-02): Block volume expansion returns NodeExpansionRequired=false (kernel auto-detects)
 - v0.9.0 (Phase 24-02): RWX block volumes allowed (KubeVirt); RWX filesystem rejected (data corruption risk)
-- v0.9.0 (Phase 24-01): Enable both controller and node services in E2E tests for full lifecycle validation
 
 ### Pending Todos
 
@@ -68,9 +69,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 25-03-PLAN.md (CSI negative test scenarios)
+Stopped at: Completed 25-04-PLAN.md (Coverage enforcement & quality documentation)
 Resume file: None
-Next action: Continue Phase 25 with additional coverage improvements
+Next action: Continue Phase 25 or move to Phase 26 (Observability & Metrics)
 
 ---
-*Last updated: 2026-02-05 after Phase 25-03 execution*
+*Last updated: 2026-02-05 after Phase 25-04 execution*
