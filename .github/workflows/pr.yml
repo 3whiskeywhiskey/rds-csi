@@ -42,6 +42,39 @@ jobs:
           name: codecov-umbrella
         continue-on-error: true
 
+  sanity-tests:
+    name: CSI Sanity Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run CSI sanity tests
+        run: |
+          go test -v -race -timeout 15m ./test/sanity/... 2>&1 | tee sanity-output.log
+        continue-on-error: true
+        id: sanity
+
+      - name: Upload sanity test logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sanity-test-logs
+          path: |
+            sanity-output.log
+          retention-days: 7
+
+      - name: Check sanity test result
+        if: steps.sanity.outcome == 'failure'
+        run: |
+          echo "::error::CSI sanity tests failed - see artifacts for details"
+          exit 1
+
   build-test:
     name: Test Docker Build
     runs-on: ubuntu-latest
