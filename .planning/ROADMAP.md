@@ -147,6 +147,28 @@ Plans:
 - [x] 25-03-PLAN.md — CSI negative test scenarios and sanity regression tests
 - [x] 25-04-PLAN.md — CI threshold update, flaky test detection, TESTING.md documentation
 
+#### Phase 25.1: Attachment Reconciliation & RDS Resilience (INSERTED)
+**Goal**: Driver automatically recovers from infrastructure failures without manual intervention
+**Depends on**: Phase 25 (quality foundation for production fixes)
+**Requirements**: RECON-01, RECON-02, RECON-03, RECON-04, RECON-05, RECON-06
+**Success Criteria** (what must be TRUE):
+  1. Controller reconciliation loop detects stale VolumeAttachment objects on startup by querying actual attachment state from nodes
+  2. Stale attachments (marked attached=true in etcd but not actually mounted on node) are automatically marked as detached
+  3. Node NotReady watcher triggers proactive attachment validation and cleanup for volumes on failed nodes
+  4. RDS connection loss triggers automatic reconnect with exponential backoff (1s, 2s, 4s, 8s, max 16s)
+  5. CSI Probe health check returns ready=false when RDS client is disconnected, preventing misleading health status
+  6. After RDS reconnection, controller triggers attachment reconciliation to clean up any stale state
+  7. Kubernetes events are emitted for stale attachment detection and RDS connection state changes
+  8. Prometheus metrics expose stale attachment count and RDS connection status for observability
+**Plans**: 3 plans
+
+Plans:
+- [ ] 25.1-01-PLAN.md — Node watcher and TriggerReconcile for event-driven reconciliation
+- [ ] 25.1-02-PLAN.md — RDS connection manager with exponential backoff and metrics
+- [ ] 25.1-03-PLAN.md — Wire components into driver, startup reconciliation, connection-aware probe
+
+**Context**: Production incident on 2026-02-05 where RDS storage crash caused node failures, leaving stale VolumeAttachments that prevented volume reattachment. Required manual finalizer removal and CSI controller restart to restore service (3-hour outage extended to 5+ hours).
+
 #### Phase 26: Volume Snapshots
 **Goal**: Btrfs-based volume snapshots enable backup and restore workflows
 **Depends on**: Phase 25 (quality foundation for snapshot feature)
@@ -189,7 +211,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 22 → 23 → 24 → 25 → 26 → 27
+Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 26 → 27
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -198,8 +220,9 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26 → 27
 | 23. Mock RDS Enhancements | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
 | 24. Automated E2E Test Suite | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
 | 25. Coverage & Quality Improvements | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
+| 25.1 Attachment Reconciliation & RDS Resilience | v0.9.0 | 0/3 | 🚨 URGENT | - |
 | 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-05 after Phase 25 execution*
+*Last updated: 2026-02-05 after Phase 25.1 planning*
