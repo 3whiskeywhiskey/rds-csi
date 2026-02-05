@@ -59,7 +59,7 @@ jobs:
           echo "✅ Coverage ${COVERAGE}% meets 60% threshold"
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         if: always()
         with:
           name: coverage-report
@@ -89,7 +89,7 @@ jobs:
         id: sanity
 
       - name: Upload sanity test logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         if: always()
         with:
           name: sanity-test-logs
