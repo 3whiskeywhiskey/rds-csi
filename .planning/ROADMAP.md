@@ -87,8 +87,8 @@
 **Plans**: 2 plans
 
 Plans:
-- [ ] 22-01-PLAN.md — Go-based sanity test infrastructure with mock RDS
-- [ ] 22-02-PLAN.md — CI integration and capability documentation
+- [x] 22-01-PLAN.md — Go-based sanity test infrastructure with mock RDS
+- [x] 22-02-PLAN.md — CI integration and capability documentation
 
 #### Phase 23: Mock RDS Enhancements
 **Goal**: Mock RDS server matches real hardware behavior enabling reliable CI testing
@@ -101,11 +101,11 @@ Plans:
   4. Mock server maintains stateful volume tracking so sequential operations (create, create same ID, delete, delete same ID) behave correctly
   5. Mock server returns RouterOS-formatted output matching production RDS (version 7.16) for parser validation
   6. Mock server handles concurrent SSH connections for stress testing without corrupting state
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 23-01: TBD
-- [ ] 23-02: TBD
+- [ ] 23-01-PLAN.md — Configuration system, timing simulation, and error injection infrastructure
+- [ ] 23-02-PLAN.md — Concurrent stress tests and documentation
 
 #### Phase 24: Automated E2E Test Suite
 **Goal**: Kubernetes integration validated through automated E2E tests running in CI
@@ -192,11 +192,11 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26 → 27
 |-------|-----------|----------------|--------|-----------|
 | 1-21 | v0.1.0-v0.8.0 | Complete | Complete | 2026-02-04 |
 | 22. CSI Sanity Tests Integration | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
-| 23. Mock RDS Enhancements | v0.9.0 | 0/TBD | Not started | - |
+| 23. Mock RDS Enhancements | v0.9.0 | 0/2 | Not started | - |
 | 24. Automated E2E Test Suite | v0.9.0 | 0/TBD | Not started | - |
 | 25. Coverage & Quality Improvements | v0.9.0 | 0/TBD | Not started | - |
 | 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-04 after Phase 22 execution*
+*Last updated: 2026-02-04 after Phase 23 planning*
