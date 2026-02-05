@@ -188,16 +188,32 @@ func ExtractVolumeIDFromNQN(nqn string) (string, error) {
 	return volumeID, nil
 }
 
-// ValidateIPAddress validates that a string is a valid IPv4 or IPv6 address
+// ValidateIPAddress validates that a string is a valid IPv4, IPv6 address, or hostname
 func ValidateIPAddress(address string) error {
 	if address == "" {
-		return fmt.Errorf("IP address cannot be empty")
+		return fmt.Errorf("IP address or hostname cannot be empty")
 	}
 
-	// Try to parse as IP
+	// Try to parse as IP first
 	ip := net.ParseIP(address)
-	if ip == nil {
-		return fmt.Errorf("invalid IP address: %s", address)
+	if ip != nil {
+		return nil
+	}
+
+	// If not an IP, validate as hostname
+	// Hostnames can contain letters, digits, hyphens, and dots
+	// Must not start or end with hyphen, max 253 chars total
+	if len(address) > 253 {
+		return fmt.Errorf("invalid IP address or hostname: %s (too long)", address)
+	}
+
+	// Simple hostname validation: alphanumeric, hyphens, and dots
+	// More permissive than strict DNS rules, but safe for our use case
+	for i, ch := range address {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_') {
+			return fmt.Errorf("invalid IP address or hostname: %s (invalid character at position %d)", address, i)
+		}
 	}
 
 	return nil

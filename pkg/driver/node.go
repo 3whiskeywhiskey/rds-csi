@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -811,6 +812,13 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	// Get device statistics
 	stats, err := ns.mounter.GetDeviceStats(volumePath)
 	if err != nil {
+		// Check if path doesn't exist or isn't mounted
+		// Return NotFound per CSI spec for non-existent volumes
+		if strings.Contains(err.Error(), "No such file or directory") ||
+			strings.Contains(err.Error(), "not mounted") ||
+			strings.Contains(err.Error(), "not a mountpoint") {
+			return nil, status.Errorf(codes.NotFound, "volume path %s not found or not mounted", volumePath)
+		}
 		return nil, status.Errorf(codes.Internal, "failed to get volume stats: %v", err)
 	}
 

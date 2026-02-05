@@ -104,6 +104,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// Volume already exists, verify it matches requirements
 		klog.V(2).Infof("Volume %s already exists (idempotent)", volumeID)
 
+		// CSI spec requires checking capacity matches for idempotent CreateVolume
+		// If capacity differs, return AlreadyExists error
+		if existingVolume.FileSizeBytes != requiredBytes {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"volume %s already exists with different capacity (existing: %d bytes, requested: %d bytes)",
+				volumeID, existingVolume.FileSizeBytes, requiredBytes)
+		}
+
 		// Get parameters from StorageClass for response context
 		params := req.GetParameters()
 
@@ -259,8 +267,9 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		}
 
 		// Check if this is a VolumeNotFoundError (idempotent case)
+		// Check both the typed error and the sentinel error
 		var notFoundErr *rds.VolumeNotFoundError
-		if stderrors.As(err, &notFoundErr) {
+		if stderrors.As(err, &notFoundErr) || stderrors.Is(err, utils.ErrVolumeNotFound) {
 			klog.V(4).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
 			return &csi.DeleteVolumeResponse{}, nil
 		}
@@ -496,6 +505,11 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	// Validate volume ID format (security: prevent injection)
 	if err := utils.ValidateVolumeID(volumeID); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
+	}
+
+	// Validate volume capability is provided (required by CSI spec)
+	if req.GetVolumeCapability() == nil {
+		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
 
 	// Determine access mode from VolumeCapability (singular, not slice)
