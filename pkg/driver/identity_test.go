@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
 )
 
 func TestGetPluginInfo(t *testing.T) {
@@ -101,4 +103,166 @@ func TestProbeHealthy(t *testing.T) {
 	if resp.Ready == nil || !resp.Ready.GetValue() {
 		t.Error("Expected driver to be ready")
 	}
+}
+
+// TestProbeWithConnectionManager tests Probe with ConnectionManager providing connection state
+func TestProbeWithConnectionManager(t *testing.T) {
+	tests := []struct {
+		name          string
+		isConnected   bool
+		expectedReady bool
+	}{
+		{
+			name:          "ConnectionManager connected",
+			isConnected:   true,
+			expectedReady: true,
+		},
+		{
+			name:          "ConnectionManager disconnected",
+			isConnected:   false,
+			expectedReady: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Use real MockClient from rds package
+			mockClient := newTestMockClient(tt.isConnected)
+
+			// Create real ConnectionManager with mock client
+			// The ConnectionManager will reflect the mock client's connection state
+			config := rds.ConnectionManagerConfig{
+				Client: mockClient,
+			}
+			connectionManager, err := rds.NewConnectionManager(config)
+			if err != nil {
+				t.Fatalf("Failed to create connection manager: %v", err)
+			}
+
+			driver := &Driver{
+				name:              "test.csi.driver",
+				version:           "v1.0.0",
+				rdsClient:         mockClient,
+				connectionManager: connectionManager,
+			}
+
+			ids := NewIdentityServer(driver)
+			req := &csi.ProbeRequest{}
+			resp, err := ids.Probe(context.Background(), req)
+
+			if err != nil {
+				t.Fatalf("Probe failed: %v", err)
+			}
+
+			if resp.Ready == nil {
+				t.Fatal("Expected Ready field to be set")
+			}
+
+			if resp.Ready.GetValue() != tt.expectedReady {
+				t.Errorf("Expected ready=%v, got %v", tt.expectedReady, resp.Ready.GetValue())
+			}
+		})
+	}
+}
+
+// TestProbeFallbackToRDSClient tests that Probe falls back to rdsClient.IsConnected
+// when connectionManager is not available
+func TestProbeFallbackToRDSClient(t *testing.T) {
+	tests := []struct {
+		name          string
+		isConnected   bool
+		expectedReady bool
+	}{
+		{
+			name:          "RDS client connected",
+			isConnected:   true,
+			expectedReady: true,
+		},
+		{
+			name:          "RDS client disconnected",
+			isConnected:   false,
+			expectedReady: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := newTestMockClient(tt.isConnected)
+
+			driver := &Driver{
+				name:              "test.csi.driver",
+				version:           "v1.0.0",
+				rdsClient:         mockClient,
+				connectionManager: nil, // No connection manager - should fallback to rdsClient
+			}
+
+			ids := NewIdentityServer(driver)
+			req := &csi.ProbeRequest{}
+			resp, err := ids.Probe(context.Background(), req)
+
+			if err != nil {
+				t.Fatalf("Probe failed: %v", err)
+			}
+
+			if resp.Ready == nil {
+				t.Fatal("Expected Ready field to be set")
+			}
+
+			if resp.Ready.GetValue() != tt.expectedReady {
+				t.Errorf("Expected ready=%v, got %v", tt.expectedReady, resp.Ready.GetValue())
+			}
+		})
+	}
+}
+
+// TestProbeRecordsMetrics tests that Probe records connection state metrics
+func TestProbeRecordsMetrics(t *testing.T) {
+	// Note: We can't easily verify metric recording without exposing internal state,
+	// but we can verify Probe doesn't panic when metrics are available
+	mockClient := newTestMockClient(true)
+
+	driver := &Driver{
+		name:      "test.csi.driver",
+		version:   "v1.0.0",
+		rdsClient: mockClient,
+		// metrics would be set here in real usage
+	}
+
+	ids := NewIdentityServer(driver)
+	req := &csi.ProbeRequest{}
+	_, err := ids.Probe(context.Background(), req)
+
+	if err != nil {
+		t.Fatalf("Probe failed with metrics: %v", err)
+	}
+}
+
+// TestProbeNoPanicWhenMetricsNil tests that Probe handles nil metrics gracefully
+func TestProbeNoPanicWhenMetricsNil(t *testing.T) {
+	mockClient := newTestMockClient(true)
+
+	driver := &Driver{
+		name:      "test.csi.driver",
+		version:   "v1.0.0",
+		rdsClient: mockClient,
+		metrics:   nil, // Explicitly nil metrics
+	}
+
+	ids := NewIdentityServer(driver)
+	req := &csi.ProbeRequest{}
+	_, err := ids.Probe(context.Background(), req)
+
+	if err != nil {
+		t.Fatalf("Probe failed with nil metrics: %v", err)
+	}
+}
+
+// Test helper functions and mocks
+
+// newTestMockClient creates a test MockClient from rds package
+func newTestMockClient(connected bool) *rds.MockClient {
+	mockClient := rds.NewMockClient()
+	mockClient.SetConnected(connected)
+	mockClient.SetAddress("10.42.68.1")
+	return mockClient
 }

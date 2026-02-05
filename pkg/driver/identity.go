@@ -65,13 +65,25 @@ func (ids *IdentityServer) GetPluginCapabilities(ctx context.Context, req *csi.G
 func (ids *IdentityServer) Probe(ctx context.Context, req *csi.ProbeRequest) (*csi.ProbeResponse, error) {
 	klog.V(5).Info("Probe called")
 
-	// Check if RDS client is connected (if controller mode)
 	ready := true
-	if ids.driver.rdsClient != nil {
-		if !ids.driver.rdsClient.IsConnected() {
-			klog.Warning("RDS client is not connected")
+
+	// Check RDS connection state (prefer connectionManager if available)
+	if ids.driver.connectionManager != nil {
+		if !ids.driver.connectionManager.IsConnected() {
+			klog.Warning("RDS client is not connected - reporting not ready")
 			ready = false
 		}
+	} else if ids.driver.rdsClient != nil {
+		// Fallback to direct client check
+		if !ids.driver.rdsClient.IsConnected() {
+			klog.Warning("RDS client is not connected - reporting not ready")
+			ready = false
+		}
+	}
+
+	// Record connection state metric
+	if ids.driver.metrics != nil && ids.driver.rdsClient != nil {
+		ids.driver.metrics.RecordConnectionState(ids.driver.rdsClient.GetAddress(), ready)
 	}
 
 	return &csi.ProbeResponse{
