@@ -22,7 +22,18 @@ jobs:
     name: Build Binary Only (Fast)
     runs-on: ubuntu-latest  # golang:1.22-bookworm
     steps:
-      # Checkout is already done by the runner - code is in workspace
+      - name: Debug workspace
+        run: |
+          echo "Working directory: $(pwd)"
+          echo "Files in workspace:"
+          ls -la
+          echo ""
+          echo "Looking for go.mod:"
+          ls -la go.mod || echo "❌ go.mod not found!"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Verify Go installation
         run: |
           go version
