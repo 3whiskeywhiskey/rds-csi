@@ -45,6 +45,7 @@ Progress: [████░░░░░░] ~35% (17/TBD plans complete in v0.9.0
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.9.0 (Quick-002): AttachmentReconciler uses two-stage priority-select pattern for shutdown (stop signals checked before work channels)
 - v0.9.0 (Phase 25.1-03): Probe prefers connectionManager.IsConnected() over rdsClient.IsConnected() (monitor state more accurate)
 - v0.9.0 (Phase 25.1-03): Node watcher registered after informer caches synced (avoids race conditions)
 - v0.9.0 (Phase 25.1-03): Connection manager started after attachment reconciler initialized (callback dependency)
@@ -86,10 +87,13 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 
 ## Session Continuity
 
-Last session: 2026-02-05 19:34
-Stopped at: Completed 25.1-03-PLAN.md (Driver Integration & Health-Aware Probe)
+Last session: 2026-02-05 19:45
+Stopped at: Completed Quick Task 002 (Fix TestTriggerReconcile_AfterStop Deadlock)
 Resume file: None
 Next action: Phase 25.1 complete. Ready for Phase 26 (Snapshots) or continue with remaining v0.9.0 phases.
 
+**Quick tasks completed:**
+- Quick 002 (2026-02-05): Fixed AttachmentReconciler shutdown deadlock with priority-select pattern
+
 ---
-*Last updated: 2026-02-05 after Phase 25.1 verification*
+*Last updated: 2026-02-05 after Quick Task 002*
