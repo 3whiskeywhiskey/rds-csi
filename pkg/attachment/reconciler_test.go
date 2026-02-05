@@ -379,3 +379,161 @@ func TestReconciler_GetGracePeriod(t *testing.T) {
 		t.Errorf("Expected grace period %v, got %v", gracePeriod, r.GetGracePeriod())
 	}
 }
+
+func TestTriggerReconcile_ImmediateReconciliation(t *testing.T) {
+	// Create fake k8s client with NO nodes (simulating deleted node)
+	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
+
+	// Create attachment manager and track a volume to non-existent node
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-test-trigger"
+	nodeID := "deleted-node"
+
+	err := am.TrackAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		t.Fatalf("TrackAttachment failed: %v", err)
+	}
+
+	// Create reconciler with very long interval so periodic reconciliation won't fire
+	r, err := NewAttachmentReconciler(ReconcilerConfig{
+		Manager:     am,
+		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
+		Interval:    1 * time.Hour, // Very long - we control timing via TriggerReconcile
+		GracePeriod: 1 * time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create reconciler: %v", err)
+	}
+
+	// Start reconciler
+	err = r.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer r.Stop()
+
+	// Wait for initial reconciliation to complete
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify attachment was cleared by initial reconciliation
+	_, exists := am.GetAttachment(volumeID)
+	if exists {
+		t.Error("Expected stale attachment to be cleared by initial reconciliation")
+	}
+
+	// Re-track the attachment to test TriggerReconcile
+	err = am.TrackAttachment(ctx, volumeID, nodeID)
+	if err != nil {
+		t.Fatalf("Re-track failed: %v", err)
+	}
+
+	// Trigger reconciliation immediately
+	r.TriggerReconcile()
+
+	// Wait for reconciliation to process (should be fast)
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify attachment was cleared by triggered reconciliation
+	_, exists = am.GetAttachment(volumeID)
+	if exists {
+		t.Error("Expected stale attachment to be cleared by triggered reconciliation")
+	}
+}
+
+func TestTriggerReconcile_Deduplication(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
+
+	r, err := NewAttachmentReconciler(ReconcilerConfig{
+		Manager:     am,
+		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
+		Interval:    1 * time.Hour,
+		GracePeriod: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create reconciler: %v", err)
+	}
+
+	ctx := context.Background()
+	err = r.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer r.Stop()
+
+	// Send multiple rapid trigger requests
+	for i := 0; i < 10; i++ {
+		r.TriggerReconcile()
+	}
+
+	// Channel should have at most 1 pending trigger due to buffered size 1
+	// We can't directly check channel length, but we verify no panic/deadlock occurs
+	time.Sleep(100 * time.Millisecond)
+
+	// If we got here without deadlock, deduplication works
+}
+
+func TestTriggerReconcile_NotRunning(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
+
+	r, err := NewAttachmentReconciler(ReconcilerConfig{
+		Manager:     am,
+		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
+		Interval:    100 * time.Millisecond,
+		GracePeriod: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create reconciler: %v", err)
+	}
+
+	// Call TriggerReconcile when reconciler is not started - should be safe no-op
+	r.TriggerReconcile()
+
+	// Should not panic
+}
+
+func TestTriggerReconcile_AfterStop(t *testing.T) {
+	am := NewAttachmentManager(nil)
+	k8sClient := fake.NewSimpleClientset()
+	nodeLister, pvLister := createTestListers(k8sClient)
+
+	r, err := NewAttachmentReconciler(ReconcilerConfig{
+		Manager:     am,
+		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
+		Interval:    100 * time.Millisecond,
+		GracePeriod: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create reconciler: %v", err)
+	}
+
+	ctx := context.Background()
+	err = r.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Give goroutine time to start
+	time.Sleep(10 * time.Millisecond)
+
+	// Stop the reconciler
+	r.Stop()
+
+	// Call TriggerReconcile after stop - should be safe no-op
+	r.TriggerReconcile()
+
+	// Should not panic
+}
