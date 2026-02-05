@@ -10,13 +10,18 @@ import (
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
-// mockDeviceResolver is a simple resolver for testing that uses the mock connector's connected map
+// mockDeviceResolver is a mock implementation of nvme.DeviceResolver for testing
+// It implements all the methods that the real DeviceResolver has
 type mockDeviceResolver struct {
 	connector *MockNVMEConnector
 }
 
 // ResolveDevicePath implements device path resolution using the mock's connected map
 func (r *mockDeviceResolver) ResolveDevicePath(nqn string) (string, error) {
+	if r.connector == nil {
+		return "", fmt.Errorf("mock connector not initialized")
+	}
+
 	r.connector.mu.RLock()
 	defer r.connector.mu.RUnlock()
 
@@ -26,14 +31,55 @@ func (r *mockDeviceResolver) ResolveDevicePath(nqn string) (string, error) {
 	return "", fmt.Errorf("no device found for NQN: %s", nqn)
 }
 
-// SetIsConnectedFunc is a no-op for the mock
-func (r *mockDeviceResolver) SetIsConnectedFunc(fn func(string) (bool, error)) {
+// Invalidate is a no-op for the mock
+func (r *mockDeviceResolver) Invalidate(nqn string) {
 	// No-op for mock
 }
 
-// ClearCache is a no-op for the mock
-func (r *mockDeviceResolver) ClearCache() {
+// InvalidateAll is a no-op for the mock
+func (r *mockDeviceResolver) InvalidateAll() {
 	// No-op for mock
+}
+
+// GetTTL returns a default TTL for the mock
+func (r *mockDeviceResolver) GetTTL() time.Duration {
+	return 10 * time.Second
+}
+
+// IsCached returns false for the mock (no real caching)
+func (r *mockDeviceResolver) IsCached(nqn string) bool {
+	return false
+}
+
+// GetCachedPath returns empty string for the mock (no real caching)
+func (r *mockDeviceResolver) GetCachedPath(nqn string) string {
+	return ""
+}
+
+// SetIsConnectedFn is a no-op for the mock
+func (r *mockDeviceResolver) SetIsConnectedFn(fn func(string) (bool, error)) {
+	// No-op for mock
+}
+
+// ListConnectedSubsystems returns all connected NQNs from the mock
+func (r *mockDeviceResolver) ListConnectedSubsystems() ([]string, error) {
+	if r.connector == nil {
+		return nil, fmt.Errorf("mock connector not initialized")
+	}
+
+	r.connector.mu.RLock()
+	defer r.connector.mu.RUnlock()
+
+	nqns := make([]string, 0, len(r.connector.connected))
+	for nqn := range r.connector.connected {
+		nqns = append(nqns, nqn)
+	}
+	return nqns, nil
+}
+
+// IsOrphanedSubsystem returns false for the mock (no orphans in test)
+func (r *mockDeviceResolver) IsOrphanedSubsystem(nqn string) (bool, error) {
+	return false, nil
 }
 
 // MockNVMEConnector is a mock implementation of nvme.Connector for testing
@@ -69,6 +115,7 @@ func NewMockNVMEConnector() *MockNVMEConnector {
 		deviceCounter: 0,
 		config:        nvme.DefaultConfig(),
 		metrics:       &nvme.Metrics{},
+		resolver:      nil, // Explicitly nil - recovery/stale checking code handles this gracefully
 	}
 }
 
@@ -304,11 +351,8 @@ func (m *MockNVMEConnector) GetConfig() nvme.Config {
 }
 
 // GetResolver implements nvme.Connector
-// Returns a mock resolver that uses the connector's connected map
+// Returns nil for test mode - recovery and stale checking code handles this gracefully
 func (m *MockNVMEConnector) GetResolver() *nvme.DeviceResolver {
-	// We can't return our mock resolver directly because GetResolver expects *nvme.DeviceResolver
-	// Instead, return nil and handle it gracefully in the code
-	// The stale mount checker should handle nil resolver gracefully
 	return nil
 }
 

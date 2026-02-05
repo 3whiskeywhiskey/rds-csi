@@ -77,6 +77,16 @@ func (r *MountRecoverer) SetMetrics(metrics *observability.Metrics) {
 func (r *MountRecoverer) Recover(ctx context.Context, mountPath string, nqn string, fsType string, mountOptions []string) (*RecoveryResult, error) {
 	klog.V(2).Infof("Starting mount recovery for %s (NQN: %s)", mountPath, nqn)
 
+	// If resolver is nil (test environment), we can't do recovery
+	if r.resolver == nil {
+		klog.V(4).Infof("Recovery skipped for %s: resolver not configured (test mode)", mountPath)
+		return &RecoveryResult{
+			Recovered:  false,
+			Attempts:   0,
+			FinalError: fmt.Errorf("recovery not available in test mode"),
+		}, fmt.Errorf("recovery not available in test mode")
+	}
+
 	result := &RecoveryResult{
 		Recovered: false,
 		Attempts:  0,
