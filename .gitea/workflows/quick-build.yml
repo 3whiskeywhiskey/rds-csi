@@ -20,7 +20,7 @@ env:
 jobs:
   quick-build:
     name: Build Binary Only (Fast)
-    runs-on: ubuntu-latest  # golang:1.22-bookworm
+    runs-on: golang  # golang:1.24-bookworm or custom image with Go 1.24
     steps:
       - name: Install Node.js for actions
         run: |
