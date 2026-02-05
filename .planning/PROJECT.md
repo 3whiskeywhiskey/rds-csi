@@ -8,6 +8,17 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
+## Current Milestone: v0.9.0 Production Readiness & Test Maturity
+
+**Goal:** Validate CSI spec compliance and build production-ready testing infrastructure
+
+**Target features:**
+- CSI sanity test suite integration and compliance validation
+- Comprehensive RDS mock for automated CI testing
+- E2E test framework with both automated and manual test scenarios
+- Critical coverage gaps closed (error paths, edge cases)
+- Opportunistic package refactoring when code substantially modified
+
 ## Latest Milestone: v0.8.0 Code Quality and Logging Cleanup (Shipped: 2026-02-04)
 
 **Delivered:** Systematic codebase cleanup with improved maintainability, reduced log noise, and comprehensive test coverage
@@ -83,7 +94,11 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 ### Active
 
-None - ready for next milestone planning
+- [ ] CSI sanity tests pass with zero failures
+- [ ] Mock RDS server supports all driver commands
+- [ ] E2E test suite runs in CI without real hardware
+- [ ] Critical error paths have test coverage
+- [ ] Manual test scenarios documented for hardware validation
 
 ### Out of Scope
 
@@ -92,6 +107,9 @@ None - ready for next milestone planning
 - Volume encryption — separate milestone, different concern
 - NVMe multipath — single RDS controller, not applicable
 - Automatic pod restart — CSI spec says drivers report, orchestrators act
+- Security hardening (SSH host key verification, injection fuzzing) — separate security milestone
+- Stress/load testing — hardware constraints, would require dedicated test infrastructure
+- Package refactoring unless code substantially modified — defer to v1.0+ if not triggered
 
 ## Key Decisions
 
@@ -117,4 +135,4 @@ None - ready for next milestone planning
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-02-04 after completing v0.8.0 milestone*
+*Last updated: 2026-02-04 after starting v0.9.0 milestone*
