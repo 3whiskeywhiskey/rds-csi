@@ -26,15 +26,15 @@
 
 ### E2E Testing (E2E)
 
-- [ ] **E2E-01**: Automated volume lifecycle test (create → stage → publish → unpublish → unstage → delete)
-- [ ] **E2E-02**: Automated block volume lifecycle test with KubeVirt VirtualMachineInstance
-- [ ] **E2E-03**: Volume expansion test validates filesystem resize
-- [ ] **E2E-04**: Multi-volume test validates concurrent operations
-- [ ] **E2E-05**: Cleanup test validates orphan detection and reconciliation
-- [ ] **E2E-06**: Node failure simulation test validates volume unstaging on node deletion
-- [ ] **E2E-07**: Controller restart test validates state rebuild from VolumeAttachment objects
-- [ ] **E2E-08**: E2E tests run in CI against mock RDS without real hardware
-- [ ] **E2E-09**: E2E test cleanup prevents orphaned resources between test runs
+- [x] **E2E-01**: Automated volume lifecycle test (create → stage → publish → unpublish → unstage → delete)
+- [x] **E2E-02**: Automated block volume lifecycle test with KubeVirt VirtualMachineInstance
+- [x] **E2E-03**: Volume expansion test validates filesystem resize
+- [x] **E2E-04**: Multi-volume test validates concurrent operations
+- [x] **E2E-05**: Cleanup test validates orphan detection and reconciliation
+- [x] **E2E-06**: Node failure simulation test validates volume unstaging on node deletion
+- [x] **E2E-07**: Controller restart test validates state rebuild from VolumeAttachment objects
+- [x] **E2E-08**: E2E tests run in CI against mock RDS without real hardware
+- [x] **E2E-09**: E2E test cleanup prevents orphaned resources between test runs
 
 ### Coverage & Quality (COV)
 
@@ -123,15 +123,15 @@
 | MOCK-05 | Phase 23 | Complete |
 | MOCK-06 | Phase 23 | Complete |
 | MOCK-07 | Phase 23 | Complete |
-| E2E-01 | Phase 24 | Pending |
-| E2E-02 | Phase 24 | Pending |
-| E2E-03 | Phase 24 | Pending |
-| E2E-04 | Phase 24 | Pending |
-| E2E-05 | Phase 24 | Pending |
-| E2E-06 | Phase 24 | Pending |
-| E2E-07 | Phase 24 | Pending |
-| E2E-08 | Phase 24 | Pending |
-| E2E-09 | Phase 24 | Pending |
+| E2E-01 | Phase 24 | Complete |
+| E2E-02 | Phase 24 | Complete |
+| E2E-03 | Phase 24 | Complete |
+| E2E-04 | Phase 24 | Complete |
+| E2E-05 | Phase 24 | Complete |
+| E2E-06 | Phase 24 | Complete |
+| E2E-07 | Phase 24 | Complete |
+| E2E-08 | Phase 24 | Complete |
+| E2E-09 | Phase 24 | Complete |
 | COV-01 | Phase 25 | Pending |
 | COV-02 | Phase 25 | Pending |
 | COV-03 | Phase 25 | Pending |
