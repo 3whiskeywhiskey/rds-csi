@@ -241,6 +241,11 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Safety check: ensure RDS client is initialized
+	if cs.driver == nil || cs.driver.rdsClient == nil {
+		return nil, status.Error(codes.Internal, "RDS client not initialized")
+	}
+
 	// Safety check: verify volume exists before attempting deletion
 	// This helps catch force-deletion scenarios where the volume might still be in use
 	volume, err := cs.driver.rdsClient.GetVolume(volumeID)

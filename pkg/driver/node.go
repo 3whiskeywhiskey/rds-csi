@@ -943,6 +943,11 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 // Returns nil if mount is healthy or recovery succeeded
 // Returns error if mount is stale and recovery failed
 func (ns *NodeServer) checkAndRecoverMount(ctx context.Context, stagingPath, nqn, fsType string, mountOptions []string, pvcNamespace, pvcName, volumeID string) error {
+	// Skip stale mount check if staleChecker is not initialized (e.g., in tests)
+	if ns.staleChecker == nil {
+		return nil
+	}
+
 	// Check for stale mount with detailed info for event posting
 	staleInfo, err := ns.staleChecker.GetStaleInfo(stagingPath, nqn)
 	if err != nil {

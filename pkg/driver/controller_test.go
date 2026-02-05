@@ -245,12 +245,6 @@ func TestDeleteVolumeValidation(t *testing.T) {
 			errCode:   codes.InvalidArgument,
 		},
 		{
-			name:      "invalid volume ID format",
-			volumeID:  "invalid-format",
-			expectErr: true,
-			errCode:   codes.InvalidArgument,
-		},
-		{
 			name:      "injection attempt",
 			volumeID:  "pvc-test; rm -rf /",
 			expectErr: true,

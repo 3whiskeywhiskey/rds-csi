@@ -19,6 +19,11 @@ const (
 )
 
 var (
+	// volumeIDPattern matches strict UUID format with pvc- prefix
+	// Format: pvc-<lowercase-uuid>
+	// Example: pvc-12345678-1234-1234-1234-123456789abc
+	volumeIDPattern = regexp.MustCompile(`^pvc-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+
 	// safeSlotPattern matches safe slot names (alphanumeric and hyphen only)
 	safeSlotPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 
@@ -51,17 +56,35 @@ func VolumeNameToID(name string) string {
 }
 
 // ValidateVolumeID validates that a volume ID is safe for use in commands
-// Accepts any alphanumeric name with hyphens to support CSI sanity test names
+// For production volume IDs: must match "pvc-<lowercase-uuid>" format
+// For CSI sanity tests: accepts alphanumeric with hyphens (safe pattern) but not UUID-like strings
 // SECURITY: Prevents command injection by restricting to safe characters only
 func ValidateVolumeID(volumeID string) error {
 	if volumeID == "" {
 		return fmt.Errorf("volume ID cannot be empty")
 	}
 
-	// Use same safe pattern as slot validation (alphanumeric + hyphen only)
-	// This allows both "pvc-<uuid>" and CSI sanity test names like "sanity-test-ABC123"
+	// Check if it matches strict UUID pattern (production volume IDs)
+	if volumeIDPattern.MatchString(volumeID) {
+		return nil // Valid production volume ID
+	}
+
+	// For safety, reject anything with special characters first
 	if !safeSlotPattern.MatchString(volumeID) {
 		return fmt.Errorf("invalid volume ID format: %s (only alphanumeric and hyphen allowed)", volumeID)
+	}
+
+	// Reject if it starts with "pvc-" but doesn't match UUID format
+	// This catches malformed production IDs like "pvc-invalid" or "pvc-UPPERCASE"
+	if strings.HasPrefix(volumeID, VolumeIDPrefix) {
+		return fmt.Errorf("invalid volume ID format: %s (expected pvc-<lowercase-uuid>)", volumeID)
+	}
+
+	// Reject UUID-like strings without proper prefix (e.g., "12345678-1234-...")
+	// This pattern detects UUID format without "pvc-" prefix
+	uuidLikePattern := regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+	if uuidLikePattern.MatchString(volumeID) {
+		return fmt.Errorf("invalid volume ID format: %s (missing pvc- prefix)", volumeID)
 	}
 
 	// Additional length check to prevent excessively long volume IDs
@@ -69,7 +92,7 @@ func ValidateVolumeID(volumeID string) error {
 		return fmt.Errorf("volume ID too long: %d characters (max 250)", len(volumeID))
 	}
 
-	return nil
+	return nil // Valid CSI sanity test ID (alphanumeric, no pvc-, not UUID-like)
 }
 
 // ValidateSlotName validates that a slot name is safe (prevents command injection)
