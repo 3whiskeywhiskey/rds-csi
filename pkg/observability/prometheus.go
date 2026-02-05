@@ -53,6 +53,11 @@ type Metrics struct {
 	migrationsTotal   *prometheus.CounterVec
 	migrationDuration prometheus.Histogram
 	activeMigrations  prometheus.Gauge
+
+	// RDS connection metrics
+	rdsConnectionState   *prometheus.GaugeVec
+	rdsReconnectTotal    *prometheus.CounterVec
+	rdsReconnectDuration prometheus.Histogram
 }
 
 // NewMetrics creates a new Metrics instance with all metrics registered.
@@ -229,6 +234,34 @@ func NewMetrics() *Metrics {
 			Name:      "active_migrations",
 			Help:      "Number of currently in-progress KubeVirt live migrations",
 		}),
+
+		rdsConnectionState: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: namespace,
+				Subsystem: "rds",
+				Name:      "connection_state",
+				Help:      "RDS SSH connection state (1=connected, 0=disconnected)",
+			},
+			[]string{"address"},
+		),
+
+		rdsReconnectTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: namespace,
+				Subsystem: "rds",
+				Name:      "reconnect_total",
+				Help:      "Total RDS reconnection attempts by status",
+			},
+			[]string{"status"}, // success, failure
+		),
+
+		rdsReconnectDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "rds",
+			Name:      "reconnect_duration_seconds",
+			Help:      "Duration of successful RDS reconnections in seconds",
+			Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
+		}),
 	}
 
 	// Register all metrics with the custom registry
@@ -253,6 +286,9 @@ func NewMetrics() *Metrics {
 		m.migrationsTotal,
 		m.migrationDuration,
 		m.activeMigrations,
+		m.rdsConnectionState,
+		m.rdsReconnectTotal,
+		m.rdsReconnectDuration,
 	)
 
 	return m
@@ -384,4 +420,24 @@ func (m *Metrics) RecordMigrationResult(result string, duration time.Duration) {
 	m.migrationsTotal.WithLabelValues(result).Inc()
 	m.migrationDuration.Observe(duration.Seconds())
 	m.activeMigrations.Dec()
+}
+
+// RecordConnectionState records the RDS SSH connection state.
+// connected=true sets gauge to 1.0, connected=false sets gauge to 0.0.
+func (m *Metrics) RecordConnectionState(address string, connected bool) {
+	value := 0.0
+	if connected {
+		value = 1.0
+	}
+	m.rdsConnectionState.WithLabelValues(address).Set(value)
+}
+
+// RecordReconnectAttempt records an RDS reconnection attempt.
+// status should be "success" or "failure".
+// On success, also records the reconnection duration.
+func (m *Metrics) RecordReconnectAttempt(status string, duration time.Duration) {
+	m.rdsReconnectTotal.WithLabelValues(status).Inc()
+	if status == "success" {
+		m.rdsReconnectDuration.Observe(duration.Seconds())
+	}
 }
