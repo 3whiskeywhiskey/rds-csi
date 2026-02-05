@@ -22,15 +22,6 @@ jobs:
     name: Build Binary Only (Fast)
     runs-on: ubuntu-latest  # golang:1.22-bookworm
     steps:
-      - name: Debug workspace
-        run: |
-          echo "Working directory: $(pwd)"
-          echo "Files in workspace:"
-          ls -la
-          echo ""
-          echo "Looking for go.mod:"
-          ls -la go.mod || echo "❌ go.mod not found!"
-
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -39,10 +30,7 @@ jobs:
           go version
           echo "✅ Go is pre-installed in golang:1.22-bookworm"
 
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build binary
+      - name: Build binary (includes dependency download)
         run: make build-local
 
       - name: Verify binary
