@@ -115,6 +115,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Docker CLI
+        run: |
+          apt-get update && apt-get install -y docker.io
+          docker --version
+
       - name: Build container (no push)
         run: |
           docker build \

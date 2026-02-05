@@ -42,6 +42,11 @@ jobs:
           ./bin/rds-csi-plugin-* --version || true
           echo "✅ Binary built successfully"
 
+      - name: Install Docker CLI
+        run: |
+          apt-get update && apt-get install -y docker.io
+          docker --version
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
