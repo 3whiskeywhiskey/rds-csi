@@ -234,9 +234,9 @@ test-sanity:
 	@test/sanity/run-sanity-tests.sh
 
 .PHONY: test-sanity-mock
-test-sanity-mock: build-local
+test-sanity-mock:
 	@echo "Running CSI sanity tests with mock RDS..."
-	@RDS_ADDRESS="" test/sanity/run-sanity-tests.sh
+	go test -v -race -timeout 10m ./test/sanity/...
 
 .PHONY: test-sanity-real
 test-sanity-real: build-local
