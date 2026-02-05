@@ -1,0 +1,156 @@
+name: Full Test Suite
+
+# Comprehensive testing on PRs - ALL TESTS
+# Goal: <15 minutes for thorough validation
+
+on:
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  verify-and-test:
+    name: Code Quality & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install dependencies
+        run: |
+          go mod download
+          make install-tools
+
+      - name: Run verification (fmt, vet, lint)
+        run: make verify
+
+      - name: Run unit tests
+        run: make test
+
+      - name: Generate coverage report
+        run: make test-coverage
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Coverage: ${COVERAGE}%"
+
+          if (( $(echo "$COVERAGE < 60" | bc -l) )); then
+            echo "❌ Coverage ${COVERAGE}% is below 60% threshold"
+            exit 1
+          fi
+
+          echo "✅ Coverage ${COVERAGE}% meets 60% threshold"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+  sanity-tests:
+    name: CSI Sanity Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run CSI sanity tests
+        run: |
+          echo "Running CSI sanity tests with 15 minute timeout..."
+          go test -v -race -timeout 15m ./test/sanity/... 2>&1 | tee sanity-output.log
+        continue-on-error: true
+        id: sanity
+
+      - name: Upload sanity test logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sanity-test-logs
+          path: sanity-output.log
+          retention-days: 7
+
+      - name: Check sanity test result
+        if: steps.sanity.outcome == 'failure'
+        run: |
+          echo "❌ CSI sanity tests failed - see artifacts for details"
+          exit 1
+
+  mock-stress-tests:
+    name: Mock RDS Stress Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run mock stress tests
+        run: |
+          echo "Running concurrent stress tests..."
+          go test -v -race -timeout 5m ./test/mock/... -run TestConcurrent
+          echo "✅ Mock stress tests passed"
+
+  build-test:
+    name: Test Container Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build container (no push)
+        run: |
+          docker build \
+            --build-arg GIT_COMMIT=${{ github.event.pull_request.head.sha }} \
+            --build-arg GIT_TAG=pr-${{ github.event.pull_request.number }} \
+            --build-arg BUILD_DATE=${{ github.event.pull_request.updated_at }} \
+            -t test-image:pr-${{ github.event.pull_request.number }} \
+            .
+
+          echo "✅ Container build successful"
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [verify-and-test, sanity-tests, mock-stress-tests, build-test]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🧪 Test Results Summary"
+          echo ""
+          echo "| Test Suite | Status |"
+          echo "|------------|--------|"
+          echo "| Code Quality & Unit Tests | ${{ needs.verify-and-test.result }} |"
+          echo "| CSI Sanity Tests | ${{ needs.sanity-tests.result }} |"
+          echo "| Mock Stress Tests | ${{ needs.mock-stress-tests.result }} |"
+          echo "| Container Build | ${{ needs.build-test.result }} |"
+          echo ""
+
+          if [ "${{ needs.verify-and-test.result }}" = "success" ] && \
+             [ "${{ needs.sanity-tests.result }}" = "success" ] && \
+             [ "${{ needs.mock-stress-tests.result }}" = "success" ] && \
+             [ "${{ needs.build-test.result }}" = "success" ]; then
+            echo "✅ **All tests passed! Ready for review.**"
+            exit 0
+          else
+            echo "❌ **Some tests failed. Please review the logs.**"
+            exit 1
+          fi
