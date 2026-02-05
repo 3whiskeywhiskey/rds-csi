@@ -6,6 +6,15 @@ name: Full Test Suite
 on:
   pull_request:
     branches: [dev, main]
+  workflow_dispatch:  # Allow manual trigger
+  push:
+    branches: [dev, main]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.gitea/workflows/full-test.yml'
 
 jobs:
   verify-and-test:
