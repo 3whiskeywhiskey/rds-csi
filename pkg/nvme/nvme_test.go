@@ -303,6 +303,7 @@ func TestNewConnector(t *testing.T) {
 	if c == nil {
 		t.Fatal("NewConnector returned nil")
 	}
+	defer c.Close()
 
 	// Verify it implements the interface
 	var _ = Connector(c)
@@ -341,6 +342,7 @@ func TestGetDevicePathWithMockFilesystem(t *testing.T) {
 func TestConnectorAccessorMethods(t *testing.T) {
 	config := DefaultConfig()
 	c := NewConnectorWithConfig(config).(*connector)
+	defer c.Close()
 
 	// Test GetMetrics returns non-nil metrics
 	metrics := c.GetMetrics()
@@ -358,6 +360,30 @@ func TestConnectorAccessorMethods(t *testing.T) {
 	resolver := c.GetResolver()
 	if resolver == nil {
 		t.Error("GetResolver() returned nil")
+	}
+}
+
+// TestConnectorClose tests that Close() properly stops healthcheck goroutines
+func TestConnectorClose(t *testing.T) {
+	config := DefaultConfig()
+	config.EnableHealthcheck = true
+	config.HealthcheckInterval = 100 * time.Millisecond
+
+	c := NewConnectorWithConfig(config)
+
+	// Give healthcheck time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should return without error
+	err := c.Close()
+	if err != nil {
+		t.Errorf("Close() returned error: %v", err)
+	}
+
+	// Calling Close() again should be safe (idempotent)
+	err = c.Close()
+	if err != nil {
+		t.Errorf("Second Close() returned error: %v", err)
 	}
 }
 

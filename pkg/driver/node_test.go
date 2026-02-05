@@ -648,6 +648,10 @@ func (m *mockNVMEConnector) GetResolver() *nvme.DeviceResolver {
 func (m *mockNVMEConnector) SetPromMetrics(metrics *observability.Metrics) {
 }
 
+func (m *mockNVMEConnector) Close() error {
+	return nil
+}
+
 // Helper function to create VolumeCapability for block volumes
 func createBlockVolumeCapability() *csi.VolumeCapability {
 	return &csi.VolumeCapability{
@@ -1616,7 +1620,7 @@ func TestNodeUnstageVolume_ErrorScenarios(t *testing.T) {
 func TestCSI_NegativeScenarios_Node(t *testing.T) {
 	tests := []struct {
 		name       string
-		method     string // CSI method name
+		method     string                                         // CSI method name
 		setupMock  func(*mockNVMEConnector, *mockMounter, string) // Gets stagingPath for setup
 		request    interface{}
 		wantCode   codes.Code

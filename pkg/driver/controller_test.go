@@ -2195,8 +2195,8 @@ func TestSanityRegression_VolumeContextParameters(t *testing.T) {
 		// Note: parameter validation happens at NodeStageVolume, not CreateVolume
 		// CreateVolume accepts parameters and stores them in VolumeContext
 		{
-			name: "empty parameters",
-			params: map[string]string{},
+			name:    "empty parameters",
+			params:  map[string]string{},
 			wantErr: false,
 		},
 	}

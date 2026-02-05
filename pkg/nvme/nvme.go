@@ -59,6 +59,9 @@ type Connector interface {
 
 	// SetPromMetrics sets the Prometheus metrics instance for recording operations
 	SetPromMetrics(metrics *observability.Metrics)
+
+	// Close stops background goroutines and cleans up resources
+	Close() error
 }
 
 // Target represents an NVMe/TCP connection target
@@ -849,6 +852,22 @@ func (c *connector) checkStuckOperations() {
 			c.metrics.mu.Unlock()
 		}
 	}
+}
+
+// Close stops background goroutines and cleans up resources
+func (c *connector) Close() error {
+	// Cancel healthcheck goroutine if running
+	if c.healthcheckCancel != nil {
+		c.healthcheckCancel()
+		// Wait for healthcheck to finish (with timeout to avoid hanging)
+		select {
+		case <-c.healthcheckDone:
+			// Healthcheck stopped cleanly
+		case <-time.After(5 * time.Second):
+			klog.Warning("Healthcheck goroutine did not stop within timeout")
+		}
+	}
+	return nil
 }
 
 // waitForDeviceWithContext waits for device to appear with context support

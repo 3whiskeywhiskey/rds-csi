@@ -1053,9 +1053,9 @@ func TestMount_ErrorScenarios(t *testing.T) {
 			expectError: false, // Mount handles files for block volumes
 		},
 		{
-			name:   "mount with read-only flag",
-			source: "/dev/nvme0n1",
-			fsType: "ext4",
+			name:    "mount with read-only flag",
+			source:  "/dev/nvme0n1",
+			fsType:  "ext4",
 			options: []string{"ro"},
 			setupTarget: func(target string) error {
 				return nil // Normal setup
@@ -1063,9 +1063,9 @@ func TestMount_ErrorScenarios(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:   "dangerous mount option rejected",
-			source: "/dev/nvme0n1",
-			fsType: "ext4",
+			name:    "dangerous mount option rejected",
+			source:  "/dev/nvme0n1",
+			fsType:  "ext4",
 			options: []string{"suid"},
 			setupTarget: func(target string) error {
 				return nil
@@ -1074,9 +1074,9 @@ func TestMount_ErrorScenarios(t *testing.T) {
 			errContains: "dangerous",
 		},
 		{
-			name:   "non-whitelisted mount option rejected",
-			source: "/dev/nvme0n1",
-			fsType: "ext4",
+			name:    "non-whitelisted mount option rejected",
+			source:  "/dev/nvme0n1",
+			fsType:  "ext4",
 			options: []string{"custom-bad-option"},
 			setupTarget: func(target string) error {
 				return nil
@@ -1132,38 +1132,38 @@ func TestFormat_ErrorScenarios(t *testing.T) {
 		errContains    string
 	}{
 		{
-			name:        "device not formatted - format ext4 success",
-			device:      "/dev/nvme0n1",
-			fsType:      "ext4",
-			isFormatted: false,
+			name:           "device not formatted - format ext4 success",
+			device:         "/dev/nvme0n1",
+			fsType:         "ext4",
+			isFormatted:    false,
 			formatExitCode: 0,
-			expectError: false,
+			expectError:    false,
 		},
 		{
-			name:        "device not formatted - format xfs success",
-			device:      "/dev/nvme0n1",
-			fsType:      "xfs",
-			isFormatted: false,
+			name:           "device not formatted - format xfs success",
+			device:         "/dev/nvme0n1",
+			fsType:         "xfs",
+			isFormatted:    false,
 			formatExitCode: 0,
-			expectError: false,
+			expectError:    false,
 		},
 		{
-			name:        "device not formatted - format ext4 fails",
-			device:      "/dev/nvme0n1",
-			fsType:      "ext4",
-			isFormatted: false,
+			name:           "device not formatted - format ext4 fails",
+			device:         "/dev/nvme0n1",
+			fsType:         "ext4",
+			isFormatted:    false,
 			formatExitCode: 1,
-			expectError: true,
-			errContains: "mkfs.ext4 failed",
+			expectError:    true,
+			errContains:    "mkfs.ext4 failed",
 		},
 		{
-			name:        "device not formatted - format xfs fails",
-			device:      "/dev/nvme0n1",
-			fsType:      "xfs",
-			isFormatted: false,
+			name:           "device not formatted - format xfs fails",
+			device:         "/dev/nvme0n1",
+			fsType:         "xfs",
+			isFormatted:    false,
 			formatExitCode: 1,
-			expectError: true,
-			errContains: "mkfs.xfs failed",
+			expectError:    true,
+			errContains:    "mkfs.xfs failed",
 		},
 		{
 			name:        "device not formatted - unsupported filesystem",

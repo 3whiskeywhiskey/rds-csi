@@ -85,6 +85,11 @@ func (m *MockConnector) SetPromMetrics(metrics *observability.Metrics) {
 	// No-op for mock
 }
 
+func (m *MockConnector) Close() error {
+	// No-op for mock - no background goroutines to clean up
+	return nil
+}
+
 // testableOrphanCleaner wraps OrphanCleaner with controlled behavior
 type testableOrphanCleaner struct {
 	connector      *MockConnector

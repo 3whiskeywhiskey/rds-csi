@@ -5,17 +5,16 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 // Constants for test configuration
 const (
-	GiB                  = 1024 * 1024 * 1024
-	MiB                  = 1024 * 1024
-	defaultTimeout       = 2 * time.Minute
-	pollInterval         = 200 * time.Millisecond
-	testVolumeBasePath   = "/storage-pool/metal-csi"
+	GiB                = 1024 * 1024 * 1024
+	MiB                = 1024 * 1024
+	defaultTimeout     = 2 * time.Minute
+	pollInterval       = 200 * time.Millisecond
+	testVolumeBasePath = "/storage-pool/metal-csi"
 )
 
 // testVolumeName creates a unique volume name for the current test
@@ -48,25 +47,6 @@ func blockVolumeCapability() *csi.VolumeCapability {
 			Block: &csi.VolumeCapability_BlockVolume{},
 		},
 	}
-}
-
-// createVolumeWithCleanup creates a volume and automatically registers cleanup
-// using Ginkgo's DeferCleanup to ensure the volume is deleted even if the test fails
-func createVolumeWithCleanup(name string, sizeBytes int64, capability *csi.VolumeCapability) string {
-	resp, err := controllerClient.CreateVolume(ctx, &csi.CreateVolumeRequest{
-		Name:               name,
-		CapacityRange:      &csi.CapacityRange{RequiredBytes: sizeBytes},
-		VolumeCapabilities: []*csi.VolumeCapability{capability},
-	})
-	Expect(err).NotTo(HaveOccurred(), "CreateVolume should succeed")
-	Expect(resp.Volume).NotTo(BeNil())
-
-	volumeID := resp.Volume.VolumeId
-	DeferCleanup(func() {
-		_, _ = controllerClient.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: volumeID})
-	})
-
-	return volumeID
 }
 
 // waitForVolumeOnMockRDS waits for a volume to appear on the mock RDS server

@@ -113,7 +113,7 @@ var _ = BeforeSuite(func() {
 
 	// Create gRPC connection and clients
 	By("Creating gRPC clients")
-	grpcConn, err = grpc.Dial(
+	grpcConn, err = grpc.NewClient(
 		endpoint,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

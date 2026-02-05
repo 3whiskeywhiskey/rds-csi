@@ -1,9 +1,9 @@
 package e2e
 
 import (
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/klog/v2"
 )
 
@@ -101,8 +101,8 @@ var _ = Describe("Volume Expansion [E2E-03]", func() {
 
 		By("Expanding volume and checking NodeExpansionRequired")
 		expandResp, err := controllerClient.ControllerExpandVolume(ctx, &csi.ControllerExpandVolumeRequest{
-			VolumeId:      volumeID,
-			CapacityRange: &csi.CapacityRange{RequiredBytes: int64(10 * GiB)},
+			VolumeId:         volumeID,
+			CapacityRange:    &csi.CapacityRange{RequiredBytes: int64(10 * GiB)},
 			VolumeCapability: mountVolumeCapability("ext4"),
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -132,8 +132,8 @@ var _ = Describe("Volume Expansion [E2E-03]", func() {
 
 		By("Expanding block volume")
 		expandResp, err := controllerClient.ControllerExpandVolume(ctx, &csi.ControllerExpandVolumeRequest{
-			VolumeId:      volumeID,
-			CapacityRange: &csi.CapacityRange{RequiredBytes: int64(10 * GiB)},
+			VolumeId:         volumeID,
+			CapacityRange:    &csi.CapacityRange{RequiredBytes: int64(10 * GiB)},
 			VolumeCapability: blockVolumeCapability(),
 		})
 		Expect(err).NotTo(HaveOccurred())
