@@ -184,10 +184,10 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 25.2-01-PLAN.md -- Fix golangci-lint v2 config format and resolve 8 staticcheck code issues
-- [ ] 25.2-02-PLAN.md -- Ratchet complexity thresholds, run make verify, update project tracking
+- [x] 25.2-01-PLAN.md — Fix golangci-lint v2 config format and resolve 7 staticcheck code issues
+- [x] 25.2-02-PLAN.md — Document complexity threshold justification and verify full CI pipeline
 
-**Context**: golangci-lint v2 upgrade in Phase 25.1 left config in broken v1 format (linters-settings, issues.exclude-rules, version as number) causing v2 to silently ignore settings/exclusions. Root cause: 126 of 134 issues were from config format, only 8 required code changes.
+**Context**: golangci-lint v2 upgrade in Phase 25.1 left config in broken v1 format (linters-settings, issues.exclude-rules, version as number) causing v2 to silently ignore settings/exclusions. Root cause: 126 of 134 issues were from config format, only 7 required code changes.
 
 #### Phase 26: Volume Snapshots
 **Goal**: Btrfs-based volume snapshots enable backup and restore workflows
@@ -241,7 +241,7 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 25.2 → 2
 | 24. Automated E2E Test Suite | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
 | 25. Coverage & Quality Improvements | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
 | 25.1 Attachment Reconciliation & RDS Resilience | v0.9.0 | 3/3 | ✅ Complete | 2026-02-05 |
-| 25.2 Fix Linter Issues Blocking CI Verification | v0.9.0 | 0/TBD | 🚨 URGENT | - |
+| 25.2 Fix Linter Issues Blocking CI Verification | v0.9.0 | 2/2 | ✅ Complete | 2026-02-05 |
 | 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 

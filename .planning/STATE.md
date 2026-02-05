@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 25.2 of 27 (Fix Linter Issues Blocking CI Verification)
-Plan: 01 of 02
-Status: In progress
-Last activity: 2026-02-05 — Completed 25.2-01-PLAN.md
+Phase: 26 of 27 (Volume Snapshots)
+Plan: Ready to start
+Status: Phase 25.2 complete
+Last activity: 2026-02-05 — Completed 25.2-02-PLAN.md
 
-Progress: [████░░░░░░] ~35% (18/TBD plans complete in v0.9.0)
+Progress: [████░░░░░░] ~37% (20/TBD plans complete in v0.9.0)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 97 (79 previous + 18 v0.9.0)
-- v0.9.0 plans completed: 18/TBD
+- Total plans completed: 99 (79 previous + 20 v0.9.0)
+- v0.9.0 plans completed: 20/TBD
 - Average duration: 6 min (v0.9.0)
-- Total execution time: 1.70 hours (v0.9.0)
+- Total execution time: 1.82 hours (v0.9.0)
 
 **By Milestone:**
 
@@ -32,7 +32,7 @@ Progress: [████░░░░░░] ~35% (18/TBD plans complete in v0.9.0
 | v0.9.0 Production Readiness | 22-27 | 15/TBD | 🚧 In Progress |
 
 **Recent Trend:**
-- v0.9.0 Phase 25.2: 1 plan, 6 minutes, in progress
+- v0.9.0 Phase 25.2: 2 plans, 12 minutes, completed 2026-02-05
 - v0.9.0 Phase 25.1: 3 plans, 23 minutes, completed 2026-02-05
 - v0.9.0 Phase 25: 4 plans, 28 minutes, completed 2026-02-05
 
@@ -45,6 +45,8 @@ Progress: [████░░░░░░] ~35% (18/TBD plans complete in v0.9.0
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.9.0 (Phase 25.2-02): Complexity threshold 50 justified by CSI spec compliance (highest function: ControllerPublishVolume at 48)
+- v0.9.0 (Phase 25.2-02): Document top 5 complexity offenders for future refactoring (ControllerPublishVolume 48, RecordEvent 44, NodeStageVolume 36, NewDriver 33, main 31)
 - v0.9.0 (Phase 25.2-01): golangci-lint v2 requires string version field (version: "2" not 2)
 - v0.9.0 (Phase 25.2-01): golangci-lint v2 uses nested config (linters.settings, linters.exclusions.rules)
 - v0.9.0 (Phase 25.2-01): Exclude ST1001 (dot imports) for test/e2e/ files (Ginkgo/Gomega convention)
@@ -97,10 +99,10 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 
 ## Session Continuity
 
-Last session: 2026-02-05 21:40
-Stopped at: Completed 25.2-01-PLAN.md (golangci-lint v2 config migration)
+Last session: 2026-02-05 21:45
+Stopped at: Completed 25.2-02-PLAN.md (complexity threshold documentation, make verify passed)
 Resume file: None
-Next action: Continue Phase 25.2 with plan 02, or verify Phase 25.2 goals achieved and proceed to Phase 26 (Snapshots).
+Next action: Phase 25.2 COMPLETE. CI/CD verification pipeline unblocked. Ready to proceed to Phase 26 (Volume Snapshots).
 
 **Quick tasks completed:**
 - Quick 002 (2026-02-05): Fixed AttachmentReconciler shutdown deadlock with priority-select pattern
