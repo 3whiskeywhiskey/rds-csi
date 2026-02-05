@@ -169,6 +169,26 @@ Plans:
 
 **Context**: Production incident on 2026-02-05 where RDS storage crash caused node failures, leaving stale VolumeAttachments that prevented volume reattachment. Required manual finalizer removal and CSI controller restart to restore service (3-hour outage extended to 5+ hours).
 
+#### Phase 25.2: Fix Linter Issues Blocking CI Verification (INSERTED)
+**Goal**: Resolve 134 pre-existing linter issues to unblock CI/CD verification pipeline
+**Depends on**: Phase 25.1 (golangci-lint v2 upgrade complete)
+**Requirements**: LINT-01, LINT-02, LINT-03
+**Success Criteria** (what must be TRUE):
+  1. All 63 errcheck issues resolved (unchecked error returns properly handled)
+  2. All 56 cyclop complexity issues resolved (functions refactored to complexity ≤10 or thresholds adjusted with justification)
+  3. All 7 gocyclo complexity issues resolved (high-complexity functions below threshold)
+  4. All 8 staticcheck issues resolved (error string capitalization, dot imports, De Morgan simplifications)
+  5. `make verify` passes without lint failures (exit code 0)
+  6. CI/CD pipeline verification step succeeds
+  7. No new linter issues introduced during fixes
+**Plans**: 2 plans
+
+Plans:
+- [ ] 25.2-01-PLAN.md -- Fix golangci-lint v2 config format and resolve 8 staticcheck code issues
+- [ ] 25.2-02-PLAN.md -- Ratchet complexity thresholds, run make verify, update project tracking
+
+**Context**: golangci-lint v2 upgrade in Phase 25.1 left config in broken v1 format (linters-settings, issues.exclude-rules, version as number) causing v2 to silently ignore settings/exclusions. Root cause: 126 of 134 issues were from config format, only 8 required code changes.
+
 #### Phase 26: Volume Snapshots
 **Goal**: Btrfs-based volume snapshots enable backup and restore workflows
 **Depends on**: Phase 25 (quality foundation for snapshot feature)
@@ -211,7 +231,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 26 → 27
+Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 25.2 → 26 → 27
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -221,8 +241,9 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 26 → 27
 | 24. Automated E2E Test Suite | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
 | 25. Coverage & Quality Improvements | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
 | 25.1 Attachment Reconciliation & RDS Resilience | v0.9.0 | 3/3 | ✅ Complete | 2026-02-05 |
+| 25.2 Fix Linter Issues Blocking CI Verification | v0.9.0 | 0/TBD | 🚨 URGENT | - |
 | 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-05 after Phase 25.1 execution*
+*Last updated: 2026-02-05 after Phase 25.2 insertion*
