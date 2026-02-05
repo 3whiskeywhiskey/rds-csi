@@ -7,9 +7,11 @@ import (
 
 // MockClient is a mock implementation of RDSClient for testing
 type MockClient struct {
-	mu      sync.RWMutex
-	volumes map[string]*VolumeInfo
-	address string
+	mu            sync.RWMutex
+	volumes       map[string]*VolumeInfo
+	address       string
+	nextError     error // Error to return on next operation
+	persistentErr error // Error to return on all operations until cleared
 }
 
 // NewMockClient creates a new MockClient for testing
@@ -41,6 +43,43 @@ func (m *MockClient) SetAddress(addr string) {
 	m.address = addr
 }
 
+// SetError sets an error to be returned on the next operation (test helper)
+func (m *MockClient) SetError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextError = err
+}
+
+// SetPersistentError sets an error to be returned on ALL operations until cleared (test helper)
+func (m *MockClient) SetPersistentError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistentErr = err
+}
+
+// ClearError clears any pending error (test helper)
+func (m *MockClient) ClearError() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextError = nil
+	m.persistentErr = nil
+}
+
+// checkError checks for and clears pending error
+func (m *MockClient) checkError() error {
+	// Check persistent error first
+	if m.persistentErr != nil {
+		return m.persistentErr
+	}
+	// Then check one-time error
+	if m.nextError != nil {
+		err := m.nextError
+		m.nextError = nil
+		return err
+	}
+	return nil
+}
+
 // Connect implements RDSClient
 func (m *MockClient) Connect() error {
 	return nil
@@ -68,6 +107,11 @@ func (m *MockClient) CreateVolume(opts CreateVolumeOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return err
+	}
+
 	if _, exists := m.volumes[opts.Slot]; exists {
 		return fmt.Errorf("volume %s already exists", opts.Slot)
 	}
@@ -89,6 +133,11 @@ func (m *MockClient) CreateVolume(opts CreateVolumeOptions) error {
 func (m *MockClient) DeleteVolume(slot string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return err
+	}
 
 	if _, exists := m.volumes[slot]; !exists {
 		// Idempotent - not an error if doesn't exist
@@ -115,8 +164,13 @@ func (m *MockClient) ResizeVolume(slot string, newSizeBytes int64) error {
 
 // GetVolume implements RDSClient
 func (m *MockClient) GetVolume(slot string) (*VolumeInfo, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return nil, err
+	}
 
 	vol, exists := m.volumes[slot]
 	if !exists {

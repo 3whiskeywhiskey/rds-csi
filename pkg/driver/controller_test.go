@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 func TestValidateVolumeCapabilities(t *testing.T) {
@@ -1347,6 +1349,231 @@ func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
+			}
+		})
+	}
+}
+
+// ========================================
+// Error Path Tests (Phase 25-01)
+// ========================================
+
+func TestCreateVolume_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupMock     func(*rds.MockClient)
+		requestName   string
+		requestSize   int64
+		expectCode    codes.Code
+		errorContains string
+	}{
+		{
+			name: "SSH connection failure returns Unavailable",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("ssh: %w", utils.ErrConnectionFailed))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name: "SSH timeout returns Unavailable",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("operation timed out: %w", utils.ErrOperationTimeout))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name: "Disk full returns ResourceExhausted",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("not enough space on device: %w", utils.ErrResourceExhausted))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.ResourceExhausted,
+			errorContains: "insufficient storage",
+		},
+		{
+			name: "Generic error returns Internal",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("unexpected error"))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.Internal,
+			errorContains: "failed to create volume",
+		},
+		{
+			name: "Empty volume name returns InvalidArgument",
+			setupMock: func(m *rds.MockClient) {
+				// No error setup needed - validation happens before RDS call
+			},
+			requestName:   "",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.InvalidArgument,
+			errorContains: "volume name is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			cs, mockRDS := testControllerServer(t)
+
+			// Setup mock behavior
+			tt.setupMock(mockRDS)
+
+			// Create request
+			req := &csi.CreateVolumeRequest{
+				Name: tt.requestName,
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: tt.requestSize,
+				},
+			}
+
+			// Call CreateVolume
+			_, err := cs.CreateVolume(ctx, req)
+
+			// Verify error
+			if err == nil {
+				t.Fatal("Expected error but got nil")
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("Expected gRPC status error, got: %T %v", err, err)
+			}
+
+			if st.Code() != tt.expectCode {
+				t.Errorf("Expected code %v, got %v", tt.expectCode, st.Code())
+			}
+
+			if !strings.Contains(st.Message(), tt.errorContains) {
+				t.Errorf("Expected error containing %q, got %q", tt.errorContains, st.Message())
+			}
+		})
+	}
+}
+
+func TestDeleteVolume_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name          string
+		volumeID      string
+		setupMock     func(*rds.MockClient)
+		expectCode    codes.Code
+		errorContains string
+	}{
+		{
+			name:     "SSH failure during delete returns Unavailable",
+			volumeID: testVolumeID1,
+			setupMock: func(m *rds.MockClient) {
+				// Add volume first
+				m.AddVolume(&rds.VolumeInfo{
+					Slot:          testVolumeID1,
+					FileSizeBytes: 1024 * 1024 * 1024,
+				})
+				// Set persistent error for all operations
+				m.SetPersistentError(fmt.Errorf("ssh: %w", utils.ErrConnectionFailed))
+			},
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name:     "SSH timeout during delete returns Unavailable",
+			volumeID: testVolumeID2,
+			setupMock: func(m *rds.MockClient) {
+				m.AddVolume(&rds.VolumeInfo{
+					Slot:          testVolumeID2,
+					FileSizeBytes: 1024 * 1024 * 1024,
+				})
+				m.SetPersistentError(fmt.Errorf("timeout: %w", utils.ErrOperationTimeout))
+			},
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name:     "Invalid volume ID format returns InvalidArgument",
+			volumeID: "invalid; rm -rf /",
+			setupMock: func(m *rds.MockClient) {
+				// No setup needed - validation happens before RDS call
+			},
+			expectCode:    codes.InvalidArgument,
+			errorContains: "invalid volume ID",
+		},
+		{
+			name:     "Empty volume ID returns InvalidArgument",
+			volumeID: "",
+			setupMock: func(m *rds.MockClient) {
+				// No setup needed - validation happens before RDS call
+			},
+			expectCode:    codes.InvalidArgument,
+			errorContains: "volume ID is required",
+		},
+		{
+			name:     "Idempotent delete of non-existent volume succeeds",
+			volumeID: testVolumeID3,
+			setupMock: func(m *rds.MockClient) {
+				// Don't add volume - it doesn't exist
+			},
+			expectCode:    codes.OK,
+			errorContains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			cs, mockRDS := testControllerServer(t)
+
+			// Setup mock behavior
+			tt.setupMock(mockRDS)
+
+			// Create request
+			req := &csi.DeleteVolumeRequest{
+				VolumeId: tt.volumeID,
+			}
+
+			// Call DeleteVolume
+			_, err := cs.DeleteVolume(ctx, req)
+
+			if tt.expectCode == codes.OK {
+				// Success case - no error expected
+				if err != nil {
+					t.Errorf("Expected success but got error: %v", err)
+				}
+				return
+			}
+
+			// Error cases
+			if err == nil {
+				t.Fatal("Expected error but got nil")
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("Expected gRPC status error, got: %T %v", err, err)
+			}
+
+			if st.Code() != tt.expectCode {
+				t.Errorf("Expected code %v, got %v", tt.expectCode, st.Code())
+			}
+
+			if tt.errorContains != "" && !strings.Contains(st.Message(), tt.errorContains) {
+				t.Errorf("Expected error containing %q, got %q", tt.errorContains, st.Message())
 			}
 		})
 	}

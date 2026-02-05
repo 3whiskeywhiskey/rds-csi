@@ -193,7 +193,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// Log volume create failure
 		secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeFailure, err, time.Since(startTime))
 
-		// Check if this is a capacity error
+		// Map errors to appropriate gRPC codes
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
 		if stderrors.Is(err, utils.ErrResourceExhausted) {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS: %v", err)
 		}
@@ -250,9 +253,21 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	// This helps catch force-deletion scenarios where the volume might still be in use
 	volume, err := cs.driver.rdsClient.GetVolume(volumeID)
 	if err != nil {
-		// If volume doesn't exist, deletion is idempotent - return success
-		klog.V(4).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
-		return &csi.DeleteVolumeResponse{}, nil
+		// Check if this is a connection error (should be retried)
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+
+		// Check if this is a VolumeNotFoundError (idempotent case)
+		var notFoundErr *rds.VolumeNotFoundError
+		if stderrors.As(err, &notFoundErr) {
+			klog.V(4).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
+			return &csi.DeleteVolumeResponse{}, nil
+		}
+
+		// For other errors (like GetVolume failures), return the error
+		// Don't treat all errors as "volume not found" - could mask real problems
+		return nil, status.Errorf(codes.Internal, "failed to verify volume existence: %v", err)
 	}
 
 	// Log volume details for audit trail
@@ -271,6 +286,10 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		// Log volume delete failure
 		secLogger.LogVolumeDelete(volumeID, "", security.OutcomeFailure, err, time.Since(startTime))
 
+		// Map errors to appropriate gRPC codes
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
 		return nil, status.Errorf(codes.Internal, "failed to delete volume: %v", err)
 	}
 
