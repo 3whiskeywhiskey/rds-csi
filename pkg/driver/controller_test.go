@@ -2004,3 +2004,240 @@ func TestCSI_NegativeScenarios_Controller(t *testing.T) {
 		})
 	}
 }
+
+// TestSanityRegression_CreateVolumeZeroCapacity is a regression test
+// for CSI sanity edge case: capacity_range with required_bytes=0.
+// Driver should use default minimum capacity (1 GiB).
+func TestSanityRegression_CreateVolumeZeroCapacity(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-volume-zero-capacity",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 0, // Zero capacity - should use default
+		},
+	}
+
+	resp, err := cs.CreateVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Expected success with zero capacity, got error: %v", err)
+	}
+
+	if resp.Volume.CapacityBytes < 1*1024*1024*1024 {
+		t.Errorf("Expected minimum 1 GiB capacity, got %d bytes", resp.Volume.CapacityBytes)
+	}
+
+	// Cleanup
+	_, _ = cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+}
+
+// TestSanityRegression_CreateVolumeMaxInt64Capacity is a regression test
+// for CSI sanity edge case: max int64 capacity should return OutOfRange.
+func TestSanityRegression_CreateVolumeMaxInt64Capacity(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-volume-max-capacity",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 9223372036854775807, // Max int64
+		},
+	}
+
+	_, err := cs.CreateVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected error for max int64 capacity, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("Expected gRPC status error, got: %v", err)
+	}
+
+	if st.Code() != codes.OutOfRange {
+		t.Errorf("Expected OutOfRange error, got: %v", st.Code())
+	}
+}
+
+// TestSanityRegression_CreateVolumeReadOnly is a regression test
+// for CSI sanity edge case: readonly flag validation.
+func TestSanityRegression_CreateVolumeReadOnly(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-volume-readonly",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{
+						MountFlags: []string{"ro"},
+					},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	resp, err := cs.CreateVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Expected success for readonly volume, got error: %v", err)
+	}
+
+	// Cleanup
+	_, _ = cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+}
+
+// TestSanityRegression_DeleteVolumeIdempotency is a regression test
+// for CSI sanity requirement: DeleteVolume must be idempotent.
+// Calling DeleteVolume multiple times should always succeed.
+func TestSanityRegression_DeleteVolumeIdempotency(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	// Create a volume
+	createReq := &csi.CreateVolumeRequest{
+		Name: "test-volume-delete-idempotent",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	createResp, err := cs.CreateVolume(ctx, createReq)
+	if err != nil {
+		t.Fatalf("Failed to create volume: %v", err)
+	}
+
+	volumeID := createResp.Volume.VolumeId
+
+	// Delete the volume
+	deleteReq := &csi.DeleteVolumeRequest{VolumeId: volumeID}
+
+	_, err = cs.DeleteVolume(ctx, deleteReq)
+	if err != nil {
+		t.Fatalf("First delete failed: %v", err)
+	}
+
+	// Delete again - should succeed (idempotent)
+	_, err = cs.DeleteVolume(ctx, deleteReq)
+	if err != nil {
+		t.Errorf("Second delete (idempotency test) failed: %v", err)
+	}
+
+	// Delete third time - still should succeed
+	_, err = cs.DeleteVolume(ctx, deleteReq)
+	if err != nil {
+		t.Errorf("Third delete (idempotency test) failed: %v", err)
+	}
+}
+
+// TestSanityRegression_VolumeContextParameters is a regression test
+// for CSI sanity edge case: volume_context parameter validation.
+func TestSanityRegression_VolumeContextParameters(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	tests := []struct {
+		name    string
+		params  map[string]string
+		wantErr bool
+	}{
+		{
+			name: "valid fsType",
+			params: map[string]string{
+				"fsType": "ext4",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid nvmeAddress",
+			params: map[string]string{
+				"nvmeAddress": "10.42.68.1",
+			},
+			wantErr: false,
+		},
+		// Note: parameter validation happens at NodeStageVolume, not CreateVolume
+		// CreateVolume accepts parameters and stores them in VolumeContext
+		{
+			name: "empty parameters",
+			params: map[string]string{},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &csi.CreateVolumeRequest{
+				Name: "test-volume-params-" + strings.Replace(tt.name, " ", "-", -1),
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 1 * 1024 * 1024 * 1024,
+				},
+				Parameters: tt.params,
+			}
+
+			resp, err := cs.CreateVolume(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Expected error for params %v, got nil", tt.params)
+					if resp != nil {
+						cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected success for params %v, got error: %v", tt.params, err)
+				} else {
+					// Cleanup
+					cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+				}
+			}
+		})
+	}
+}
