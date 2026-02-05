@@ -19,9 +19,6 @@ const (
 )
 
 var (
-	// volumeIDPattern matches valid volume IDs (pvc-<uuid>)
-	volumeIDPattern = regexp.MustCompile(`^pvc-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
-
 	// safeSlotPattern matches safe slot names (alphanumeric and hyphen only)
 	safeSlotPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 

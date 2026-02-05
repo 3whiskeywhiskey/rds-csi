@@ -61,10 +61,10 @@ AUTw5BKMQuNGfVXzAAAADHRlc3RAcmRzLWNzaQECAwQFBg==
 // with a mock RDS backend for fast and reliable testing.
 //
 // This validates:
-// - Identity service: GetPluginInfo, GetPluginCapabilities, Probe
-// - Controller service: CreateVolume, DeleteVolume, ValidateVolumeCapabilities,
-//   GetCapacity, ControllerExpandVolume, ListVolumes
-// - Idempotency: CreateVolume/DeleteVolume called multiple times
+//   - Identity service: GetPluginInfo, GetPluginCapabilities, Probe
+//   - Controller service: CreateVolume, DeleteVolume, ValidateVolumeCapabilities,
+//     GetCapacity, ControllerExpandVolume, ListVolumes
+//   - Idempotency: CreateVolume/DeleteVolume called multiple times
 //
 // Node service tests are skipped (no NVMe/TCP mock available).
 func TestCSISanity(t *testing.T) {
@@ -96,7 +96,7 @@ func TestCSISanity(t *testing.T) {
 	driverConfig := driver.DriverConfig{
 		DriverName:            "rds.csi.srvlab.io",
 		Version:               "test",
-		NodeID:                "",                 // Not needed for controller-only mode
+		NodeID:                "", // Not needed for controller-only mode
 		RDSAddress:            mockRDS.Address(),
 		RDSPort:               mockRDS.Port(),
 		RDSUser:               "admin",
@@ -104,9 +104,9 @@ func TestCSISanity(t *testing.T) {
 		RDSInsecureSkipVerify: true,                      // Skip host key verification for mock
 		RDSVolumeBasePath:     testVolumeBasePath,
 		EnableController:      true,
-		EnableNode:            false,              // Skip node service (no NVMe/TCP mock)
-		K8sClient:             nil,                // Not needed for basic sanity tests
-		Metrics:               nil,                // Not needed for testing
+		EnableNode:            false, // Skip node service (no NVMe/TCP mock)
+		K8sClient:             nil,   // Not needed for basic sanity tests
+		Metrics:               nil,   // Not needed for testing
 	}
 
 	drv, err := driver.NewDriver(driverConfig)

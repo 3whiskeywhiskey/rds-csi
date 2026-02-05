@@ -122,11 +122,11 @@ func TestLoadConfigFromEnv_ErrorMode(t *testing.T) {
 // TestLoadConfigFromEnv_IntegerParsing tests integer environment variable parsing
 func TestLoadConfigFromEnv_IntegerParsing(t *testing.T) {
 	tests := []struct {
-		name         string
-		envVar       string
-		value        string
-		expectedVal  int
-		defaultVal   int
+		name        string
+		envVar      string
+		value       string
+		expectedVal int
+		defaultVal  int
 	}{
 		{"valid SSH latency", "MOCK_RDS_SSH_LATENCY_MS", "300", 300, 200},
 		{"invalid SSH latency uses default", "MOCK_RDS_SSH_LATENCY_MS", "invalid", 200, 200},

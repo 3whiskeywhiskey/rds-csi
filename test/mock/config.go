@@ -27,20 +27,20 @@ import (
 // MockRDSConfig holds configuration for mock RDS server behavior
 type MockRDSConfig struct {
 	// Timing control
-	RealisticTiming        bool   // MOCK_RDS_REALISTIC_TIMING (default: false)
-	SSHLatencyMs           int    // MOCK_RDS_SSH_LATENCY_MS (default: 200)
-	SSHLatencyJitterMs     int    // MOCK_RDS_SSH_LATENCY_JITTER_MS (default: 50, gives 150-250ms range)
-	DiskAddDelayMs         int    // MOCK_RDS_DISK_ADD_DELAY_MS (default: 500)
-	DiskRemoveDelayMs      int    // MOCK_RDS_DISK_REMOVE_DELAY_MS (default: 300)
+	RealisticTiming    bool // MOCK_RDS_REALISTIC_TIMING (default: false)
+	SSHLatencyMs       int  // MOCK_RDS_SSH_LATENCY_MS (default: 200)
+	SSHLatencyJitterMs int  // MOCK_RDS_SSH_LATENCY_JITTER_MS (default: 50, gives 150-250ms range)
+	DiskAddDelayMs     int  // MOCK_RDS_DISK_ADD_DELAY_MS (default: 500)
+	DiskRemoveDelayMs  int  // MOCK_RDS_DISK_REMOVE_DELAY_MS (default: 300)
 
 	// Error injection
-	ErrorMode              string // MOCK_RDS_ERROR_MODE (none|disk_full|ssh_timeout|command_fail)
-	ErrorAfterN            int    // MOCK_RDS_ERROR_AFTER_N (fail after N operations, default: 0 = immediate)
+	ErrorMode   string // MOCK_RDS_ERROR_MODE (none|disk_full|ssh_timeout|command_fail)
+	ErrorAfterN int    // MOCK_RDS_ERROR_AFTER_N (fail after N operations, default: 0 = immediate)
 
 	// Observability
-	EnableHistory          bool   // MOCK_RDS_ENABLE_HISTORY (default: true for backward compat)
-	HistoryDepth           int    // MOCK_RDS_HISTORY_DEPTH (default: 100)
-	RouterOSVersion        string // MOCK_RDS_ROUTEROS_VERSION (default: "7.16")
+	EnableHistory   bool   // MOCK_RDS_ENABLE_HISTORY (default: true for backward compat)
+	HistoryDepth    int    // MOCK_RDS_HISTORY_DEPTH (default: 100)
+	RouterOSVersion string // MOCK_RDS_ROUTEROS_VERSION (default: "7.16")
 }
 
 // LoadConfigFromEnv loads mock RDS configuration from environment variables

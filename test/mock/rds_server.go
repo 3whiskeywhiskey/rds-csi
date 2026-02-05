@@ -103,7 +103,9 @@ func (s *MockRDSServer) Start() error {
 
 	// Update port if it was 0 (random port assignment)
 	if s.port == 0 {
-		s.port = listener.Addr().(*net.TCPAddr).Port
+		if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
+			s.port = tcpAddr.Port
+		}
 	}
 
 	klog.Infof("Mock RDS server listening on %s:%d", s.address, s.port)

@@ -9,12 +9,12 @@ import (
 
 // TimingSimulator adds realistic timing delays to mock RDS operations
 type TimingSimulator struct {
-	enabled              bool
-	sshLatency           time.Duration
-	sshLatencyJitter     time.Duration
-	diskAddDelay         time.Duration
-	diskRemoveDelay      time.Duration
-	rng                  *rand.Rand
+	enabled          bool
+	sshLatency       time.Duration
+	sshLatencyJitter time.Duration
+	diskAddDelay     time.Duration
+	diskRemoveDelay  time.Duration
+	rng              *rand.Rand
 }
 
 // NewTimingSimulator creates a new timing simulator from configuration

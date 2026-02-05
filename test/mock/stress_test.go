@@ -264,7 +264,7 @@ func TestConcurrentCreateDelete(t *testing.T) {
 	t.Logf("Final volume count: %d (depends on timing)", len(volumes))
 
 	// Verify no state corruption: volume count should be between 0 and numPairs
-	if len(volumes) < 0 || len(volumes) > numPairs {
+	if len(volumes) > numPairs {
 		t.Errorf("unexpected volume count: %d (expected 0-%d)", len(volumes), numPairs)
 	}
 
