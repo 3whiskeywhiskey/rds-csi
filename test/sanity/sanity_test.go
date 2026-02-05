@@ -106,12 +106,12 @@ func TestCSISanity(t *testing.T) {
 	driverConfig := driver.DriverConfig{
 		DriverName:            "rds.csi.srvlab.io",
 		Version:               "test",
-		NodeID:                "test-node-1",               // Node ID required for node service
+		NodeID:                "test-node-1", // Node ID required for node service
 		RDSAddress:            mockRDS.Address(),
 		RDSPort:               mockRDS.Port(),
 		RDSUser:               "admin",
-		RDSPrivateKey:         []byte(testSSHPrivateKey),  // Valid RSA key format for parsing
-		RDSInsecureSkipVerify: true,                       // Skip host key verification for mock
+		RDSPrivateKey:         []byte(testSSHPrivateKey), // Valid RSA key format for parsing
+		RDSInsecureSkipVerify: true,                      // Skip host key verification for mock
 		RDSVolumeBasePath:     testVolumeBasePath,
 		ManagedNQNPrefix:      "nqn.2000-02.com.mikrotik:", // Required for node service (NVMe format requires colon)
 		EnableController:      true,
