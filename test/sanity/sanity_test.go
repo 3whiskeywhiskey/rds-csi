@@ -150,10 +150,13 @@ func TestCSISanity(t *testing.T) {
 		t.Fatalf("CSI socket not ready after 3 seconds")
 	}
 
-	// Cleanup socket after test
+	// Cleanup socket and test directories after test
 	defer func() {
 		t.Log("Cleaning up CSI socket...")
 		_ = os.Remove(testSocketPath)
+		// Clean up sanity test directories to prevent next run failures
+		_ = os.RemoveAll("/tmp/csi-target")
+		_ = os.RemoveAll("/tmp/csi-staging")
 	}()
 
 	// Configure CSI sanity tests
