@@ -49,13 +49,35 @@ linters:
       asserts: true
 
     gocyclo:
-      # Threshold based on current baseline (max: 44 in RecordEvent)
-      # Set to 50 to allow existing code, catch new violations
-      # Target: Ratchet down to 30 by v0.8, 20 by v1.0
+      # Cyclomatic complexity threshold: 50 (current baseline)
+      #
+      # Highest function: ControllerPublishVolume (48)
+      # CSI RPC handlers have legitimate complexity from:
+      #   - Go's explicit error handling (no exceptions)
+      #   - CSI spec compliance (extensive validation requirements)
+      #   - State machine logic (attachment states, device paths)
+      #
+      # Top offenders (for future refactoring):
+      #   1. ControllerPublishVolume: 48
+      #   2. RecordEvent: 44
+      #   3. NodeStageVolume: 36
+      #   4. NewDriver: 33
+      #   5. main: 31
+      #
+      # Ratchet-down plan: Refactor highest functions when touched next.
+      # Target: 30 after ControllerPublishVolume refactored, 20 by v1.0
       min-complexity: 50
 
     cyclop:
-      # Match gocyclo threshold for consistency
+      # Function and package cyclomatic complexity threshold: 50
+      #
+      # Matches gocyclo threshold for consistency. Many functions
+      # (ControllerPublishVolume 48, RecordEvent 44, NodeStageVolume 36,
+      # NewDriver 33, main 31) are CSI/infrastructure code where complexity
+      # comes from spec requirements (volume capability validation, device
+      # path resolution, attachment state handling) rather than business logic.
+      #
+      # Target: Ratchet to 30 after refactoring ControllerPublishVolume
       max-complexity: 50
 
   exclusions:
