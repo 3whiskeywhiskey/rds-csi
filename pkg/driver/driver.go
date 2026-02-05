@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
@@ -48,6 +49,9 @@ type Driver struct {
 
 	// Kubernetes client (for events and reconciler)
 	k8sClient kubernetes.Interface
+
+	// Informer factory (for cached API access, avoids throttling)
+	informerFactory informers.SharedInformerFactory
 
 	// Prometheus metrics (may be nil if disabled)
 	metrics *observability.Metrics
@@ -191,17 +195,36 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		klog.Info("Attachment manager created")
 	}
 
+	// Initialize informer factory if we have k8s client (needed for attachment reconciler caching)
+	if config.EnableController && config.K8sClient != nil {
+		// Create informer factory with 5-minute resync period
+		// This provides cached access to nodes and PVs, avoiding API throttling
+		driver.informerFactory = informers.NewSharedInformerFactory(config.K8sClient, 5*time.Minute)
+		klog.Info("Informer factory created (resync=5m)")
+	}
+
 	// Initialize attachment reconciler if enabled
 	if config.EnableController && config.EnableAttachmentReconciler && config.K8sClient != nil && driver.attachmentManager != nil {
+		// Ensure informer factory is available
+		if driver.informerFactory == nil {
+			return nil, fmt.Errorf("informer factory required for attachment reconciler")
+		}
+
 		// Create EventPoster for posting lifecycle events
 		var eventPoster attachment.EventPoster
 		if config.K8sClient != nil {
 			eventPoster = NewEventPoster(config.K8sClient)
 		}
 
+		// Get listers from informer factory (cached, no API calls)
+		nodeLister := driver.informerFactory.Core().V1().Nodes().Lister()
+		pvLister := driver.informerFactory.Core().V1().PersistentVolumes().Lister()
+
 		reconcilerConfig := attachment.ReconcilerConfig{
 			Manager:     driver.attachmentManager,
 			K8sClient:   config.K8sClient,
+			NodeLister:  nodeLister,
+			PVLister:    pvLister,
 			Interval:    config.AttachmentReconcileInterval,
 			GracePeriod: config.AttachmentGracePeriod,
 			Metrics:     config.Metrics,
@@ -218,7 +241,7 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		if driver.attachmentGracePeriod <= 0 {
 			driver.attachmentGracePeriod = 30 * time.Second
 		}
-		klog.Infof("Attachment reconciler enabled (interval=%v, grace_period=%v)",
+		klog.Infof("Attachment reconciler enabled with cached informers (interval=%v, grace_period=%v)",
 			config.AttachmentReconcileInterval, config.AttachmentGracePeriod)
 	}
 
@@ -372,6 +395,27 @@ func (d *Driver) Run(endpoint string) error {
 		d.ns = NewNodeServer(d, d.nodeID, d.k8sClient)
 	}
 
+	// Start informers if we have an informer factory
+	// This must happen BEFORE the attachment reconciler starts, so caches are populated
+	if d.informerFactory != nil {
+		klog.Info("Starting informer factory...")
+		ctx := context.Background()
+
+		// Start all informers (non-blocking)
+		d.informerFactory.Start(ctx.Done())
+
+		// Wait for caches to sync before proceeding
+		// This ensures the reconciler has cached data available immediately
+		klog.Info("Waiting for informer caches to sync...")
+		synced := d.informerFactory.WaitForCacheSync(ctx.Done())
+		for informerType, ok := range synced {
+			if !ok {
+				klog.Warningf("Failed to sync cache for %v", informerType)
+			}
+		}
+		klog.Info("Informer caches synced successfully")
+	}
+
 	// Initialize attachment manager state
 	if d.attachmentManager != nil {
 		// Use a timeout context to avoid blocking indefinitely if Kubernetes API is slow
@@ -392,7 +436,7 @@ func (d *Driver) Run(endpoint string) error {
 		if err := d.attachmentReconciler.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start attachment reconciler: %w", err)
 		}
-		klog.Info("Attachment reconciler started")
+		klog.Info("Attachment reconciler started (using cached informers, no API throttling)")
 	}
 
 	// Start orphan reconciler if configured

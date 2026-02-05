@@ -265,12 +265,12 @@ func TestEventReasons(t *testing.T) {
 func TestEventSinkAdapter(t *testing.T) {
 	fakeClient := fake.NewSimpleClientset()
 
-	// Create adapter
+	// Create adapter (now uses clientset instead of eventInterface)
 	adapter := &eventSinkAdapter{
-		eventInterface: fakeClient.CoreV1().Events("default"),
+		clientset: fakeClient,
 	}
 
-	// Test Create
+	// Test Create with namespace in ObjectMeta
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-event",
@@ -299,6 +299,11 @@ func TestEventSinkAdapter(t *testing.T) {
 		t.Errorf("Expected reason TestReason, got %s", created.Reason)
 	}
 
+	// Verify namespace was set correctly
+	if created.Namespace != "default" {
+		t.Errorf("Expected namespace 'default', got %s", created.Namespace)
+	}
+
 	// Test Update
 	created.Message = "Updated message"
 	updated, err := adapter.Update(created)
@@ -310,6 +315,11 @@ func TestEventSinkAdapter(t *testing.T) {
 		t.Errorf("Expected updated message, got %s", updated.Message)
 	}
 
+	// Verify namespace preserved
+	if updated.Namespace != "default" {
+		t.Errorf("Expected namespace 'default' after update, got %s", updated.Namespace)
+	}
+
 	// Test Patch
 	patchData := []byte(`{"message": "Patched message"}`)
 	patched, err := adapter.Patch(created, patchData)
@@ -318,7 +328,129 @@ func TestEventSinkAdapter(t *testing.T) {
 		t.Logf("adapter.Patch returned error (may be expected with fake client): %v", err)
 	} else if patched != nil {
 		t.Logf("adapter.Patch succeeded")
+		if patched.Namespace != "default" {
+			t.Errorf("Expected namespace 'default' after patch, got %s", patched.Namespace)
+		}
 	}
+}
+
+// TestEventSinkAdapter_NamespaceFromInvolvedObject tests namespace extraction from InvolvedObject
+func TestEventSinkAdapter_NamespaceFromInvolvedObject(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	adapter := &eventSinkAdapter{
+		clientset: fakeClient,
+	}
+
+	// Create event WITHOUT namespace in ObjectMeta (should extract from InvolvedObject)
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-event-no-ns",
+			// Namespace intentionally not set
+		},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:      "PersistentVolumeClaim",
+			Name:      "test-pvc",
+			Namespace: "custom-namespace",
+		},
+		Reason:  "TestReason",
+		Message: "Test message",
+		Type:    corev1.EventTypeNormal,
+	}
+
+	created, err := adapter.Create(event)
+	if err != nil {
+		t.Fatalf("adapter.Create failed: %v", err)
+	}
+
+	// Verify namespace was extracted from InvolvedObject
+	if created.Namespace != "custom-namespace" {
+		t.Errorf("Expected namespace 'custom-namespace' from InvolvedObject, got %s", created.Namespace)
+	}
+
+	t.Logf("Successfully extracted namespace from InvolvedObject: %s", created.Namespace)
+}
+
+// TestEventSinkAdapter_MultipleNamespaces tests creating events in different namespaces
+func TestEventSinkAdapter_MultipleNamespaces(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	adapter := &eventSinkAdapter{
+		clientset: fakeClient,
+	}
+
+	// Test creating events in different namespaces
+	testCases := []struct {
+		name      string
+		namespace string
+	}{
+		{name: "default", namespace: "default"},
+		{name: "kube-system", namespace: "kube-system"},
+		{name: "custom-ns", namespace: "custom-namespace"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := &corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("test-event-%s", tc.name),
+					// Namespace intentionally not set - should come from InvolvedObject
+				},
+				InvolvedObject: corev1.ObjectReference{
+					Kind:      "PersistentVolumeClaim",
+					Name:      "test-pvc",
+					Namespace: tc.namespace,
+				},
+				Reason:  "TestReason",
+				Message: fmt.Sprintf("Test message for %s", tc.namespace),
+				Type:    corev1.EventTypeNormal,
+			}
+
+			created, err := adapter.Create(event)
+			if err != nil {
+				t.Fatalf("Failed to create event in namespace %s: %v", tc.namespace, err)
+			}
+
+			if created.Namespace != tc.namespace {
+				t.Errorf("Expected namespace %s, got %s", tc.namespace, created.Namespace)
+			}
+
+			t.Logf("Successfully created event in namespace: %s", created.Namespace)
+		})
+	}
+}
+
+// TestEventSinkAdapter_DefaultNamespace tests fallback to default namespace
+func TestEventSinkAdapter_DefaultNamespace(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	adapter := &eventSinkAdapter{
+		clientset: fakeClient,
+	}
+
+	// Create event with NO namespace in ObjectMeta AND InvolvedObject (edge case)
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-event-no-ns-anywhere",
+		},
+		InvolvedObject: corev1.ObjectReference{
+			Kind: "PersistentVolumeClaim",
+			Name: "test-pvc",
+			// Namespace intentionally not set
+		},
+		Reason:  "TestReason",
+		Message: "Test message",
+		Type:    corev1.EventTypeNormal,
+	}
+
+	created, err := adapter.Create(event)
+	if err != nil {
+		t.Fatalf("adapter.Create failed: %v", err)
+	}
+
+	// Should default to "default" namespace
+	if created.Namespace != "default" {
+		t.Errorf("Expected default namespace 'default', got %s", created.Namespace)
+	}
+
+	t.Logf("Successfully defaulted to namespace: %s", created.Namespace)
 }
 
 // TestPostEvents_DifferentNamespaces tests posting events to different namespaces

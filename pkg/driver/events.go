@@ -10,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
-	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 
@@ -59,20 +58,51 @@ func (ep *EventPoster) SetMetrics(m *observability.Metrics) {
 
 // eventSinkAdapter adapts the EventInterface to record.EventSink
 // record.EventSink has methods without context, but EventInterface requires context
+// This adapter extracts the namespace from the event object to support multi-namespace events
 type eventSinkAdapter struct {
-	eventInterface typedcorev1.EventInterface
+	clientset kubernetes.Interface
 }
 
 func (a *eventSinkAdapter) Create(event *corev1.Event) (*corev1.Event, error) {
-	return a.eventInterface.Create(context.Background(), event, metav1.CreateOptions{})
+	// Extract namespace from event's ObjectMeta
+	// Events must be created in the same namespace as their InvolvedObject
+	namespace := event.Namespace
+	if namespace == "" {
+		// Fallback to InvolvedObject namespace if ObjectMeta.Namespace not set
+		namespace = event.InvolvedObject.Namespace
+		if namespace == "" {
+			// Default to "default" namespace if both are empty (shouldn't happen)
+			namespace = "default"
+			klog.Warningf("Event has no namespace, defaulting to 'default': %+v", event)
+		}
+		// Set the namespace in ObjectMeta for consistency
+		event.Namespace = namespace
+	}
+	return a.clientset.CoreV1().Events(namespace).Create(context.Background(), event, metav1.CreateOptions{})
 }
 
 func (a *eventSinkAdapter) Update(event *corev1.Event) (*corev1.Event, error) {
-	return a.eventInterface.Update(context.Background(), event, metav1.UpdateOptions{})
+	namespace := event.Namespace
+	if namespace == "" {
+		namespace = event.InvolvedObject.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+		event.Namespace = namespace
+	}
+	return a.clientset.CoreV1().Events(namespace).Update(context.Background(), event, metav1.UpdateOptions{})
 }
 
 func (a *eventSinkAdapter) Patch(event *corev1.Event, data []byte) (*corev1.Event, error) {
-	return a.eventInterface.Patch(context.Background(), event.Name, types.JSONPatchType, data, metav1.PatchOptions{})
+	namespace := event.Namespace
+	if namespace == "" {
+		namespace = event.InvolvedObject.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+		event.Namespace = namespace
+	}
+	return a.clientset.CoreV1().Events(namespace).Patch(context.Background(), event.Name, types.JSONPatchType, data, metav1.PatchOptions{})
 }
 
 // NewEventPoster creates a new EventPoster
@@ -85,9 +115,10 @@ func NewEventPoster(clientset kubernetes.Interface) *EventPoster {
 	broadcaster.StartLogging(klog.Infof)
 
 	// Start recording events to Kubernetes EventSink
-	// Use adapter to convert EventInterface to EventSink (context requirement difference)
+	// Use adapter that dynamically routes events to correct namespace
+	// based on the event's InvolvedObject namespace
 	broadcaster.StartRecordingToSink(&eventSinkAdapter{
-		eventInterface: clientset.CoreV1().Events(""),
+		clientset: clientset,
 	})
 
 	// Create event recorder with driver component name
