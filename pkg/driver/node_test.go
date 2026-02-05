@@ -1466,3 +1466,141 @@ func TestNodeStageVolume_ErrorScenarios(t *testing.T) {
 		})
 	}
 }
+
+// TestNodeUnstageVolume_ErrorScenarios tests error path handling in NodeUnstageVolume
+func TestNodeUnstageVolume_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockNVMEConnector, *mockMounter, string)
+		volumeID  string
+		expectErr bool
+		errCode   string
+		errMsg    string
+	}{
+		{
+			name: "unmount failure - filesystem busy",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Create staging directory and report it as mounted
+				os.MkdirAll(stagingPath, 0750)
+				mounter.isLikelyMounted = true
+				mounter.unmountErr = errors.New("target is busy")
+			},
+			volumeID:  "pvc-12345678-1234-1234-1234-123456789012",
+			expectErr: true,
+			errCode:   "Internal",
+			errMsg:    "unmount",
+		},
+		{
+			name: "NVMe disconnect failure - connection stuck",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// No staging path for block volumes
+				mounter.isLikelyMounted = false
+				nvmeConn.devicePath = "/dev/nvme0n1"
+				nvmeConn.disconnectErr = errors.New("disconnect timeout")
+				// Note: Disconnect failure is logged but doesn't fail the operation
+			},
+			volumeID:  "pvc-12345678-1234-1234-1234-123456789012",
+			expectErr: false, // Disconnect errors are logged but don't fail unstage
+		},
+		{
+			name: "staging path not found - already cleaned up (idempotent)",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Don't create staging path - it doesn't exist
+				mounter.isLikelyMounted = false
+			},
+			volumeID:  "pvc-12345678-1234-1234-1234-123456789012",
+			expectErr: false, // Success - idempotent behavior
+		},
+		{
+			name: "partial cleanup state - unmounted but not disconnected",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Create staging dir but report not mounted (partial state)
+				os.MkdirAll(stagingPath, 0750)
+				mounter.isLikelyMounted = false
+				nvmeConn.devicePath = "/dev/nvme0n1"
+			},
+			volumeID:  "pvc-12345678-1234-1234-1234-123456789012",
+			expectErr: false, // Should still disconnect successfully
+		},
+		{
+			name: "invalid volume ID - empty",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// No setup needed - validation happens immediately
+			},
+			volumeID:  "",
+			expectErr: true,
+			errCode:   "InvalidArgument",
+			errMsg:    "volume ID",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temp directory for staging
+			tmpDir, err := os.MkdirTemp("", "node-unstage-test-*")
+			if err != nil {
+				t.Fatalf("failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			stagingPath := filepath.Join(tmpDir, "staging")
+
+			// Setup mocks
+			mounter := &mockMounter{}
+			nvmeConn := &mockNVMEConnector{
+				devicePath: "/dev/nvme0n1",
+			}
+
+			// Apply test-specific mock configuration
+			if tt.setupMock != nil {
+				tt.setupMock(nvmeConn, mounter, stagingPath)
+			}
+
+			// Create node server
+			driver := &Driver{
+				name:    "rds.csi.srvlab.io",
+				version: "test",
+				metrics: observability.NewMetrics(),
+			}
+
+			ns := &NodeServer{
+				driver:         driver,
+				mounter:        mounter,
+				nvmeConn:       nvmeConn,
+				nodeID:         "test-node",
+				circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+			}
+
+			// Create request
+			req := &csi.NodeUnstageVolumeRequest{
+				VolumeId:          tt.volumeID,
+				StagingTargetPath: stagingPath,
+			}
+
+			// Execute
+			ctx := context.Background()
+			_, err = ns.NodeUnstageVolume(ctx, req)
+
+			// Verify error expectation
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error but got nil")
+				}
+
+				// Check error code
+				if !strings.Contains(err.Error(), tt.errCode) && !strings.Contains(err.Error(), strings.ToLower(tt.errCode)) {
+					t.Errorf("expected error code %q in error, got: %v", tt.errCode, err)
+				}
+
+				// Check error message content
+				if !strings.Contains(err.Error(), tt.errMsg) && !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.errMsg)) {
+					t.Errorf("expected error message to contain %q, got: %v", tt.errMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
