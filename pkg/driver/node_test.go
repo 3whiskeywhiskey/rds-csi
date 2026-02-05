@@ -1263,3 +1263,206 @@ func TestNodeGetVolumeStats_VolumeConditionNeverNil(t *testing.T) {
 		})
 	}
 }
+
+// TestNodeStageVolume_ErrorScenarios tests error path handling in NodeStageVolume
+func TestNodeStageVolume_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mockNVMEConnector, *mockMounter)
+		request   *csi.NodeStageVolumeRequest
+		expectErr bool
+		errCode   string // codes.Code as string (e.g., "Internal", "InvalidArgument")
+		errMsg    string // substring that should appear in error message
+	}{
+		{
+			name: "NVMe connection timeout - target unreachable",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				nvmeConn.connectErr = errors.New("nvme: connection timeout")
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			expectErr: true,
+			errCode:   "Internal",
+			errMsg:    "NVMe",
+		},
+		{
+			name: "NVMe connection refused - wrong port/address",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				nvmeConn.connectErr = errors.New("connection refused")
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			expectErr: true,
+			errCode:   "Internal",
+			errMsg:    "connect",
+		},
+		{
+			name: "invalid port - non-numeric",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				// No setup needed - validation happens before connection
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "not-a-port",
+				},
+			},
+			expectErr: true,
+			errCode:   "InvalidArgument",
+			errMsg:    "nvmePort",
+		},
+		{
+			name: "format failure - mkfs failed",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				nvmeConn.devicePath = "/dev/nvme0n1"
+				mounter.formatErr = errors.New("mkfs failed: device not ready")
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			expectErr: true,
+			errCode:   "Internal",
+			errMsg:    "format",
+		},
+		{
+			name: "mount failure - permission denied",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				nvmeConn.devicePath = "/dev/nvme0n1"
+				mounter.mountErr = errors.New("mount: permission denied")
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			expectErr: true,
+			errCode:   "Internal",
+			errMsg:    "mount",
+		},
+		{
+			name: "missing required context - no NQN",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				// No setup needed - context is invalid
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					// Missing nqn
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			expectErr: true,
+			errCode:   "InvalidArgument",
+			errMsg:    "nqn",
+		},
+		{
+			name: "invalid IP address format",
+			setupMock: func(nvmeConn *mockNVMEConnector, mounter *mockMounter) {
+				// No setup needed - validation happens before NVMe connection
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "not-an-ip",
+					"nvmePort":    "4420",
+				},
+			},
+			expectErr: true,
+			errCode:   "InvalidArgument",
+			errMsg:    "nvmeAddress",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup mocks
+			mounter := &mockMounter{}
+			nvmeConn := &mockNVMEConnector{
+				devicePath: "/dev/nvme0n1", // Default success path
+			}
+
+			// Apply test-specific mock configuration
+			if tt.setupMock != nil {
+				tt.setupMock(nvmeConn, mounter)
+			}
+
+			// Create node server
+			driver := &Driver{
+				name:    "rds.csi.srvlab.io",
+				version: "test",
+				metrics: observability.NewMetrics(),
+			}
+
+			ns := &NodeServer{
+				driver:         driver,
+				mounter:        mounter,
+				nvmeConn:       nvmeConn,
+				nodeID:         "test-node",
+				circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+			}
+
+			// Execute
+			ctx := context.Background()
+			_, err := ns.NodeStageVolume(ctx, tt.request)
+
+			// Verify error expectation
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error but got nil")
+				}
+
+				// Check error code
+				if !strings.Contains(err.Error(), tt.errCode) && !strings.Contains(err.Error(), strings.ToLower(tt.errCode)) {
+					t.Errorf("expected error code %q in error, got: %v", tt.errCode, err)
+				}
+
+				// Check error message content
+				if !strings.Contains(err.Error(), tt.errMsg) && !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.errMsg)) {
+					t.Errorf("expected error message to contain %q, got: %v", tt.errMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
