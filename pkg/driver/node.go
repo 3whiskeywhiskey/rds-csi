@@ -60,11 +60,17 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 	}
 
 	m := mount.NewMounter()
-	connector := nvme.NewConnector()
 
-	// Pass Prometheus metrics to connector if available
-	if driver.metrics != nil {
-		connector.SetPromMetrics(driver.metrics)
+	// Use injected connector if available (for testing), otherwise create new one
+	var connector nvme.Connector
+	if driver.nvmeConnector != nil {
+		connector = driver.nvmeConnector
+	} else {
+		connector = nvme.NewConnector()
+		// Pass Prometheus metrics to connector if available
+		if driver.metrics != nil {
+			connector.SetPromMetrics(driver.metrics)
+		}
 	}
 
 	// Create stale mount checker using connector's resolver

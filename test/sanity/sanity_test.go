@@ -58,15 +58,17 @@ AUTw5BKMQuNGfVXzAAAADHRlc3RAcmRzLWNzaQECAwQFBg==
 )
 
 // TestCSISanity runs the official CSI sanity test suite against the RDS CSI driver
-// with a mock RDS backend for fast and reliable testing.
+// with mock RDS and NVMe backends for fast and reliable testing.
 //
 // This validates:
 //   - Identity service: GetPluginInfo, GetPluginCapabilities, Probe
 //   - Controller service: CreateVolume, DeleteVolume, ValidateVolumeCapabilities,
 //     GetCapacity, ControllerExpandVolume, ListVolumes
+//   - Node service: NodeStageVolume, NodeUnstageVolume, NodePublishVolume,
+//     NodeUnpublishVolume, NodeGetCapabilities, NodeGetInfo
 //   - Idempotency: CreateVolume/DeleteVolume called multiple times
 //
-// Node service tests are skipped (no NVMe/TCP mock available).
+// Both controller and node services are tested using mocks (no real hardware needed).
 func TestCSISanity(t *testing.T) {
 	// Setup logging for test visibility
 	klog.SetOutput(os.Stdout)
@@ -91,28 +93,36 @@ func TestCSISanity(t *testing.T) {
 	// Wait for mock RDS to be ready
 	time.Sleep(500 * time.Millisecond)
 
-	// Create driver with controller mode enabled
-	t.Log("Creating CSI driver with mock RDS...")
+	// Create mock NVMe connector for node service testing
+	t.Log("Creating mock NVMe connector...")
+	mockNVMe := mock.NewMockNVMEConnector()
+
+	// Create driver with both controller and node services enabled
+	t.Log("Creating CSI driver with mock RDS and NVMe...")
 	driverConfig := driver.DriverConfig{
 		DriverName:            "rds.csi.srvlab.io",
 		Version:               "test",
-		NodeID:                "", // Not needed for controller-only mode
+		NodeID:                "test-node-1",               // Node ID required for node service
 		RDSAddress:            mockRDS.Address(),
 		RDSPort:               mockRDS.Port(),
 		RDSUser:               "admin",
-		RDSPrivateKey:         []byte(testSSHPrivateKey), // Valid RSA key format for parsing
-		RDSInsecureSkipVerify: true,                      // Skip host key verification for mock
+		RDSPrivateKey:         []byte(testSSHPrivateKey),  // Valid RSA key format for parsing
+		RDSInsecureSkipVerify: true,                       // Skip host key verification for mock
 		RDSVolumeBasePath:     testVolumeBasePath,
+		ManagedNQNPrefix:      "nqn.2000-02.com.mikrotik:", // Required for node service (NVMe format requires colon)
 		EnableController:      true,
-		EnableNode:            false, // Skip node service (no NVMe/TCP mock)
-		K8sClient:             nil,   // Not needed for basic sanity tests
-		Metrics:               nil,   // Not needed for testing
+		EnableNode:            true, // Enable node service with mock NVMe connector
+		K8sClient:             nil,  // Not needed for basic sanity tests
+		Metrics:               nil,  // Not needed for testing
 	}
 
 	drv, err := driver.NewDriver(driverConfig)
 	if err != nil {
 		t.Fatalf("Failed to create driver: %v", err)
 	}
+
+	// Inject mock NVMe connector for testing
+	drv.SetNVMEConnector(mockNVMe)
 
 	// Remove old socket if exists
 	_ = os.Remove(testSocketPath)
@@ -187,12 +197,9 @@ func TestCSISanity(t *testing.T) {
 
 	// Run sanity tests
 	t.Log("Running CSI sanity tests...")
-	t.Log("Note: Node service tests will be skipped (no NVMe/TCP mock)")
+	t.Log("Testing both Controller and Node services with mocks")
 
-	// Use custom test wrapper to skip Node tests
-	// The sanity.Test function runs all tests, but we can use Ginkgo skip patterns
-	// However, sanity.Test doesn't expose skip options directly, so we run it as-is
-	// and rely on the driver not implementing Node service to cause those tests to be skipped
+	// Run full sanity test suite with mocked backends
 	sanity.Test(t, config)
 
 	// If we get here, all sanity tests passed

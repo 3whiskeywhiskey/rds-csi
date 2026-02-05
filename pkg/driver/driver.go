@@ -47,6 +47,9 @@ type Driver struct {
 	// RDS client (interface allows different implementations: SSH, API, mock)
 	rdsClient rds.RDSClient
 
+	// NVMe connector (interface allows different implementations: real, mock)
+	nvmeConnector nvme.Connector
+
 	// Kubernetes client (for events and reconciler)
 	k8sClient kubernetes.Interface
 
@@ -509,6 +512,11 @@ func (d *Driver) ShutdownWithContext(ctx context.Context) error {
 // SetRDSClient sets the RDS client (for testing)
 func (d *Driver) SetRDSClient(client rds.RDSClient) {
 	d.rdsClient = client
+}
+
+// SetNVMEConnector sets the NVMe connector (for testing)
+func (d *Driver) SetNVMEConnector(connector nvme.Connector) {
+	d.nvmeConnector = connector
 }
 
 // AddVolumeCapabilities adds volume capabilities (exported for testing)
