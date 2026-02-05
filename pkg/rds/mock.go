@@ -153,6 +153,11 @@ func (m *MockClient) ResizeVolume(slot string, newSizeBytes int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return err
+	}
+
 	vol, exists := m.volumes[slot]
 	if !exists {
 		return &VolumeNotFoundError{Slot: slot}
