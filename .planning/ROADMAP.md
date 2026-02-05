@@ -163,9 +163,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 25.1-01-PLAN.md — Node watcher and TriggerReconcile for event-driven reconciliation
-- [ ] 25.1-02-PLAN.md — RDS connection manager with exponential backoff and metrics
-- [ ] 25.1-03-PLAN.md — Wire components into driver, startup reconciliation, connection-aware probe
+- [x] 25.1-01-PLAN.md — Node watcher and TriggerReconcile for event-driven reconciliation
+- [x] 25.1-02-PLAN.md — RDS connection manager with exponential backoff and metrics
+- [x] 25.1-03-PLAN.md — Wire components into driver, startup reconciliation, connection-aware probe
 
 **Context**: Production incident on 2026-02-05 where RDS storage crash caused node failures, leaving stale VolumeAttachments that prevented volume reattachment. Required manual finalizer removal and CSI controller restart to restore service (3-hour outage extended to 5+ hours).
 
@@ -220,9 +220,9 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 26 → 27
 | 23. Mock RDS Enhancements | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
 | 24. Automated E2E Test Suite | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
 | 25. Coverage & Quality Improvements | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
-| 25.1 Attachment Reconciliation & RDS Resilience | v0.9.0 | 0/3 | 🚨 URGENT | - |
+| 25.1 Attachment Reconciliation & RDS Resilience | v0.9.0 | 3/3 | ✅ Complete | 2026-02-05 |
 | 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-05 after Phase 25.1 planning*
+*Last updated: 2026-02-05 after Phase 25.1 execution*

@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 25.1 of 27 (Attachment Reconciliation & RDS Resilience) [URGENT INSERTION]
-Plan: 03 of 03 - PHASE COMPLETE
-Status: Phase 25.1 complete
-Last activity: 2026-02-05 — Completed 25.1-03-PLAN.md (Driver Integration & Health-Aware Probe)
+Phase: 26 of 27 (Volume Snapshots)
+Plan: 00 of TBD
+Status: Not started
+Last activity: 2026-02-05 — Completed Phase 25.1 (verified, all goals achieved)
 
 Progress: [████░░░░░░] ~35% (17/TBD plans complete in v0.9.0)
 
@@ -92,4 +92,4 @@ Resume file: None
 Next action: Phase 25.1 complete. Ready for Phase 26 (Snapshots) or continue with remaining v0.9.0 phases.
 
 ---
-*Last updated: 2026-02-05 after 25.1-03 completion*
+*Last updated: 2026-02-05 after Phase 25.1 verification*
