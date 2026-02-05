@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 25.1 of 27 (Attachment Reconciliation & RDS Resilience) [URGENT INSERTION]
-Plan: 02 of TBD
-Status: In progress
-Last activity: 2026-02-05 — Completed 25.1-02-PLAN.md (RDS Connection Resilience)
+Plan: 03 of 03 - PHASE COMPLETE
+Status: Phase 25.1 complete
+Last activity: 2026-02-05 — Completed 25.1-03-PLAN.md (Driver Integration & Health-Aware Probe)
 
-Progress: [███░░░░░░░] ~33% (16/TBD plans complete in v0.9.0)
+Progress: [████░░░░░░] ~35% (17/TBD plans complete in v0.9.0)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 95 (79 previous + 16 v0.9.0)
-- v0.9.0 plans completed: 16/TBD
+- Total plans completed: 96 (79 previous + 17 v0.9.0)
+- v0.9.0 plans completed: 17/TBD
 - Average duration: 6 min (v0.9.0)
-- Total execution time: 1.43 hours (v0.9.0)
+- Total execution time: 1.60 hours (v0.9.0)
 
 **By Milestone:**
 
@@ -32,7 +32,7 @@ Progress: [███░░░░░░░] ~33% (16/TBD plans complete in v0.9.0
 | v0.9.0 Production Readiness | 22-27 | 14/TBD | 🚧 In Progress |
 
 **Recent Trend:**
-- v0.9.0 Phase 25.1: 2 plans, 13 minutes, completed 2026-02-05
+- v0.9.0 Phase 25.1: 3 plans, 23 minutes, completed 2026-02-05
 - v0.9.0 Phase 25: 4 plans, 28 minutes, completed 2026-02-05
 - v0.9.0 Phase 24: 4 plans, 10 minutes, completed 2026-02-05
 
@@ -45,6 +45,11 @@ Progress: [███░░░░░░░] ~33% (16/TBD plans complete in v0.9.0
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.9.0 (Phase 25.1-03): Probe prefers connectionManager.IsConnected() over rdsClient.IsConnected() (monitor state more accurate)
+- v0.9.0 (Phase 25.1-03): Node watcher registered after informer caches synced (avoids race conditions)
+- v0.9.0 (Phase 25.1-03): Connection manager started after attachment reconciler initialized (callback dependency)
+- v0.9.0 (Phase 25.1-03): Startup reconciliation uses TriggerReconcile() not direct reconcile() (respects deduplication)
+- v0.9.0 (Phase 25.1-03): Connection manager stopped before RDS client closed (clean shutdown order)
 - v0.9.0 (Phase 25.1-02): Exponential backoff with jitter (RandomizationFactor=0.1) prevents thundering herd on RDS restart
 - v0.9.0 (Phase 25.1-02): ConnectionManager polls every 5 seconds (production-friendly, not chatty)
 - v0.9.0 (Phase 25.1-02): MaxElapsedTime=0 for background reconnection (never give up)
@@ -77,14 +82,14 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 
 ### Blockers/Concerns
 
-None yet.
+**Pre-existing test failures:** 14 test failures in pkg/driver (controller/node tests) unrelated to Phase 25.1 changes. Should be addressed in future phase.
 
 ## Session Continuity
 
-Last session: 2026-02-05 19:21
-Stopped at: Completed 25.1-02-PLAN.md (RDS Connection Resilience)
+Last session: 2026-02-05 19:34
+Stopped at: Completed 25.1-03-PLAN.md (Driver Integration & Health-Aware Probe)
 Resume file: None
-Next action: Continue Phase 25.1 plans (integrate ConnectionManager, add probe health checks, etc.)
+Next action: Phase 25.1 complete. Ready for Phase 26 (Snapshots) or continue with remaining v0.9.0 phases.
 
 ---
-*Last updated: 2026-02-05 after 25.1-02 completion*
+*Last updated: 2026-02-05 after 25.1-03 completion*
