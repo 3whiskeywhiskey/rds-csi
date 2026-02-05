@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 24 of 27 (Automated E2E Test Suite)
-Plan: 04 of 04
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 24-04-PLAN.md (E2E test suite completion)
+Phase: 25 of 27 (Coverage & Quality Improvements)
+Plan: 02 of TBD
+Status: In progress
+Last activity: 2026-02-05 — Completed 25-02-PLAN.md (Node service error path tests)
 
-Progress: [███░░░░░░░] ~22% (9/TBD plans complete in v0.9.0)
+Progress: [███░░░░░░░] ~24% (10/TBD plans complete in v0.9.0)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 88 (79 previous + 9 v0.9.0)
-- v0.9.0 plans completed: 9/TBD
+- Total plans completed: 89 (79 previous + 10 v0.9.0)
+- v0.9.0 plans completed: 10/TBD
 - Average duration: 5 min (v0.9.0)
-- Total execution time: 0.76 hours (v0.9.0)
+- Total execution time: 0.84 hours (v0.9.0)
 
 **By Milestone:**
 
@@ -32,9 +32,9 @@ Progress: [███░░░░░░░] ~22% (9/TBD plans complete in v0.9.0)
 | v0.9.0 Production Readiness | 22-27 | 9/TBD | 🚧 In Progress |
 
 **Recent Trend:**
+- v0.9.0 Phase 25: 1 plan (so far), 5 minutes, in progress
 - v0.9.0 Phase 24: 4 plans, 10 minutes, completed 2026-02-05
 - v0.9.0 Phase 23: 2 plans, 9 minutes, completed 2026-02-04
-- v0.9.0 Phase 22: 2 plans, 12 minutes, completed 2026-02-04
 
 *Updated: 2026-02-05*
 
@@ -45,14 +45,14 @@ Progress: [███░░░░░░░] ~22% (9/TBD plans complete in v0.9.0)
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.9.0 (Phase 25-02): Table-driven tests for error scenarios (easier to extend and maintain)
+- v0.9.0 (Phase 25-02): Mock-based error injection for deterministic testing
+- v0.9.0 (Phase 25-02): Explicit idempotency testing for NodeUnstageVolume
 - v0.9.0 (Phase 24-04): Simplified state recovery tests validate cleanup without Kubernetes API
 - v0.9.0 (Phase 24-04): E2E tests run in CI via dedicated job (parallel execution)
 - v0.9.0 (Phase 24-02): Block volume expansion returns NodeExpansionRequired=false (kernel auto-detects)
 - v0.9.0 (Phase 24-02): RWX block volumes allowed (KubeVirt); RWX filesystem rejected (data corruption risk)
-- v0.9.0 (Phase 24-02): Node operations expected to fail in mock environment (validates gRPC path only)
 - v0.9.0 (Phase 24-01): Enable both controller and node services in E2E tests for full lifecycle validation
-- v0.9.0 (Phase 24-01): Use Eventually pattern for socket readiness (more reliable than sleep)
-- v0.9.0 (Phase 24-01): AfterSuite cleans up volumes with testRunID prefix
 
 ### Pending Todos
 
@@ -65,9 +65,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Phase 24 complete and verified
+Stopped at: Completed 25-02-PLAN.md (Node service error path tests)
 Resume file: None
-Next action: Discuss Phase 25 context with `/gsd:discuss-phase 25`
+Next action: Continue Phase 25 with remaining plans
 
 ---
-*Last updated: 2026-02-05 after Phase 24 execution and verification*
+*Last updated: 2026-02-05 after Phase 25-02 execution*
