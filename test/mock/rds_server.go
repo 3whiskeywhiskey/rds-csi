@@ -21,7 +21,10 @@ type MockRDSServer struct {
 	address        string
 	port           int
 	listener       net.Listener
-	config         *ssh.ServerConfig
+	sshConfig      *ssh.ServerConfig
+	config         MockRDSConfig
+	timing         *TimingSimulator
+	errorInjector  *ErrorInjector
 	volumes        map[string]*MockVolume // Disk objects indexed by slot
 	files          map[string]*MockFile   // Files indexed by path
 	commandHistory []CommandLog           // Command execution history for debugging
@@ -57,8 +60,11 @@ type MockFile struct {
 
 // NewMockRDSServer creates a new mock RDS server for testing
 func NewMockRDSServer(port int) (*MockRDSServer, error) {
+	// Load configuration from environment
+	config := LoadConfigFromEnv()
+
 	// Create SSH server config
-	config := &ssh.ServerConfig{
+	sshConfig := &ssh.ServerConfig{
 		NoClientAuth: true, // Simplified for testing
 	}
 
@@ -67,12 +73,15 @@ func NewMockRDSServer(port int) (*MockRDSServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate host key: %w", err)
 	}
-	config.AddHostKey(hostKey)
+	sshConfig.AddHostKey(hostKey)
 
 	server := &MockRDSServer{
 		address:        "localhost",
 		port:           port,
+		sshConfig:      sshConfig,
 		config:         config,
+		timing:         NewTimingSimulator(config),
+		errorInjector:  NewErrorInjector(config),
 		volumes:        make(map[string]*MockVolume),
 		files:          make(map[string]*MockFile),
 		commandHistory: make([]CommandLog, 0),
@@ -209,6 +218,12 @@ func (s *MockRDSServer) ClearCommandHistory() {
 	s.commandHistory = make([]CommandLog, 0)
 }
 
+// ResetErrorInjector resets the error injector's operation counter
+// Useful for test isolation between test cases
+func (s *MockRDSServer) ResetErrorInjector() {
+	s.errorInjector.Reset()
+}
+
 func (s *MockRDSServer) acceptConnections() {
 	for {
 		select {
@@ -235,7 +250,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	// Perform SSH handshake
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.config)
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
 	if err != nil {
 		klog.Errorf("Failed to handshake: %v", err)
 		return
@@ -266,6 +281,9 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 
 func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
+
+	// Simulate SSH latency at session start
+	s.timing.SimulateSSHLatency()
 
 	for req := range requests {
 		klog.V(4).Infof("Mock RDS received request type: %s, payload len: %d", req.Type, len(req.Payload))
@@ -353,8 +371,17 @@ func (s *MockRDSServer) executeCommand(command string) (string, int) {
 
 // recordCommand adds a command execution to the history log
 func (s *MockRDSServer) recordCommand(command, response string, exitCode int) {
+	if !s.config.EnableHistory {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Trim history if over depth limit
+	if len(s.commandHistory) >= s.config.HistoryDepth {
+		s.commandHistory = s.commandHistory[1:]
+	}
 
 	s.commandHistory = append(s.commandHistory, CommandLog{
 		Timestamp: time.Now(),
@@ -365,6 +392,12 @@ func (s *MockRDSServer) recordCommand(command, response string, exitCode int) {
 }
 
 func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
+	// Check error injection BEFORE normal processing
+	if shouldFail, errMsg := s.errorInjector.ShouldFailDiskAdd(); shouldFail {
+		klog.V(2).Infof("MOCK ERROR INJECTION: Disk add failed - %s", strings.TrimSpace(errMsg))
+		return errMsg, 1
+	}
+
 	// Parse parameters from command
 	// Example: /disk add type=file file-path=/storage/vol.img file-size=1G slot=pvc-123 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn=nqn.2025-01.io.srvlab.rds:pvc-123
 
@@ -390,6 +423,9 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 	} else {
 		nvmePort = 4420 // default
 	}
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("add")
 
 	// Check if volume already exists
 	s.mu.Lock()
@@ -422,6 +458,12 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 }
 
 func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
+	// Check error injection BEFORE normal processing
+	if shouldFail, errMsg := s.errorInjector.ShouldFailDiskRemove(); shouldFail {
+		klog.V(2).Infof("MOCK ERROR INJECTION: Disk remove failed - %s", strings.TrimSpace(errMsg))
+		return errMsg, 1
+	}
+
 	// Parse: /disk remove [find slot=pvc-123]
 	re := regexp.MustCompile(`slot=([^\s\]]+)`)
 	matches := re.FindStringSubmatch(command)
@@ -431,6 +473,9 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 	}
 
 	slot := matches[1]
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("remove")
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
