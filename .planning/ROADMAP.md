@@ -139,11 +139,13 @@ Plans:
   4. Negative test scenarios validate error handling returns correct CSI error codes for invalid volume IDs, missing volumes, and duplicate operations
   5. Coverage enforcement in CI fails builds below 65% baseline preventing regression
   6. Flaky tests are identified and either fixed with proper synchronization or skipped with documented rationale in TESTING.md
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 25-01: TBD
-- [ ] 25-02: TBD
+- [ ] 25-01-PLAN.md — Controller and RDS client error path tests
+- [ ] 25-02-PLAN.md — Node service and mount error path tests
+- [ ] 25-03-PLAN.md — CSI negative test scenarios and sanity regression tests
+- [ ] 25-04-PLAN.md — CI threshold update, flaky test detection, TESTING.md documentation
 
 #### Phase 26: Volume Snapshots
 **Goal**: Btrfs-based volume snapshots enable backup and restore workflows
@@ -195,9 +197,9 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26 → 27
 | 22. CSI Sanity Tests Integration | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
 | 23. Mock RDS Enhancements | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
 | 24. Automated E2E Test Suite | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
-| 25. Coverage & Quality Improvements | v0.9.0 | 0/TBD | Not started | - |
+| 25. Coverage & Quality Improvements | v0.9.0 | 0/4 | Not started | - |
 | 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-05 after Phase 24 execution*
+*Last updated: 2026-02-05 after Phase 25 planning*
