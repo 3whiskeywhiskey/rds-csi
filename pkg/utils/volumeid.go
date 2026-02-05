@@ -53,14 +53,23 @@ func VolumeNameToID(name string) string {
 	return VolumeIDPrefix + id.String()
 }
 
-// ValidateVolumeID validates that a volume ID is in the correct format
+// ValidateVolumeID validates that a volume ID is safe for use in commands
+// Accepts any alphanumeric name with hyphens to support CSI sanity test names
+// SECURITY: Prevents command injection by restricting to safe characters only
 func ValidateVolumeID(volumeID string) error {
 	if volumeID == "" {
 		return fmt.Errorf("volume ID cannot be empty")
 	}
 
-	if !volumeIDPattern.MatchString(volumeID) {
-		return fmt.Errorf("invalid volume ID format: %s (expected pvc-<uuid>)", volumeID)
+	// Use same safe pattern as slot validation (alphanumeric + hyphen only)
+	// This allows both "pvc-<uuid>" and CSI sanity test names like "sanity-test-ABC123"
+	if !safeSlotPattern.MatchString(volumeID) {
+		return fmt.Errorf("invalid volume ID format: %s (only alphanumeric and hyphen allowed)", volumeID)
+	}
+
+	// Additional length check to prevent excessively long volume IDs
+	if len(volumeID) > 250 {
+		return fmt.Errorf("volume ID too long: %d characters (max 250)", len(volumeID))
 	}
 
 	return nil
@@ -108,11 +117,14 @@ func ValidateNQN(nqn string) error {
 
 // VolumeIDToNQN converts a volume ID to an NVMe Qualified Name
 func VolumeIDToNQN(volumeID string) (string, error) {
+	// Validate volume ID is safe (prevents command injection)
 	if err := ValidateVolumeID(volumeID); err != nil {
 		return "", err
 	}
 
-	nqn := fmt.Sprintf("%s:%s", NQNPrefix, volumeID)
+	// Convert to lowercase for NQN (NVMe spec requires lowercase)
+	volumeIDLower := strings.ToLower(volumeID)
+	nqn := fmt.Sprintf("%s:%s", NQNPrefix, volumeIDLower)
 
 	// SECURITY: Validate the generated NQN before returning
 	if err := ValidateNQN(nqn); err != nil {
@@ -147,6 +159,8 @@ func ExtractVolumeIDFromNQN(nqn string) (string, error) {
 	}
 
 	volumeID := nqn[len(expectedPrefix):]
+
+	// Volume ID in NQN is lowercase, validate it's safe
 	if err := ValidateVolumeID(volumeID); err != nil {
 		return "", fmt.Errorf("invalid volume ID in NQN: %w", err)
 	}
