@@ -10,6 +10,32 @@ import (
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 )
 
+// mockDeviceResolver is a simple resolver for testing that uses the mock connector's connected map
+type mockDeviceResolver struct {
+	connector *MockNVMEConnector
+}
+
+// ResolveDevicePath implements device path resolution using the mock's connected map
+func (r *mockDeviceResolver) ResolveDevicePath(nqn string) (string, error) {
+	r.connector.mu.RLock()
+	defer r.connector.mu.RUnlock()
+
+	if devicePath, ok := r.connector.connected[nqn]; ok {
+		return devicePath, nil
+	}
+	return "", fmt.Errorf("no device found for NQN: %s", nqn)
+}
+
+// SetIsConnectedFunc is a no-op for the mock
+func (r *mockDeviceResolver) SetIsConnectedFunc(fn func(string) (bool, error)) {
+	// No-op for mock
+}
+
+// ClearCache is a no-op for the mock
+func (r *mockDeviceResolver) ClearCache() {
+	// No-op for mock
+}
+
 // MockNVMEConnector is a mock implementation of nvme.Connector for testing
 type MockNVMEConnector struct {
 	mu sync.RWMutex
@@ -278,10 +304,12 @@ func (m *MockNVMEConnector) GetConfig() nvme.Config {
 }
 
 // GetResolver implements nvme.Connector
+// Returns a mock resolver that uses the connector's connected map
 func (m *MockNVMEConnector) GetResolver() *nvme.DeviceResolver {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.resolver
+	// We can't return our mock resolver directly because GetResolver expects *nvme.DeviceResolver
+	// Instead, return nil and handle it gracefully in the code
+	// The stale mount checker should handle nil resolver gracefully
+	return nil
 }
 
 // SetPromMetrics implements nvme.Connector

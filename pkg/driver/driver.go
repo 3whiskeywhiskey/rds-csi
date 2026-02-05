@@ -11,6 +11,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
@@ -49,6 +50,9 @@ type Driver struct {
 
 	// NVMe connector (interface allows different implementations: real, mock)
 	nvmeConnector nvme.Connector
+
+	// Mounter (interface allows different implementations: real, mock)
+	mounter mount.Mounter
 
 	// Kubernetes client (for events and reconciler)
 	k8sClient kubernetes.Interface
@@ -517,6 +521,11 @@ func (d *Driver) SetRDSClient(client rds.RDSClient) {
 // SetNVMEConnector sets the NVMe connector (for testing)
 func (d *Driver) SetNVMEConnector(connector nvme.Connector) {
 	d.nvmeConnector = connector
+}
+
+// SetMounter sets the mounter (for testing)
+func (d *Driver) SetMounter(mounter mount.Mounter) {
+	d.mounter = mounter
 }
 
 // AddVolumeCapabilities adds volume capabilities (exported for testing)

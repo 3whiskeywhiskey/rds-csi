@@ -97,6 +97,10 @@ func TestCSISanity(t *testing.T) {
 	t.Log("Creating mock NVMe connector...")
 	mockNVMe := mock.NewMockNVMEConnector()
 
+	// Create mock mounter for node service testing
+	t.Log("Creating mock mounter...")
+	mockMounter := mock.NewMockMounter()
+
 	// Create driver with both controller and node services enabled
 	t.Log("Creating CSI driver with mock RDS and NVMe...")
 	driverConfig := driver.DriverConfig{
@@ -121,8 +125,9 @@ func TestCSISanity(t *testing.T) {
 		t.Fatalf("Failed to create driver: %v", err)
 	}
 
-	// Inject mock NVMe connector for testing
+	// Inject mock NVMe connector and mounter for testing
 	drv.SetNVMEConnector(mockNVMe)
+	drv.SetMounter(mockMounter)
 
 	// Remove old socket if exists
 	_ = os.Remove(testSocketPath)

@@ -60,7 +60,13 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 		eventPoster = NewEventPoster(k8sClient)
 	}
 
-	m := mount.NewMounter()
+	// Use injected mounter if available (for testing), otherwise create new one
+	var m mount.Mounter
+	if driver.mounter != nil {
+		m = driver.mounter
+	} else {
+		m = mount.NewMounter()
+	}
 
 	// Use injected connector if available (for testing), otherwise create new one
 	var connector nvme.Connector
