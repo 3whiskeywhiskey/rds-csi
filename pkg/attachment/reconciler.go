@@ -172,6 +172,18 @@ func (r *AttachmentReconciler) run(ctx context.Context) {
 	r.reconcile(ctx)
 
 	for {
+		// Priority check: stop signals take precedence over work
+		select {
+		case <-stopCh:
+			klog.V(2).Info("Attachment reconciler shutting down")
+			return
+		case <-ctx.Done():
+			klog.V(2).Info("Attachment reconciler context cancelled")
+			return
+		default:
+		}
+
+		// Wait for work or stop signal
 		select {
 		case <-ticker.C:
 			klog.V(2).Info("Attachment reconciliation triggered by periodic timer")

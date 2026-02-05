@@ -102,7 +102,7 @@ func TestReconciler_StartStop(t *testing.T) {
 		K8sClient:   k8sClient,
 		NodeLister:  nodeLister,
 		PVLister:    pvLister,
-		Interval:    100 * time.Millisecond,
+		Interval:    1 * time.Hour, // Long interval - test only verifies Start/Stop lifecycle
 		GracePeriod: 10 * time.Millisecond,
 	})
 	if err != nil {
@@ -513,7 +513,7 @@ func TestTriggerReconcile_AfterStop(t *testing.T) {
 		K8sClient:   k8sClient,
 		NodeLister:  nodeLister,
 		PVLister:    pvLister,
-		Interval:    100 * time.Millisecond,
+		Interval:    1 * time.Hour, // Long interval - test does not need periodic timer to fire
 		GracePeriod: 30 * time.Second,
 	})
 	if err != nil {
