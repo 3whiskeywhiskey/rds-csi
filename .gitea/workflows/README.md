@@ -7,13 +7,14 @@ Optimized CI/CD workflows for Gitea Actions with fast feedback and comprehensive
 ### Quick Build (on push to dev/main)
 **File:** `quick-build.yml`
 **Trigger:** Push to `dev` or `main` branches
-**Duration:** ~3-5 minutes
-**Purpose:** Fast feedback for developers
+**Duration:** ~5-8 minutes
+**Purpose:** Fast multi-arch builds for mixed-architecture deployments
 
 **Runs:**
 - ✅ Build binary
 - ✅ Quick smoke test (verify binary runs)
-- ✅ Build container (single arch)
+- ✅ Build container (linux/amd64, linux/arm64)
+- ✅ Uses buildx cache for speed
 - ❌ NO tests (saves time)
 
 **When it runs:**
@@ -86,18 +87,28 @@ REGISTRY_USER=your-username
 REGISTRY_TOKEN=your-access-token
 ```
 
-### 3. Uncomment Push Steps
+### 3. Enable Container Push
 
-Once registry is configured, uncomment these sections:
+Once registry is configured:
 
 **In `quick-build.yml`:**
-```yaml
-- name: Log in to registry
-  run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ...
+1. Uncomment the login step:
+   ```yaml
+   - name: Log in to registry
+     uses: docker/login-action@v3
+     with:
+       registry: ${{ env.REGISTRY }}
+       username: ${{ secrets.REGISTRY_USER }}
+       password: ${{ secrets.REGISTRY_TOKEN }}
+   ```
 
-- name: Push container
-  run: docker push ...
-```
+2. Change `push: false` to `push: true`:
+   ```yaml
+   - name: Build and push multi-arch container
+     uses: docker/build-push-action@v5
+     with:
+       push: true  # Changed from false
+   ```
 
 **In `release.yml`:**
 ```yaml
@@ -206,14 +217,14 @@ PR:
 Push to dev/main:
 ├─ build binary
 ├─ smoke test
-└─ build container
-⏱️  ~3-5 minutes  (60% faster!)
+└─ build multi-arch container (amd64 + arm64)
+⏱️  ~5-8 minutes  (50% faster, with multi-arch!)
 
 PR:
 ├─ verify + unit tests + coverage
 ├─ sanity tests
 ├─ stress tests
-├─ build test
+├─ build test (multi-arch)
 └─ summary
 ⏱️  ~10-15 minutes  (organized in parallel jobs)
 ```

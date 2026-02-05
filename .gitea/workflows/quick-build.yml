@@ -42,29 +42,45 @@ jobs:
           ./bin/rds-csi-plugin-* --version || true
           echo "✅ Binary built successfully"
 
-      - name: Build container
-        run: |
-          docker build \
-            --build-arg GIT_COMMIT=${{ github.sha }} \
-            --build-arg GIT_TAG=${{ github.ref_name }}-${{ github.sha }} \
-            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${{ github.sha }} \
-            .
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       # Uncomment when ready to push to registry
       # - name: Log in to registry
-      #   run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ secrets.REGISTRY_USER }} --password-stdin
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ${{ env.REGISTRY }}
+      #     username: ${{ secrets.REGISTRY_USER }}
+      #     password: ${{ secrets.REGISTRY_TOKEN }}
 
-      # - name: Push container
-      #   run: |
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${{ github.sha }}
+      - name: Build and push multi-arch container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false  # Set to true when registry is configured
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${{ github.sha }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TAG=${{ github.ref_name }}-${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build summary
         run: |
-          echo "✅ Quick build complete!"
+          echo "✅ Quick multi-arch build complete!"
           echo "Branch: ${{ github.ref_name }}"
           echo "Commit: ${{ github.sha }}"
+          echo "Platforms: linux/amd64, linux/arm64"
           echo ""
-          echo "Container tag: ${{ github.ref_name }}-${{ github.sha }}"
+          echo "Container tags:"
+          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${{ github.sha }}"
+          echo ""
+          echo "To enable push: Set 'push: true' in workflow and uncomment login step"
