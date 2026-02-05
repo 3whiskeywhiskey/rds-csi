@@ -1029,3 +1029,184 @@ func BenchmarkSanitizeMountOptions(b *testing.B) {
 		_, _ = SanitizeMountOptions(options, true)
 	}
 }
+
+// TestMount_ErrorScenarios tests mount error path handling
+func TestMount_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		target      string
+		fsType      string
+		options     []string
+		setupTarget func(string) error
+		expectError bool
+		errContains string
+	}{
+		{
+			name:   "mount target exists as file - not directory",
+			source: "/dev/nvme0n1",
+			fsType: "ext4",
+			setupTarget: func(target string) error {
+				// Create target as file instead of directory
+				return os.WriteFile(target, []byte{}, 0600)
+			},
+			expectError: false, // Mount handles files for block volumes
+		},
+		{
+			name:   "mount with read-only flag",
+			source: "/dev/nvme0n1",
+			fsType: "ext4",
+			options: []string{"ro"},
+			setupTarget: func(target string) error {
+				return nil // Normal setup
+			},
+			expectError: false,
+		},
+		{
+			name:   "dangerous mount option rejected",
+			source: "/dev/nvme0n1",
+			fsType: "ext4",
+			options: []string{"suid"},
+			setupTarget: func(target string) error {
+				return nil
+			},
+			expectError: true,
+			errContains: "dangerous",
+		},
+		{
+			name:   "non-whitelisted mount option rejected",
+			source: "/dev/nvme0n1",
+			fsType: "ext4",
+			options: []string{"custom-bad-option"},
+			setupTarget: func(target string) error {
+				return nil
+			},
+			expectError: true,
+			errContains: "whitelist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			target := filepath.Join(tmpDir, "target")
+
+			// Setup target based on test scenario
+			if tt.setupTarget != nil {
+				if err := tt.setupTarget(target); err != nil {
+					t.Fatalf("failed to setup target: %v", err)
+				}
+			}
+
+			// Create mounter with mock command that succeeds
+			m := &mounter{
+				execCommand: mockExecCommand("", "", 0),
+			}
+
+			err := m.Mount(tt.source, target, tt.fsType, tt.options)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+				} else if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error to contain %q, got: %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestFormat_ErrorScenarios tests format error path handling
+func TestFormat_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name           string
+		device         string
+		fsType         string
+		isFormatted    bool
+		formatExitCode int
+		expectError    bool
+		errContains    string
+	}{
+		{
+			name:        "device not formatted - format ext4 success",
+			device:      "/dev/nvme0n1",
+			fsType:      "ext4",
+			isFormatted: false,
+			formatExitCode: 0,
+			expectError: false,
+		},
+		{
+			name:        "device not formatted - format xfs success",
+			device:      "/dev/nvme0n1",
+			fsType:      "xfs",
+			isFormatted: false,
+			formatExitCode: 0,
+			expectError: false,
+		},
+		{
+			name:        "device not formatted - format ext4 fails",
+			device:      "/dev/nvme0n1",
+			fsType:      "ext4",
+			isFormatted: false,
+			formatExitCode: 1,
+			expectError: true,
+			errContains: "mkfs.ext4 failed",
+		},
+		{
+			name:        "device not formatted - format xfs fails",
+			device:      "/dev/nvme0n1",
+			fsType:      "xfs",
+			isFormatted: false,
+			formatExitCode: 1,
+			expectError: true,
+			errContains: "mkfs.xfs failed",
+		},
+		{
+			name:        "device not formatted - unsupported filesystem",
+			device:      "/dev/nvme0n1",
+			fsType:      "ntfs",
+			isFormatted: false,
+			expectError: true,
+			errContains: "unsupported filesystem type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create command-aware mock that returns different results based on command
+			m := &mounter{
+				execCommand: func(name string, args ...string) *exec.Cmd {
+					switch name {
+					case "blkid":
+						if tt.isFormatted {
+							return mockExecCommand(tt.fsType, "", 0)(name, args...)
+						}
+						return mockExecCommand("", "", 2)(name, args...) // Exit 2 = not formatted
+					case "mkfs.ext4", "mkfs.ext3", "mkfs.xfs":
+						return mockExecCommand("", "", tt.formatExitCode)(name, args...)
+					default:
+						return mockExecCommand("", "", 0)(name, args...)
+					}
+				},
+			}
+
+			err := m.Format(tt.device, tt.fsType)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+				} else if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error to contain %q, got: %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
