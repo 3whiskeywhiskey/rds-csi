@@ -891,10 +891,21 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	// RDS layer already logged "Resized volume X" at V(2) - no duplicate needed
 	klog.V(4).Infof("ControllerExpandVolume CSI call completed for %s", volumeID)
 
+	// Determine if node expansion is required
+	// For mount volumes: yes, to resize the filesystem (ext4, xfs, etc.)
+	// For block volumes: no, kernel sees new size automatically via NVMe rescan
+	nodeExpansionRequired := true
+	if cap := req.GetVolumeCapability(); cap != nil {
+		if cap.GetBlock() != nil {
+			nodeExpansionRequired = false
+			klog.V(4).Infof("Block volume expansion for %s - node expansion not required", volumeID)
+		}
+	}
+
 	// Return response indicating node expansion is required to resize the filesystem
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         requiredBytes,
-		NodeExpansionRequired: true,
+		NodeExpansionRequired: nodeExpansionRequired,
 	}, nil
 }
 

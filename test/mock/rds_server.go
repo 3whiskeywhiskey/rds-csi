@@ -349,6 +349,10 @@ func (s *MockRDSServer) executeCommand(command string) (string, int) {
 	if strings.HasPrefix(command, "/disk add") {
 		output, exitCode = s.handleDiskAdd(command)
 		klog.V(3).Infof("Mock RDS /disk add returned code %d, output: %s", exitCode, output)
+	} else if strings.HasPrefix(command, "/disk set") {
+		// Parse /disk set command (for resize)
+		output, exitCode = s.handleDiskSet(command)
+		klog.V(3).Infof("Mock RDS /disk set returned code %d", exitCode)
 	} else if strings.HasPrefix(command, "/disk remove") {
 		// Parse /disk remove command
 		output, exitCode = s.handleDiskRemove(command)
@@ -462,6 +466,54 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 	}
 
 	klog.V(2).Infof("Mock RDS: Created volume %s with backing file %s", slot, filePath)
+	return "", 0
+}
+
+func (s *MockRDSServer) handleDiskSet(command string) (string, int) {
+	// Parse: /disk set [find slot=pvc-123] file-size=10G
+	re := regexp.MustCompile(`slot=([^\s\]]+)`)
+	matches := re.FindStringSubmatch(command)
+
+	if len(matches) < 2 {
+		return "failure: invalid command format\n", 1
+	}
+
+	slot := matches[1]
+	fileSizeStr := extractParam(command, "file-size")
+
+	if fileSizeStr == "" {
+		return "failure: file-size parameter required\n", 1
+	}
+
+	// Parse new file size
+	newSize, err := parseSize(fileSizeStr)
+	if err != nil {
+		return fmt.Sprintf("failure: invalid file size %s: %v\n", fileSizeStr, err), 1
+	}
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("set")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	vol, exists := s.volumes[slot]
+	if !exists {
+		return "failure: no such item\n", 1
+	}
+
+	// Update volume size
+	oldSize := vol.FileSizeBytes
+	vol.FileSizeBytes = newSize
+
+	// Also update backing file size if it exists
+	if vol.FilePath != "" {
+		if file, fileExists := s.files[vol.FilePath]; fileExists {
+			file.SizeBytes = newSize
+		}
+	}
+
+	klog.V(2).Infof("Mock RDS: Resized volume %s from %d to %d bytes", slot, oldSize, newSize)
 	return "", 0
 }
 
