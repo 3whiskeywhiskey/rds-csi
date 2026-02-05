@@ -296,7 +296,7 @@ lint:
 	@echo "Running linters..."
 	@if ! command -v golangci-lint &> /dev/null; then \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.1.5; \
 	fi
 	golangci-lint run --timeout 5m
 
