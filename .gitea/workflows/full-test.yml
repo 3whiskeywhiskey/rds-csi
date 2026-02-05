@@ -19,15 +19,18 @@ on:
 jobs:
   verify-and-test:
     name: Code Quality & Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: golang
     steps:
+      - name: Install Node.js for actions
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y -qq nodejs make
+          node --version
+
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
 
       - name: Install dependencies
         run: |
@@ -65,15 +68,15 @@ jobs:
 
   sanity-tests:
     name: CSI Sanity Tests
-    runs-on: ubuntu-latest
+    runs-on: golang
     steps:
+      - name: Install Node.js for actions
+        run: |
+          apt-get update -qq && apt-get install -y -qq curl nodejs npm
+          node --version
+
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
 
       - name: Install dependencies
         run: go mod download
@@ -101,15 +104,15 @@ jobs:
 
   mock-stress-tests:
     name: Mock RDS Stress Tests
-    runs-on: ubuntu-latest
+    runs-on: golang
     steps:
+      - name: Install Node.js for actions
+        run: |
+          apt-get update -qq && apt-get install -y -qq curl nodejs npm
+          node --version
+
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
 
       - name: Run mock stress tests
         run: |
@@ -119,15 +122,17 @@ jobs:
 
   build-test:
     name: Test Container Build
-    runs-on: ubuntu-latest
+    runs-on: golang
     steps:
+      - name: Install Node.js and Docker
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl docker.io nodejs npm
+          node --version
+          docker --version
+
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Install Docker CLI
-        run: |
-          apt-get update && apt-get install -y docker.io
-          docker --version
 
       - name: Build container (no push)
         run: |
