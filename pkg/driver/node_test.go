@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/circuitbreaker"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
@@ -1600,6 +1602,425 @@ func TestNodeUnstageVolume_ErrorScenarios(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
+			}
+		})
+	}
+}
+
+// TestCSI_NegativeScenarios_Node validates CSI spec error code requirements
+// for node service operations. Each test case documents the specific CSI
+// spec section that mandates the error code behavior with focus on
+// idempotency requirements which are critical for Kubernetes retry behavior.
+//
+// CSI Spec Reference: https://github.com/container-storage-interface/spec/blob/master/spec.md
+func TestCSI_NegativeScenarios_Node(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string // CSI method name
+		setupMock  func(*mockNVMEConnector, *mockMounter, string) // Gets stagingPath for setup
+		request    interface{}
+		wantCode   codes.Code
+		wantErrMsg string
+		specRef    string
+	}{
+		// NodeStageVolume - CSI spec section 3.9
+		{
+			name:   "NodeStageVolume: missing volume ID",
+			method: "NodeStageVolume",
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "", // Missing required field
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:test",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.9 NodeStageVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "NodeStageVolume: missing staging path",
+			method: "NodeStageVolume",
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "", // Missing required field
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:test",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "staging target path",
+			specRef:    "CSI 3.9 NodeStageVolume: staging_target_path is REQUIRED",
+		},
+		{
+			name:   "NodeStageVolume: missing volume capability",
+			method: "NodeStageVolume",
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  nil, // Missing required field
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:test",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume capability",
+			specRef:    "CSI 3.9 NodeStageVolume: volume_capability is REQUIRED",
+		},
+		{
+			name:   "NodeStageVolume: invalid nvmePort",
+			method: "NodeStageVolume",
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:test",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "not-a-number", // Invalid
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "nvmePort",
+			specRef:    "CSI 3.9 NodeStageVolume: invalid parameters return InvalidArgument",
+		},
+		{
+			name:   "NodeStageVolume: invalid nvmeAddress",
+			method: "NodeStageVolume",
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:test",
+					"nvmeAddress": "not-an-ip", // Invalid
+					"nvmePort":    "4420",
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "nvmeAddress",
+			specRef:    "CSI 3.9 NodeStageVolume: invalid parameters return InvalidArgument",
+		},
+		{
+			name:   "NodeStageVolume: idempotent (already staged)",
+			method: "NodeStageVolume",
+			setupMock: func(nvme *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Setup: volume already staged
+				os.MkdirAll(stagingPath, 0750)
+				mounter.isLikelyMounted = true
+				nvme.devicePath = "/dev/nvme0n1"
+			},
+			request: &csi.NodeStageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/tmp/test-staging-idempotent",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+				VolumeContext: map[string]string{
+					"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+					"nvmeAddress": "10.42.68.1",
+					"nvmePort":    "4420",
+				},
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.9 NodeStageVolume: already staged returns success (idempotent)",
+		},
+
+		// NodeUnstageVolume - CSI spec section 3.10
+		{
+			name:   "NodeUnstageVolume: missing volume ID",
+			method: "NodeUnstageVolume",
+			request: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "", // Missing required field
+				StagingTargetPath: "/staging/path",
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.10 NodeUnstageVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "NodeUnstageVolume: missing staging path",
+			method: "NodeUnstageVolume",
+			request: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "", // Missing required field
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "staging target path",
+			specRef:    "CSI 3.10 NodeUnstageVolume: staging_target_path is REQUIRED",
+		},
+		{
+			name:   "NodeUnstageVolume: not staged (idempotent)",
+			method: "NodeUnstageVolume",
+			setupMock: func(nvme *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Don't create staging path - volume not staged
+				mounter.isLikelyMounted = false
+			},
+			request: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				StagingTargetPath: "/tmp/test-unstage-idempotent",
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.10 NodeUnstageVolume: not staged returns success (idempotent)",
+		},
+
+		// NodePublishVolume - CSI spec section 3.11
+		{
+			name:   "NodePublishVolume: missing volume ID",
+			method: "NodePublishVolume",
+			request: &csi.NodePublishVolumeRequest{
+				VolumeId:          "", // Missing required field
+				TargetPath:        "/target/path",
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.11 NodePublishVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "NodePublishVolume: missing target path",
+			method: "NodePublishVolume",
+			request: &csi.NodePublishVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				TargetPath:        "", // Missing required field
+				StagingTargetPath: "/staging/path",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "target path",
+			specRef:    "CSI 3.11 NodePublishVolume: target_path is REQUIRED",
+		},
+		{
+			name:   "NodePublishVolume: missing staging path",
+			method: "NodePublishVolume",
+			request: &csi.NodePublishVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				TargetPath:        "/target/path",
+				StagingTargetPath: "", // Missing for staged volume
+				VolumeCapability:  createFilesystemVolumeCapability(),
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "staging target path",
+			specRef:    "CSI 3.11 NodePublishVolume: staging_target_path REQUIRED for staged volumes",
+		},
+		{
+			name:   "NodePublishVolume: idempotent (already published)",
+			method: "NodePublishVolume",
+			setupMock: func(nvme *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Setup: volume already published
+				targetPath := "/tmp/test-publish-idempotent"
+				os.MkdirAll(stagingPath, 0750)
+				os.MkdirAll(targetPath, 0750)
+				mounter.isLikelyMounted = true
+			},
+			request: &csi.NodePublishVolumeRequest{
+				VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+				TargetPath:        "/tmp/test-publish-idempotent",
+				StagingTargetPath: "/tmp/test-staging-publish",
+				VolumeCapability:  createFilesystemVolumeCapability(),
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.11 NodePublishVolume: already published returns success (idempotent)",
+		},
+
+		// NodeUnpublishVolume - CSI spec section 3.12
+		{
+			name:   "NodeUnpublishVolume: missing volume ID",
+			method: "NodeUnpublishVolume",
+			request: &csi.NodeUnpublishVolumeRequest{
+				VolumeId:   "", // Missing required field
+				TargetPath: "/target/path",
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.12 NodeUnpublishVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "NodeUnpublishVolume: missing target path",
+			method: "NodeUnpublishVolume",
+			request: &csi.NodeUnpublishVolumeRequest{
+				VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+				TargetPath: "", // Missing required field
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "target path",
+			specRef:    "CSI 3.12 NodeUnpublishVolume: target_path is REQUIRED",
+		},
+		{
+			name:   "NodeUnpublishVolume: not published (idempotent)",
+			method: "NodeUnpublishVolume",
+			setupMock: func(nvme *mockNVMEConnector, mounter *mockMounter, stagingPath string) {
+				// Don't create target - volume not published
+				mounter.isLikelyMounted = false
+			},
+			request: &csi.NodeUnpublishVolumeRequest{
+				VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+				TargetPath: "/tmp/test-unpublish-idempotent",
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.12 NodeUnpublishVolume: not published returns success (idempotent)",
+		},
+
+		// NodeGetVolumeStats - CSI spec section 3.13
+		{
+			name:   "NodeGetVolumeStats: missing volume ID",
+			method: "NodeGetVolumeStats",
+			request: &csi.NodeGetVolumeStatsRequest{
+				VolumeId:   "", // Missing required field
+				VolumePath: "/volume/path",
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.13 NodeGetVolumeStats: volume_id is REQUIRED",
+		},
+		{
+			name:   "NodeGetVolumeStats: missing volume path",
+			method: "NodeGetVolumeStats",
+			request: &csi.NodeGetVolumeStatsRequest{
+				VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+				VolumePath: "", // Missing required field
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume path",
+			specRef:    "CSI 3.13 NodeGetVolumeStats: volume_path is REQUIRED",
+		},
+
+		// NodeExpandVolume - CSI spec section 3.14
+		{
+			name:   "NodeExpandVolume: missing volume ID",
+			method: "NodeExpandVolume",
+			request: &csi.NodeExpandVolumeRequest{
+				VolumeId:   "", // Missing required field
+				VolumePath: "/volume/path",
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.14 NodeExpandVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "NodeExpandVolume: missing volume path",
+			method: "NodeExpandVolume",
+			request: &csi.NodeExpandVolumeRequest{
+				VolumeId:   "pvc-12345678-1234-1234-1234-123456789012",
+				VolumePath: "", // Missing required field
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume path",
+			specRef:    "CSI 3.14 NodeExpandVolume: volume_path is REQUIRED",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			// Setup mocks
+			mounter := &mockMounter{}
+			nvmeConn := &mockNVMEConnector{
+				devicePath: "/dev/nvme0n1", // Default success path
+			}
+
+			// Determine staging path for setup
+			stagingPath := ""
+			switch req := tt.request.(type) {
+			case *csi.NodeStageVolumeRequest:
+				stagingPath = req.StagingTargetPath
+			case *csi.NodeUnstageVolumeRequest:
+				stagingPath = req.StagingTargetPath
+			case *csi.NodePublishVolumeRequest:
+				stagingPath = req.StagingTargetPath
+			}
+
+			// Apply test-specific mock configuration
+			if tt.setupMock != nil {
+				tt.setupMock(nvmeConn, mounter, stagingPath)
+			}
+
+			// Create node server
+			driver := &Driver{
+				name:    "rds.csi.srvlab.io",
+				version: "test",
+				metrics: observability.NewMetrics(),
+			}
+
+			ns := &NodeServer{
+				driver:         driver,
+				mounter:        mounter,
+				nvmeConn:       nvmeConn,
+				nodeID:         "test-node",
+				circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+			}
+
+			// Execute method
+			var err error
+			switch tt.method {
+			case "NodeStageVolume":
+				_, err = ns.NodeStageVolume(ctx, tt.request.(*csi.NodeStageVolumeRequest))
+			case "NodeUnstageVolume":
+				_, err = ns.NodeUnstageVolume(ctx, tt.request.(*csi.NodeUnstageVolumeRequest))
+			case "NodePublishVolume":
+				_, err = ns.NodePublishVolume(ctx, tt.request.(*csi.NodePublishVolumeRequest))
+			case "NodeUnpublishVolume":
+				_, err = ns.NodeUnpublishVolume(ctx, tt.request.(*csi.NodeUnpublishVolumeRequest))
+			case "NodeGetVolumeStats":
+				_, err = ns.NodeGetVolumeStats(ctx, tt.request.(*csi.NodeGetVolumeStatsRequest))
+			case "NodeExpandVolume":
+				_, err = ns.NodeExpandVolume(ctx, tt.request.(*csi.NodeExpandVolumeRequest))
+			default:
+				t.Fatalf("Unknown method: %s", tt.method)
+			}
+
+			// Cleanup temp directories
+			if stagingPath != "" && strings.HasPrefix(stagingPath, "/tmp/test-") {
+				os.RemoveAll(stagingPath)
+			}
+			switch req := tt.request.(type) {
+			case *csi.NodePublishVolumeRequest:
+				if strings.HasPrefix(req.TargetPath, "/tmp/test-") {
+					os.RemoveAll(req.TargetPath)
+				}
+			case *csi.NodeUnpublishVolumeRequest:
+				if strings.HasPrefix(req.TargetPath, "/tmp/test-") {
+					os.RemoveAll(req.TargetPath)
+				}
+			}
+
+			// Verify error code
+			if tt.wantCode == codes.OK {
+				if err != nil {
+					t.Errorf("[%s] Expected success, got error: %v", tt.specRef, err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("[%s] Expected error code %v, got nil", tt.specRef, tt.wantCode)
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("[%s] Expected gRPC status error, got: %T %v", tt.specRef, err, err)
+			}
+
+			if st.Code() != tt.wantCode {
+				t.Errorf("[%s] Expected code %v, got %v\nError message: %s",
+					tt.specRef, tt.wantCode, st.Code(), st.Message())
+			}
+
+			if tt.wantErrMsg != "" && !strings.Contains(st.Message(), tt.wantErrMsg) {
+				t.Errorf("[%s] Expected error containing %q, got %q",
+					tt.specRef, tt.wantErrMsg, st.Message())
 			}
 		})
 	}
