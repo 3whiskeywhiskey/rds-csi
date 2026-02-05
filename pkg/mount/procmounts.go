@@ -181,9 +181,9 @@ func GetMountsWithTimeout(ctx context.Context) ([]*mountinfo.Info, error) {
 	case res := <-resultCh:
 		return res.mounts, res.err
 	case <-ctx.Done():
-		return nil, fmt.Errorf("procmounts parsing timed out after %v: %w. "+
+		return nil, fmt.Errorf("procmounts parsing timed out after %v: %w "+
 			"This may indicate filesystem corruption or an excessive number of mount entries. "+
-			"Check /proc/mounts manually and consider unmounting stale entries.",
+			"Check /proc/mounts manually and consider unmounting stale entries",
 			ProcmountsTimeout, ctx.Err())
 	}
 }
@@ -201,9 +201,9 @@ func DetectDuplicateMounts(mounts []*mountinfo.Info, devicePath string) (int, er
 
 	if count >= MaxDuplicateMountsPerDevice {
 		return count, fmt.Errorf(
-			"mount storm detected: device %s has %d mount entries (threshold: %d). "+
-				"This indicates filesystem corruption or a runaway mount loop. "+
-				"Manual cleanup required: identify and unmount duplicate entries with 'findmnt' and 'umount'.",
+			"mount storm detected: device %s has %d mount entries (threshold: %d) "+
+				"This indicates filesystem corruption or a runaway mount loop "+
+				"Manual cleanup required: identify and unmount duplicate entries with 'findmnt' and 'umount'",
 			devicePath, count, MaxDuplicateMountsPerDevice)
 	}
 

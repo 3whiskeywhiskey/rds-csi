@@ -210,8 +210,8 @@ func ValidateIPAddress(address string) error {
 	// Simple hostname validation: alphanumeric, hyphens, and dots
 	// More permissive than strict DNS rules, but safe for our use case
 	for i, ch := range address {
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-			(ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_') {
+		if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') &&
+			(ch < '0' || ch > '9') && ch != '.' && ch != '-' && ch != '_' {
 			return fmt.Errorf("invalid IP address or hostname: %s (invalid character at position %d)", address, i)
 		}
 	}

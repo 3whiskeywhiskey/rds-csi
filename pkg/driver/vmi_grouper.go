@@ -166,7 +166,7 @@ func (g *VMIGrouper) podMountsPVC(pod *corev1.Pod, pvcName string) bool {
 // extractVMIFromPod extracts the VMI identity from a pod's ownerReferences
 func (g *VMIGrouper) extractVMIFromPod(pod *corev1.Pod) string {
 	// Check ownerReferences for VirtualMachineInstance
-	for _, ownerRef := range pod.ObjectMeta.OwnerReferences {
+	for _, ownerRef := range pod.OwnerReferences {
 		if ownerRef.Kind == "VirtualMachineInstance" {
 			return pod.Namespace + "/" + ownerRef.Name
 		}
@@ -182,7 +182,7 @@ func (g *VMIGrouper) extractVMIFromPod(pod *corev1.Pod) string {
 
 	// Check if this is a hotplug volume pod (hp-volume-*)
 	// These typically have ownerReferences to the launcher pod
-	for _, ownerRef := range pod.ObjectMeta.OwnerReferences {
+	for _, ownerRef := range pod.OwnerReferences {
 		if ownerRef.Kind == "Pod" {
 			// This might be a hotplug attachment pod - try to get the parent pod's VMI
 			// We don't recurse here to avoid complexity; the cache will help

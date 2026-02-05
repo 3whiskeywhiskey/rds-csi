@@ -2204,7 +2204,7 @@ func TestSanityRegression_VolumeContextParameters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &csi.CreateVolumeRequest{
-				Name: "test-volume-params-" + strings.Replace(tt.name, " ", "-", -1),
+				Name: "test-volume-params-" + strings.ReplaceAll(tt.name, " ", "-"),
 				VolumeCapabilities: []*csi.VolumeCapability{
 					{
 						AccessMode: &csi.VolumeCapability_AccessMode{

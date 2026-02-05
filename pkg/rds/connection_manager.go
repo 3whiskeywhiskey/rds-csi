@@ -56,7 +56,7 @@ type ConnectionManager struct {
 // Validates config and sets defaults for zero values.
 func NewConnectionManager(config ConnectionManagerConfig) (*ConnectionManager, error) {
 	if config.Client == nil {
-		return nil, fmt.Errorf("Client is required")
+		return nil, fmt.Errorf("client is required")
 	}
 
 	// Set defaults

@@ -48,7 +48,7 @@ func TestNewConnectionManager_RequiresClient(t *testing.T) {
 		t.Fatal("expected error when Client is nil")
 	}
 
-	if err.Error() != "Client is required" {
+	if err.Error() != "client is required" {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
