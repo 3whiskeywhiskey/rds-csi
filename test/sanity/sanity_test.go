@@ -129,6 +129,10 @@ func TestCSISanity(t *testing.T) {
 	drv.SetNVMEConnector(mockNVMe)
 	drv.SetMounter(mockMounter)
 
+	// Inject mock getMountDev function to prevent stale mount false positives
+	// The mock mounter tracks mounts but they're not in /proc/mountinfo
+	drv.SetGetMountDevFunc(mockMounter.GetMountDevice)
+
 	// Remove old socket if exists
 	_ = os.Remove(testSocketPath)
 

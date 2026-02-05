@@ -247,6 +247,19 @@ func (m *MockMounter) IsMounted(path string) bool {
 	return mounted
 }
 
+// GetMountDevice returns the source device for a mounted path
+// This is used for mock getMountDev injection in stale mount checker
+func (m *MockMounter) GetMountDevice(path string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	device, mounted := m.mounted[path]
+	if !mounted {
+		return "", fmt.Errorf("path %s is not mounted", path)
+	}
+	return device, nil
+}
+
 // Reset clears all state for test isolation
 func (m *MockMounter) Reset() {
 	m.mu.Lock()

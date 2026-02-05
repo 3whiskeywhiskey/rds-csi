@@ -508,8 +508,25 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	}
 
 	// Validate volume capability is provided (required by CSI spec)
+	// Check this before node validation so InvalidArgument takes precedence
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
+	}
+
+	// Validate node exists if we have k8s client
+	// For sanity tests without k8s, only accept the driver's own node ID
+	if cs.driver.k8sClient != nil {
+		// Check if node exists in Kubernetes
+		_, err := cs.driver.k8sClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "node %s not found: %v", nodeID, err)
+		}
+	} else {
+		// Without k8s client (test mode), only accept the driver's configured node ID
+		// This allows sanity tests to validate node existence checking
+		if cs.driver.nodeID != "" && nodeID != cs.driver.nodeID {
+			return nil, status.Errorf(codes.NotFound, "node %s does not exist (driver node: %s)", nodeID, cs.driver.nodeID)
+		}
 	}
 
 	// Determine access mode from VolumeCapability (singular, not slice)

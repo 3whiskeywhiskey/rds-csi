@@ -83,6 +83,11 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 	// Create stale mount checker using connector's resolver
 	staleChecker := mount.NewStaleMountChecker(connector.GetResolver())
 
+	// Inject custom getMountDev function if provided (for testing)
+	if driver.getMountDevFunc != nil {
+		staleChecker.SetMountDeviceFunc(driver.getMountDevFunc)
+	}
+
 	// Create recovery with default config
 	recoverer := mount.NewMountRecoverer(
 		mount.DefaultRecoveryConfig(),
@@ -768,6 +773,13 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		return nil, status.Error(codes.InvalidArgument, "volume path is required")
 	}
 
+	// Check if volume path exists and is a mount point
+	// Per CSI spec, should return NotFound if volume doesn't exist
+	isMounted, err := ns.mounter.IsLikelyMountPoint(volumePath)
+	if err != nil || !isMounted {
+		return nil, status.Errorf(codes.NotFound, "volume path %s not found or not mounted", volumePath)
+	}
+
 	// Track volume condition - always set before returning
 	var volumeCondition *csi.VolumeCondition
 
@@ -864,6 +876,13 @@ func (ns *NodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 		NodeId: ns.nodeID,
 		// MaxVolumesPerNode: 0 means unlimited
 		MaxVolumesPerNode: 0,
+		// AccessibleTopology provides topology information for scheduling
+		// Using simple default topology - can be extended for zone/region awareness
+		AccessibleTopology: &csi.Topology{
+			Segments: map[string]string{
+				"topology.rds.csi.srvlab.io/zone": "default",
+			},
+		},
 	}, nil
 }
 
@@ -920,12 +939,10 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 	}
 
 	// Check if volume path is mounted
+	// Per CSI spec, should return NotFound if volume doesn't exist
 	mounted, err := ns.mounter.IsLikelyMountPoint(volumePath)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to check if volume is mounted: %v", err)
-	}
-	if !mounted {
-		return nil, status.Errorf(codes.FailedPrecondition, "volume path %s is not mounted", volumePath)
+	if err != nil || !mounted {
+		return nil, status.Errorf(codes.NotFound, "volume path %s not found or not mounted", volumePath)
 	}
 
 	// Derive NQN from volume ID to get device path

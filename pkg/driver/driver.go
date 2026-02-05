@@ -54,6 +54,9 @@ type Driver struct {
 	// Mounter (interface allows different implementations: real, mock)
 	mounter mount.Mounter
 
+	// Custom getMountDev function for testing (optional)
+	getMountDevFunc func(path string) (string, error)
+
 	// Kubernetes client (for events and reconciler)
 	k8sClient kubernetes.Interface
 
@@ -526,6 +529,11 @@ func (d *Driver) SetNVMEConnector(connector nvme.Connector) {
 // SetMounter sets the mounter (for testing)
 func (d *Driver) SetMounter(mounter mount.Mounter) {
 	d.mounter = mounter
+}
+
+// SetGetMountDevFunc sets a custom getMountDev function for stale mount checking (for testing)
+func (d *Driver) SetGetMountDevFunc(fn func(path string) (string, error)) {
+	d.getMountDevFunc = fn
 }
 
 // AddVolumeCapabilities adds volume capabilities (exported for testing)

@@ -125,6 +125,15 @@ func (c *StaleMountChecker) IsMountStale(mountPath string, nqn string) (bool, St
 func (c *StaleMountChecker) GetStaleInfo(mountPath string, nqn string) (*StaleInfo, error) {
 	info := &StaleInfo{}
 
+	// If resolver is nil (test environment), skip staleness checking entirely
+	// This prevents EvalSymlinks from failing on non-existent mock devices
+	if c.resolver == nil {
+		klog.V(4).Infof("Resolver is nil, skipping staleness check for %s (test mode)", mountPath)
+		info.IsStale = false
+		info.Reason = StaleReasonNotStale
+		return info, nil
+	}
+
 	// Get mount device
 	mountDevice, err := c.getMountDev(mountPath)
 	if err != nil {
@@ -145,17 +154,6 @@ func (c *StaleMountChecker) GetStaleInfo(mountPath string, nqn string) (*StaleIn
 		return nil, fmt.Errorf("failed to resolve mount device symlinks: %w", err)
 	}
 	info.ResolvedMount = resolvedMount
-
-	// Resolve NQN
-	// If resolver is nil (test environment), return non-stale status
-	if c.resolver == nil {
-		klog.V(4).Infof("Resolver is nil, skipping staleness check for %s (test mode)", mountPath)
-		info.IsStale = false
-		info.Reason = StaleReasonNotStale
-		info.CurrentDevice = mountDevice // Use mount device as current in test mode
-		info.ResolvedCurrent = resolvedMount
-		return info, nil
-	}
 
 	currentDevice, err := c.resolver.ResolveDevicePath(nqn)
 	if err != nil {
