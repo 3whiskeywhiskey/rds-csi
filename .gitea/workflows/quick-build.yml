@@ -22,15 +22,23 @@ jobs:
     name: Build Binary Only (Fast)
     runs-on: ubuntu-latest  # golang:1.22-bookworm
     steps:
+      - name: Install Node.js for actions
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y -qq nodejs make
+          node --version
+          echo "✅ Node.js installed for GitHub actions"
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install build tools
+      - name: Verify build environment
         run: |
-          apt-get update -qq && apt-get install -y -qq make
           go version
           make --version
-          echo "✅ Build tools ready"
+          echo "✅ Build environment ready"
 
       - name: Build binary (includes dependency download)
         run: make build-local
