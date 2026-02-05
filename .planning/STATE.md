@@ -9,32 +9,32 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 26 of 27 (Volume Snapshots)
-Plan: 00 of TBD
-Status: Not started
-Last activity: 2026-02-05 — Completed Phase 25.1 (verified, all goals achieved)
+Phase: 25.2 of 27 (Fix Linter Issues Blocking CI Verification)
+Plan: 01 of 02
+Status: In progress
+Last activity: 2026-02-05 — Completed 25.2-01-PLAN.md
 
-Progress: [████░░░░░░] ~35% (17/TBD plans complete in v0.9.0)
+Progress: [████░░░░░░] ~35% (18/TBD plans complete in v0.9.0)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 96 (79 previous + 17 v0.9.0)
-- v0.9.0 plans completed: 17/TBD
+- Total plans completed: 97 (79 previous + 18 v0.9.0)
+- v0.9.0 plans completed: 18/TBD
 - Average duration: 6 min (v0.9.0)
-- Total execution time: 1.60 hours (v0.9.0)
+- Total execution time: 1.70 hours (v0.9.0)
 
 **By Milestone:**
 
 | Milestone | Phases | Plans | Status |
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
-| v0.9.0 Production Readiness | 22-27 | 14/TBD | 🚧 In Progress |
+| v0.9.0 Production Readiness | 22-27 | 15/TBD | 🚧 In Progress |
 
 **Recent Trend:**
+- v0.9.0 Phase 25.2: 1 plan, 6 minutes, in progress
 - v0.9.0 Phase 25.1: 3 plans, 23 minutes, completed 2026-02-05
 - v0.9.0 Phase 25: 4 plans, 28 minutes, completed 2026-02-05
-- v0.9.0 Phase 24: 4 plans, 10 minutes, completed 2026-02-05
 
 *Updated: 2026-02-05*
 
@@ -45,6 +45,10 @@ Progress: [████░░░░░░] ~35% (17/TBD plans complete in v0.9.0
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.9.0 (Phase 25.2-01): golangci-lint v2 requires string version field (version: "2" not 2)
+- v0.9.0 (Phase 25.2-01): golangci-lint v2 uses nested config (linters.settings, linters.exclusions.rules)
+- v0.9.0 (Phase 25.2-01): Exclude ST1001 (dot imports) for test/e2e/ files (Ginkgo/Gomega convention)
+- v0.9.0 (Phase 25.2-01): Go error strings lowercase, no trailing punctuation (ST1005 convention)
 - v0.9.0 (Quick-002): AttachmentReconciler uses two-stage priority-select pattern for shutdown (stop signals checked before work channels)
 - v0.9.0 (Phase 25.1-03): Probe prefers connectionManager.IsConnected() over rdsClient.IsConnected() (monitor state more accurate)
 - v0.9.0 (Phase 25.1-03): Node watcher registered after informer caches synced (avoids race conditions)
@@ -77,6 +81,12 @@ Recent decisions affecting current work:
   - **Scope**: Stale attachment reconciliation, node failure handling, RDS connection resilience, probe health checks
   - **Priority**: Must fix before adding new features (Phase 26 snapshots would inherit same issue)
 
+- **Phase 25.2 inserted after Phase 25.1**: Fix Linter Issues Blocking CI Verification (URGENT)
+  - **Trigger**: golangci-lint v2 upgrade in Phase 25.1 exposed 134 pre-existing code quality issues
+  - **Impact**: CI/CD verification pipeline blocked, preventing automated quality checks on new code
+  - **Scope**: Resolve 63 errcheck, 56 cyclop, 7 gocyclo, 8 staticcheck issues
+  - **Priority**: Required before Phase 26 - must unblock CI enforcement of linter checks
+
 ### Pending Todos
 
 None yet. (Use `/gsd:add-todo` to capture ideas during execution)
@@ -87,13 +97,13 @@ None yet. (Use `/gsd:add-todo` to capture ideas during execution)
 
 ## Session Continuity
 
-Last session: 2026-02-05 19:45
-Stopped at: Completed Quick Task 002 (Fix TestTriggerReconcile_AfterStop Deadlock)
+Last session: 2026-02-05 21:40
+Stopped at: Completed 25.2-01-PLAN.md (golangci-lint v2 config migration)
 Resume file: None
-Next action: Phase 25.1 complete. Ready for Phase 26 (Snapshots) or continue with remaining v0.9.0 phases.
+Next action: Continue Phase 25.2 with plan 02, or verify Phase 25.2 goals achieved and proceed to Phase 26 (Snapshots).
 
 **Quick tasks completed:**
 - Quick 002 (2026-02-05): Fixed AttachmentReconciler shutdown deadlock with priority-select pattern
 
 ---
-*Last updated: 2026-02-05 after Quick Task 002*
+*Last updated: 2026-02-05 after Phase 25.2-01*
