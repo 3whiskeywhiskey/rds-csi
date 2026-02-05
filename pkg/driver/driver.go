@@ -435,8 +435,11 @@ func (d *Driver) Run(endpoint string) error {
 		if d.attachmentReconciler != nil {
 			d.nodeWatcher = attachment.NewNodeWatcher(d.attachmentReconciler, d.metrics)
 			nodeInformer := d.informerFactory.Core().V1().Nodes().Informer()
-			nodeInformer.AddEventHandler(d.nodeWatcher.GetEventHandlers())
-			klog.Info("Node watcher registered for attachment reconciliation triggers")
+			if _, err := nodeInformer.AddEventHandler(d.nodeWatcher.GetEventHandlers()); err != nil {
+				klog.Errorf("Failed to register node watcher: %v", err)
+			} else {
+				klog.Info("Node watcher registered for attachment reconciliation triggers")
+			}
 		}
 	}
 
