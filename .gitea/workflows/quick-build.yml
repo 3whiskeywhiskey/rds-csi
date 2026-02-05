@@ -25,10 +25,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Verify Go installation
+      - name: Install build tools
         run: |
+          apt-get update -qq && apt-get install -y -qq make
           go version
-          echo "✅ Go is pre-installed in golang:1.22-bookworm"
+          make --version
+          echo "✅ Build tools ready"
 
       - name: Build binary (includes dependency download)
         run: make build-local
