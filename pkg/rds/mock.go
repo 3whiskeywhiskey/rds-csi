@@ -10,6 +10,7 @@ type MockClient struct {
 	mu            sync.RWMutex
 	volumes       map[string]*VolumeInfo
 	address       string
+	connected     bool  // Connection state (for testing connection manager)
 	nextError     error // Error to return on next operation
 	persistentErr error // Error to return on all operations until cleared
 }
@@ -17,8 +18,9 @@ type MockClient struct {
 // NewMockClient creates a new MockClient for testing
 func NewMockClient() *MockClient {
 	return &MockClient{
-		volumes: make(map[string]*VolumeInfo),
-		address: "mock-rds-server",
+		volumes:   make(map[string]*VolumeInfo),
+		address:   "mock-rds-server",
+		connected: true, // Default to connected
 	}
 }
 
@@ -65,6 +67,13 @@ func (m *MockClient) ClearError() {
 	m.persistentErr = nil
 }
 
+// SetConnected sets the connection state (test helper)
+func (m *MockClient) SetConnected(connected bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = connected
+}
+
 // checkError checks for and clears pending error
 func (m *MockClient) checkError() error {
 	// Check persistent error first
@@ -82,17 +91,32 @@ func (m *MockClient) checkError() error {
 
 // Connect implements RDSClient
 func (m *MockClient) Connect() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for persistent error (simulates connection failure)
+	if m.persistentErr != nil {
+		return m.persistentErr
+	}
+
+	// Mark as connected on successful connect
+	m.connected = true
 	return nil
 }
 
 // Close implements RDSClient
 func (m *MockClient) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = false
 	return nil
 }
 
 // IsConnected implements RDSClient
 func (m *MockClient) IsConnected() bool {
-	return true
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.connected
 }
 
 // GetAddress implements RDSClient

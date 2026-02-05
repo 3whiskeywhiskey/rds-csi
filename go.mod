@@ -3,10 +3,13 @@ module git.srvlab.io/whiskey/rds-csi-driver
 go 1.24
 
 require (
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/kubernetes-csi/csi-test/v5 v5.4.0
 	github.com/moby/sys/mountinfo v0.7.2
+	github.com/onsi/ginkgo/v2 v2.22.0
+	github.com/onsi/gomega v1.36.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
@@ -47,8 +50,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/onsi/ginkgo/v2 v2.22.0 // indirect
-	github.com/onsi/gomega v1.36.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
