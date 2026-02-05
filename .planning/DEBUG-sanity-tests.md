@@ -22,125 +22,120 @@
 - **Fix:** Added cleanup in defer block
 - **Commit:** ec1cfda - "fix(test): cleanup sanity test directories"
 
-## 4. Mock NVMe Connector Implementation (COMPLETE ✓)
-
-### Problem Statement (RESOLVED)
-- **18 tests pass** (Identity + Controller services)
-- **35 tests fail** (Node service - all with "unknown service csi.v1.Node")
-- **Result:** Thousands of lines of error output in CI logs making real issues invisible
-
-### Solution Implemented: Option A - Mock NVMe Connector
+### 4. Mock NVMe Connector (COMPLETE ✓)
+- **Issue:** 35 tests failing with "unknown service csi.v1.Node" verbose errors
+- **Solution:** Implemented mock NVMe connector with device path simulation
 - **Commit:** e1b9a56 - "feat(test): implement mock NVMe connector for sanity tests"
-- **Date:** 2026-02-05
+- **Result:** 18 → 38 passing tests, eliminated verbose CI noise
 
-**Files Changed:**
-1. `test/mock/nvme_connector.go` - New mock implementation
-2. `pkg/driver/driver.go` - Added nvmeConnector field and SetNVMEConnector() method
-3. `pkg/driver/node.go` - Check for injected connector before creating real one
-4. `test/sanity/sanity_test.go` - Enable node service with mock
+### 5. Controller Service Fixes (COMPLETE ✓)
+- **Issues:** DeleteVolume idempotency, CreateVolume capacity, error codes
+- **Fixes:** Sentinel error checks, validation, proper CSI error codes
+- **Commit:** ec59ba8 - "fix(test): resolve 6 sanity test failures"
+- **Result:** 38 → 44 passing tests
 
-### Results
-**Before:**
-- 18 passing, 35 failing
-- Verbose "unknown service csi.v1.Node" errors
-- Output: thousands of lines
+### 6. Mock Mounter (COMPLETE ✓)
+- **Issue:** Node service tests need filesystem operations mocked
+- **Solution:** Complete MockMounter with all 11 interface methods
+- **Commit:** ea6a656 - "feat(test): add mock mounter and fix stale mount checker"
+- **Result:** Build succeeds, infrastructure in place
 
-**After:**
-- 38 passing, 15 failing
-- No "unknown service" errors
-- Output: ~700 lines (manageable)
+### 7. Nil Resolver Crash (COMPLETE ✓)
+- **Issue:** Nil pointer dereference in recovery/stale checking (line 991, 150)
+- **Root Cause:** Mock GetResolver() returns nil, recovery calls resolver.ResolveDevicePath()
+- **Solution:** Add nil checks in both recovery.Recover() and stale.GetStaleInfo()
+- **Commit:** 459fe48 - "fix(test): handle nil resolver gracefully in recovery and stale checking"
+- **Result:** Tests run to completion, no crashes (44/53 passing stable)
 
-✓ **Primary goal achieved:** Eliminated verbose CI noise
-✓ **Bonus:** 20 additional tests now passing (38 vs 18)
+## Current Status: 44/53 Passing (9 Remaining Failures)
 
-### Remaining Work
-15 tests still failing with specific errors (not verbose noise):
-- Some controller error handling expectations don't match
-- Some node service tests have issues with filesystem operations
-- These are actual test failures to investigate, not noise
+### Remaining Test Failures
 
-## Technical Details for Debugging
+1. **NodeGetInfo - should return appropriate values**
+   - **Issue:** Test expects non-nil AccessibleTopology
+   - **Current:** Returns nil topology
+   - **Fix:** Add topology with zone/region labels to NodeGetInfo response
 
-### Running Sanity Tests Locally
-```bash
-# Full verbose output
-go test -v ./test/sanity/...
+2. **NodeUnpublishVolume - should remove target path**
+   - **Issue:** Unknown - needs investigation
+   - **Likely:** Mock mounter not properly tracking/removing paths
 
-# Less verbose (recommended)
-go test ./test/sanity/... 2>&1 | grep -E "FAIL|PASS|Ran.*Specs"
+3. **NodeGetVolumeStats - should fail when volume is not found**
+   - **Issue:** Not returning proper error code
+   - **Fix:** Already returns NotFound for missing paths, may need different check
 
-# Via Makefile
-make test-sanity-mock
-```
+4. **NodeGetVolumeStats - should fail when volume does not exist on specified path**
+   - **Issue:** Similar to #3, different test condition
+   - **Fix:** Verify error code matches CSI spec expectations
 
-### Expected Output
-```
-Ran 53 of 92 Specs
-FAIL! -- 18 Passed | 35 Failed | 1 Pending | 38 Skipped
-```
+5. **NodeExpandVolume - should fail when volume is not found**
+   - **Issue:** Error code or message mismatch
+   - **Fix:** Return proper CSI NotFound error
 
-### Key Files
-- `test/sanity/sanity_test.go` - Test harness
-- `test/mock/rds_server.go` - Mock RDS backend
-- `pkg/driver/node.go` - Node service (needs mock NVMe connector)
-- `pkg/nvme/nvme.go` - Real NVMe connector (can't use in tests)
+6. **NodeExpandVolume - should work if node-expand is called after node-publish**
+   - **Issue:** Expansion not working in mock environment
+   - **Fix:** Mock mounter ResizeFilesystem implementation or expansion logic
 
-### The 35 Failing Tests All Involve:
-1. Direct node service calls (NodeStageVolume, NodePublishVolume, etc.)
-2. Controller test AfterEach cleanup trying to call node service
-3. Full lifecycle tests expecting node operations
+7. **Node Service - should work** (full lifecycle test)
+   - **Issue:** Stale mount detected, recovery fails in test mode
+   - **Likely:** Mock mounter not properly simulating /proc/mountinfo
+   - **Fix:** Inject mock getMountDev function or prevent stale checks in tests
 
-### Mock NVMe Would Need to Fake:
-- `Connect()` - Return fake device path like `/dev/nvme0n1`
-- `Disconnect()` - No-op
-- `IsConnected()` - Return true for "connected" volumes
-- `GetDevicePath()` - Return consistent fake paths
-- File system operations in tests
+8. **Node Service - should be idempotent** (lifecycle test)
+   - **Issue:** Similar to #7
+   - **Fix:** Same as #7
 
-## Next Steps (Choose Direction)
+9. **ControllerPublishVolume - should fail when the node does not exist**
+   - **Issue:** Not implemented (returns Unimplemented)
+   - **Fix:** Implement ControllerPublishVolume or return proper error
 
-1. **If implementing mock:** Start with minimal mock NVMe connector in test/mock/
-2. **If suppressing:** Use Ginkgo focus/skip or filter CI output
-3. **If accepting:** Document expected failures in CI configuration
+### Root Causes
+
+**Stale Mount False Positives:**
+- Mock mounts not in /proc/mountinfo
+- StaleChecker.getMountDev() uses real GetMountDevice by default
+- Tests trigger stale detection → recovery attempt → fails gracefully but test expects success
+- **Solution:** Inject mock getMountDev that returns mock device paths
+
+**Missing Topology:**
+- NodeGetInfo returns nil AccessibleTopology
+- CSI sanity expects topology when driver supports it
+- **Solution:** Return minimal topology or check if optional
+
+**Mock Mount Tracking:**
+- MockMounter tracks mounts but doesn't simulate /proc/mountinfo
+- Some tests may check filesystem directly
+- **Solution:** Ensure mock properly tracks all mount state
+
+## Next Steps
+
+**Priority 1: Fix Stale Mount False Positives** (affects 2+ tests)
+1. Create mock getMountDev function in test/mock/
+2. Inject into StaleMountChecker during test setup
+3. Return mock device paths from MockMounter's tracked mounts
+
+**Priority 2: Add Topology to NodeGetInfo** (affects 1 test)
+1. Add AccessibleTopology to NodeGetInfoResponse
+2. Use simple topology like `{"zone": "default"}`
+
+**Priority 3: Fix Remaining Node Service Issues**
+1. NodeUnpublishVolume path removal
+2. NodeGetVolumeStats error codes
+3. NodeExpandVolume implementation
+
+**Priority 4: ControllerPublishVolume**
+1. Check if actually needed or can be skipped
+2. Implement minimal version if required
 
 ## Git State
 - Branch: `dev`
 - Last commits:
-  - **e1b9a56 - feat(test): implement mock NVMe connector for sanity tests** ← NEW
-  - ec1cfda - fix(test): cleanup sanity test directories
-  - 2d71e60 - fix: resolve goroutine leak and linting issues
-  - cf294db - docs(25): complete Coverage & Quality Improvements phase
-- Pushed: Yes
-- Ready for Phase 26: Yes
-
-## Summary
-
-**Phase 1: Mock NVMe Connector** (COMPLETE ✓)
-- ✓ Eliminated verbose CI noise (thousands of lines → ~700 lines)
-- ✓ Improved from 18 to 38 passing tests (+20 tests)
-- ✓ Mock NVMe connector with device path simulation
-
-**Phase 2: Controller Fixes** (COMPLETE ✓)
-- ✓ DeleteVolume idempotency (sentinel error check)
-- ✓ CreateVolume capacity validation
-- ✓ ControllerPublishVolume capability validation
-- ✓ NodeGetVolumeStats error codes
-- ✓ IP address validation (hostname support)
-- Result: 44/53 passing (+6 tests, 9 remaining)
-
-**Phase 3: Mock Mounter** (IN PROGRESS 🔧)
-- ✓ MockMounter implementation (all 11 interface methods)
-- ✓ Mounter injection infrastructure in Driver
-- ✓ Stale mount checker nil-safe fix
-- ✓ Integration in sanity tests
-- ⚠️ Nil pointer dereference still occurring (debugging needed)
-
-**Current Status:** 44/53 passing, targeting 53/53 (100%)
-
-**Next Steps:**
-1. Debug nil pointer in NodePublishVolume/recovery path
-2. Verify all node service tests pass with complete mocks
-3. Achieve 53/53 sanity test pass rate
+  - **459fe48 - fix(test): handle nil resolver gracefully** ← LATEST
+  - 06f967c - docs: update DEBUG notes with mock mounter progress
+  - ea6a656 - feat(test): add mock mounter and fix stale mount checker
+  - ec59ba8 - fix(test): resolve 6 sanity test failures
+- Status: 44/53 passing, infrastructure complete
+- Ready: To fix remaining 9 test failures
 
 ---
-*Session status: Mock infrastructure complete, debugging runtime issue*
+*Session status: No crashes, 44/53 stable, 9 specific failures to fix*
