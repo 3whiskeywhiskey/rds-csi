@@ -84,11 +84,11 @@
   3. Negative test cases validate proper CSI error codes (ALREADY_EXISTS, NOT_FOUND, INVALID_ARGUMENT, RESOURCE_EXHAUSTED)
   4. CSI capability matrix is documented showing which optional capabilities are implemented vs deferred
   5. Sanity test results are published in CI artifacts for traceability
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 22-01: TBD
-- [ ] 22-02: TBD
+- [ ] 22-01-PLAN.md — Go-based sanity test infrastructure with mock RDS
+- [ ] 22-02-PLAN.md — CI integration and capability documentation
 
 #### Phase 23: Mock RDS Enhancements
 **Goal**: Mock RDS server matches real hardware behavior enabling reliable CI testing
@@ -191,7 +191,7 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26 → 27
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-21 | v0.1.0-v0.8.0 | Complete | Complete | 2026-02-04 |
-| 22. CSI Sanity Tests Integration | v0.9.0 | 0/TBD | Not started | - |
+| 22. CSI Sanity Tests Integration | v0.9.0 | 0/2 | Planning complete | - |
 | 23. Mock RDS Enhancements | v0.9.0 | 0/TBD | Not started | - |
 | 24. Automated E2E Test Suite | v0.9.0 | 0/TBD | Not started | - |
 | 25. Coverage & Quality Improvements | v0.9.0 | 0/TBD | Not started | - |
@@ -199,4 +199,4 @@ Phases execute in numeric order: 22 → 23 → 24 → 25 → 26 → 27
 | 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-04 during v0.9.0 roadmap creation*
+*Last updated: 2026-02-04 during Phase 22 planning*
