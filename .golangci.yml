@@ -1,6 +1,8 @@
 # golangci-lint configuration for RDS CSI Driver
 # Run with: make lint (or golangci-lint run)
 
+version: 2
+
 run:
   timeout: 5m
   tests: true
@@ -17,9 +19,7 @@ linters:
     - gocyclo       # Cyclomatic complexity per function
     - cyclop        # Function and package complexity
 
-    # Code quality (already used)
-    - gofmt
-    - goimports
+    # Code quality linters
     - govet
     - ineffassign
     - staticcheck
