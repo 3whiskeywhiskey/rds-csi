@@ -102,6 +102,30 @@ jobs:
           echo "❌ CSI sanity tests failed - see artifacts for details"
           exit 1
 
+  e2e-tests:
+    name: E2E Tests
+    runs-on: golang
+    steps:
+      - name: Install Node.js for actions
+        run: |
+          apt-get update -qq && apt-get install -y -qq curl nodejs npm
+          node --version
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run E2E tests
+        run: make e2e-test
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: e2e-test-results
+          path: |
+            /tmp/csi-e2e-*.sock
+          retention-days: 7
+
   mock-stress-tests:
     name: Mock RDS Stress Tests
     runs-on: golang
@@ -148,7 +172,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [verify-and-test, sanity-tests, mock-stress-tests, build-test]
+    needs: [verify-and-test, sanity-tests, e2e-tests, mock-stress-tests, build-test]
     if: always()
     steps:
       - name: Generate summary
@@ -159,12 +183,14 @@ jobs:
           echo "|------------|--------|"
           echo "| Code Quality & Unit Tests | ${{ needs.verify-and-test.result }} |"
           echo "| CSI Sanity Tests | ${{ needs.sanity-tests.result }} |"
+          echo "| E2E Tests | ${{ needs.e2e-tests.result }} |"
           echo "| Mock Stress Tests | ${{ needs.mock-stress-tests.result }} |"
           echo "| Container Build | ${{ needs.build-test.result }} |"
           echo ""
 
           if [ "${{ needs.verify-and-test.result }}" = "success" ] && \
              [ "${{ needs.sanity-tests.result }}" = "success" ] && \
+             [ "${{ needs.e2e-tests.result }}" = "success" ] && \
              [ "${{ needs.mock-stress-tests.result }}" = "success" ] && \
              [ "${{ needs.build-test.result }}" = "success" ]; then
             echo "✅ **All tests passed! Ready for review.**"

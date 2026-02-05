@@ -60,6 +60,8 @@ help:
 	@echo "  make test                - Run unit tests"
 	@echo "  make test-coverage       - Run tests with coverage report"
 	@echo "  make test-integration    - Run integration tests with mock RDS"
+	@echo "  make e2e-test            - Run E2E tests"
+	@echo "  make e2e-test-verbose    - Run E2E tests with verbose Ginkgo output"
 	@echo "  make test-sanity         - Run CSI sanity tests (requires RDS or uses mock)"
 	@echo "  make test-sanity-mock    - Run CSI sanity tests with mock RDS"
 	@echo "  make test-sanity-real    - Run CSI sanity tests with real RDS (requires env vars)"
@@ -223,6 +225,20 @@ test-coverage-report:
 test-integration:
 	@echo "Running integration tests with mock RDS..."
 	go test -v -race -timeout 10m ./test/integration/...
+
+# E2E tests with Ginkgo
+.PHONY: e2e-test
+e2e-test:
+	@echo "Running E2E tests..."
+	go test -v ./test/e2e/... -count=1 -timeout 10m
+	@echo "E2E tests completed"
+
+# E2E tests with verbose Ginkgo output
+.PHONY: e2e-test-verbose
+e2e-test-verbose:
+	@echo "Running E2E tests (verbose)..."
+	go test -v ./test/e2e/... -ginkgo.v -count=1 -timeout 10m
+	@echo "E2E tests completed"
 
 # CSI Sanity Tests
 .PHONY: test-sanity
