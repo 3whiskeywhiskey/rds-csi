@@ -57,9 +57,9 @@ Plans:
 - [ ] 26-03: TBD
 
 #### Phase 27: Documentation & Hardware Validation
-**Goal**: Manual validation scenarios documented and hardware testing plan established
-**Depends on**: Phase 26 (all features complete)
-**Requirements**: DOC-01, DOC-02, DOC-03, DOC-04, DOC-05, DOC-06, DOC-07
+**Goal**: Comprehensive documentation for hardware validation, testing, capabilities, and troubleshooting -- enabling operators to validate v0.9.0 against production hardware
+**Depends on**: Phase 25.2 (v0.9.0 complete; Phase 26 NOT required -- DOC-07 deferred until snapshots ship)
+**Requirements**: DOC-01, DOC-02, DOC-03, DOC-04, DOC-05, DOC-06 (DOC-07 deferred to post-Phase 26)
 **Success Criteria** (what must be TRUE):
   1. Manual test scenarios are documented in HARDWARE_VALIDATION.md with step-by-step instructions for production RDS testing
   2. Testing guide for contributors (TESTING.md) documents how to run unit tests, integration tests, E2E tests, and sanity tests
@@ -67,12 +67,13 @@ Plans:
   4. Known limitations are documented in README.md (RouterOS version compatibility, NVMe device timing assumptions, dual-IP architecture requirements)
   5. CI/CD integration guide documents how to add new test jobs and interpret test results
   6. Troubleshooting guide in TESTING.md covers common test failures with solutions (mock-reality divergence, device timing, cleanup issues)
-  7. Snapshot usage guide with VolumeSnapshot/VolumeSnapshotContent examples is added to docs/snapshots.md
-**Plans**: TBD
+  7. ~~Snapshot usage guide~~ DEFERRED: Blocked on Phase 26 (snapshots not yet implemented). Will be added as part of Phase 26 delivery or as a follow-up quick task.
+**Plans**: 3 plans
 
 Plans:
-- [ ] 27-01: TBD
-- [ ] 27-02: TBD
+- [ ] 27-01-PLAN.md -- Hardware validation guide (HARDWARE_VALIDATION.md) with 7 test cases
+- [ ] 27-02-PLAN.md -- Capabilities gap analysis (CAPABILITIES.md) + README.md known limitations
+- [ ] 27-03-PLAN.md -- Testing guide updates (TESTING.md) + CI/CD integration guide (ci-cd.md)
 
 #### Phase 28: Helm Chart
 **Goal**: Helm chart for easy deployment and configuration
@@ -100,8 +101,8 @@ Phases execute in numeric order: 26 → 27 → 28
 |-------|-----------|----------------|--------|-----------|
 | 1-25.2 | v0.1.0-v0.9.0 | Complete | ✅ Complete | 2026-02-06 |
 | 26. Volume Snapshots | v0.10.0 | 0/TBD | Not started | - |
-| 27. Documentation & Hardware Validation | v0.10.0 | 0/TBD | Not started | - |
+| 27. Documentation & Hardware Validation | v0.10.0 | 0/3 | Planned | - |
 | 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-06 after v0.9.0 completion*
+*Last updated: 2026-02-05 after Phase 27 planning*
