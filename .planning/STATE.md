@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 26 of 28 (Volume Snapshots)
-Plan: 4 of 4 (Phase complete!)
-Status: Phase 26 complete - Full snapshot lifecycle with restore
-Last activity: 2026-02-06 — Completed 26-04-PLAN.md (ListSnapshots & snapshot restore)
+Plan: 6 of 6 (Phase complete!)
+Status: Phase 26 complete - Full snapshot lifecycle with comprehensive testing
+Last activity: 2026-02-06 — Completed 26-06-PLAN.md (Snapshot testing - CSI sanity & unit tests)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████░] 38.9% (7/18 plans estimated)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██████████] 50.0% (9/18 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 103 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 7 v0.10.0)
+- Total plans completed: 105 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 9 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 7/18 (38.9%)
-- Average duration: ~7 min per plan (v0.9.0), ~3.5 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 9/18 (50.0%)
+- Average duration: ~7 min per plan (v0.9.0), ~6 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -31,10 +31,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 6/18 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 9/18 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 3 phases (26-28), 6/18 plans, in progress (Phase 26 complete, Phase 27 complete)
+- v0.10.0: 3 phases (26-28), 9/18 plans, in progress (Phase 26 complete, Phase 27 complete)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,13 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 26-06): Mock RDS server outputs source-volume field for testing (real RouterOS doesn't)
+- v0.10.0 (Phase 26-06): parseSnapshotInfo extracts source-volume opportunistically (testing compatibility)
+- v0.10.0 (Phase 26-06): CreateSnapshot populates SourceVolume from opts if backend doesn't provide it
+- v0.10.0 (Phase 26-06): Mock list output includes entry numbers for RouterOS format parsing
+- v0.10.0 (Phase 26-05): csi-snapshotter v8.2.0 selected (not v8.4.0) - avoids unnecessary VolumeGroupSnapshot v1beta2 features
+- v0.10.0 (Phase 26-05): VolumeSnapshotClass uses deletionPolicy: Delete (matches StorageClass deletion policy pattern)
+- v0.10.0 (Phase 26-05): Installation prerequisites documented in VolumeSnapshotClass comments (CRD and snapshot-controller required)
 - v0.10.0 (Phase 26-04): ListSnapshots uses integer-based pagination tokens (CSI spec pattern, matching hostpath driver)
 - v0.10.0 (Phase 26-04): ListSnapshots returns empty response (not error) for invalid/missing snapshot ID (CSI spec)
 - v0.10.0 (Phase 26-04): CreateVolume from snapshot enforces minimum size >= snapshot size (CSI spec requirement)
@@ -129,12 +136,25 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 06:08
-Stopped at: Completed Phase 26 Plan 04 (ListSnapshots & snapshot restore) - Phase 26 COMPLETE
+Last session: 2026-02-06 01:10
+Stopped at: Completed Phase 26 Plan 06 (Snapshot testing) - Phase 26 COMPLETE
 Resume file: None
 Next action: Phase 26 (Volume Snapshots) complete. Ready for next phase (Phase 28: Cross-Cluster Volume Migration).
 
-**v0.10.0 Progress (7/18 plans):**
+**v0.10.0 Progress (9/18 plans):**
+- Phase 26-06: Snapshot testing (CSI sanity tests + controller unit tests)
+  - Configured CSI sanity tests with TestSnapshotParameters (snapshot test suite enabled)
+  - Extended mock RDS server with Btrfs snapshot command handlers (create/delete/list/get)
+  - Added MockSnapshot struct tracking source volume, parent, fs-label, read-only, size
+  - Updated parseSnapshotInfo to extract source-volume field opportunistically
+  - Added 32 unit test cases: CreateSnapshot(6), DeleteSnapshot(3), ListSnapshots(9), CreateVolumeFromSnapshot(3)
+  - All snapshot sanity tests passing (65/70 total, 5 pre-existing Node Service failures)
+- Phase 26-05: RBAC and deployment manifests for snapshot support
+  - Added snapshot.storage.k8s.io RBAC rules to controller ClusterRole
+  - Added csi-snapshotter v8.2.0 sidecar container to controller deployment
+  - Created VolumeSnapshotClass with driver=rds.csi.srvlab.io and deletionPolicy=Delete
+  - Installation prerequisites documented (VolumeSnapshot CRDs and snapshot-controller)
+  - All YAML manifests validated with kubectl dry-run
 - Phase 26-04: ListSnapshots with pagination and CreateVolume snapshot restore
   - Implemented ListSnapshots with CSI-compliant integer-based pagination
   - Single snapshot lookup, source volume filtering, deterministic sorting
