@@ -113,8 +113,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 28.2-01-PLAN.md -- RDS disk metrics SSH command, parsing, types, mock, and unit tests
-- [ ] 28.2-02-PLAN.md -- Prometheus GaugeFunc metric registration, driver wiring, and monitoring design doc
+- [x] 28.2-01-PLAN.md -- RDS disk metrics SSH command, parsing, types, mock, and unit tests
+- [x] 28.2-02-PLAN.md -- Prometheus GaugeFunc metric registration, driver wiring, and monitoring design doc
 
 **Discovery**: User found `/disk monitor-traffic <slot>` command exposes:
 - read-ops-per-second, write-ops-per-second (IOPS)
@@ -153,7 +153,7 @@ Phases execute in numeric order: 26 → 27 → 28.1 → 28.2 → 28
 | 26. Volume Snapshots | v0.10.0 | 6/6 | ✅ Complete | 2026-02-06 |
 | 27. Documentation & Hardware Validation | v0.10.0 | 3/3 | ✅ Complete | 2026-02-05 |
 | 28.1. Fix Metric Accuracy | v0.10.0 | 1/1 | ✅ Complete | 2026-02-06 |
-| 28.2. RDS Health & Performance Monitoring | v0.10.0 | 0/2 | 🚧 Planned | - |
+| 28.2. RDS Health & Performance Monitoring | v0.10.0 | 2/2 | ✅ Complete | 2026-02-06 |
 | 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
 
 ---
