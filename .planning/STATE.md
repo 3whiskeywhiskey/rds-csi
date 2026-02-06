@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 27 of 28 (Documentation & Hardware Validation)
-Plan: 1 of 1 complete
-Status: Phase 27 in progress - Hardware validation guide created
-Last activity: 2026-02-06 — Completed 27-01-PLAN.md (hardware validation documentation)
+Plan: 2 of 3 complete
+Status: Phase 27 in progress - Hardware validation guide and capabilities analysis complete
+Last activity: 2026-02-06 — Completed 27-02-PLAN.md (CSI capability gap analysis & known limitations)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█░░░░░░░░░] 5.6% (1/18 plans estimated)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██░░░░░░░░] 11.1% (2/18 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 97 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 1 v0.10.0)
+- Total plans completed: 98 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 2 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 1/18 (5.6%)
-- Average duration: ~7 min per plan (v0.9.0), ~4 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 2/18 (11.1%)
+- Average duration: ~7 min per plan (v0.9.0), ~3.5 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -31,10 +31,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 1/18 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 2/18 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 3 phases (26-28), 1/18 plans, in progress
+- v0.10.0: 3 phases (26-28), 2/18 plans, in progress
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 27-02): Compare against AWS EBS CSI and Longhorn (not SPDK/iSCSI drivers) for familiar reference points
+- v0.10.0 (Phase 27-02): Acknowledge single-server architecture vs distributed storage upfront (fair comparison framework)
+- v0.10.0 (Phase 27-02): Provide "why not" explanation for every missing feature (transparency builds trust)
+- v0.10.0 (Phase 27-02): Known limitations include detection methods and workarounds (actionable troubleshooting)
 - v0.10.0 (Phase 27-01): Test case structure with objective, prerequisites, steps, cleanup, success criteria (consistent format across all tests)
 - v0.10.0 (Phase 27-01): Document expected operation timings (10-30s volume creation, 2-5s NVMe connect) for performance baselining
 - v0.10.0 (Phase 27-01): Cleanup procedures must be idempotent (work even if test fails mid-way to prevent storage exhaustion)
@@ -105,17 +109,21 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 04:10
-Stopped at: Completed Phase 27 Plan 01 (hardware validation documentation)
+Last session: 2026-02-06 04:15
+Stopped at: Completed Phase 27 Plan 02 (CSI capability gap analysis & known limitations)
 Resume file: None
-Next action: Ready to plan Phase 28 (Additional Documentation) using `/gsd:plan-phase 28`
+Next action: Continue Phase 27 with Plan 03 (update testing documentation) using `/gsd:execute-phase`
 
-**v0.10.0 Progress (1/18 plans):**
+**v0.10.0 Progress (2/18 plans):**
 - Phase 27-01: Hardware validation guide with 7 test cases (TC-01 through TC-07)
-- Created HARDWARE_VALIDATION.md (1565 lines) with executable test procedures
-- Performance baselines documented (timings, I/O benchmarks)
-- Troubleshooting decision trees for common failure modes
-- Updated README.md with documentation link
+  - Created HARDWARE_VALIDATION.md (1565 lines) with executable test procedures
+  - Performance baselines documented (timings, I/O benchmarks)
+  - Troubleshooting decision trees for common failure modes
+- Phase 27-02: CSI capability gap analysis and known limitations
+  - Created CAPABILITIES.md (357 lines) with feature comparison matrix
+  - Added Known Limitations section to README.md (6 specific limitations)
+  - Honest "why not" explanations for every missing feature
+  - Architectural differences documented (single-server vs distributed)
 
 **v0.9.0 Accomplishments:**
 - 6 phases completed (22-25.2, including 2 inserted decimal phases for production incidents)
