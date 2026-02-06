@@ -477,13 +477,15 @@ kubectl delete pvc test-hw-pvc-02
 
 ### TC-03: Volume Expansion
 
-**Objective:** Verify online volume expansion from 5Gi to 10Gi
+**Objective:** Verify volume expansion from 5Gi to 10Gi
 
 **Estimated Time:** 5 minutes
 
 **Prerequisites:**
 - StorageClass has `allowVolumeExpansion: true`
 - At least 10GB free space on RDS
+
+**Important Note:** Volume expansion in RDS CSI requires a pod restart for the filesystem resize to take effect. The controller expands the file on RDS immediately, but the kubelet only calls `NodeExpandVolume` during pod startup. This is normal behavior for CSI drivers that report `NodeExpansionRequired: true`.
 
 **Steps:**
 
@@ -556,30 +558,65 @@ persistentvolumeclaim/test-hw-pvc-03 patched
 kubectl describe pvc test-hw-pvc-03 | grep -A 5 Events
 ```
 
-**Expected:** Events showing expansion in progress, then completed (5-20 seconds)
+**Expected:** Events showing expansion in progress
 
 ```
 Events:
   Type    Reason                      Age   From                         Message
   ----    ------                      ----  ----                         -------
-  Normal  VolumeResizeSuccessful      15s   external-resizer             Resize volume succeeded
-  Normal  FileSystemResizeSuccessful  10s   kubelet                      MountVolume.NodeExpandVolume succeeded
+  Normal  Resizing                    15s   external-resizer             External resizer is resizing volume
+  Normal  FileSystemResizeRequired    10s   external-resizer             Require file system resize of volume on node
 ```
 
-#### 5. Verify New Size in Pod
+**Note:** The PV capacity will show 10Gi, but the filesystem inside the pod will still show ~5GB at this point.
+
+#### 5. Restart Pod to Complete Filesystem Resize
+
+**IMPORTANT:** The kubelet only calls `NodeExpandVolume` during pod startup. A pod restart is required for the filesystem resize to take effect.
+
+```bash
+# Delete the pod (keep the PVC)
+kubectl delete pod test-hw-pod-03
+
+# Recreate the pod with the same PVC
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-03
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-03
+EOF
+
+# Wait for pod to be ready
+kubectl wait --for=condition=Ready pod/test-hw-pod-03 --timeout=60s
+```
+
+#### 6. Verify New Size in Pod
 
 ```bash
 kubectl exec test-hw-pod-03 -- df -h /data
 ```
 
-**Expected:** ~10GB capacity (9.8GB due to filesystem overhead)
+**Expected:** ~10GB capacity (9.8GB due to ext4 filesystem overhead)
 
 ```
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/nvme1n1    9.8G   24M  9.5G   1% /data
 ```
 
-#### 6. Verify Size on RDS
+#### 7. Verify Size on RDS
 
 ```bash
 # Get volume ID from PV
@@ -602,14 +639,16 @@ kubectl delete pvc test-hw-pvc-03
 
 **Success Criteria:**
 - ✅ PVC patched successfully
-- ✅ Expansion events show success
-- ✅ Filesystem size reflects new capacity inside pod
-- ✅ RDS volume file size updated to 10GB
+- ✅ Controller expansion events show "Resizing" and "FileSystemResizeRequired"
+- ✅ PV capacity shows 10Gi
+- ✅ After pod restart, filesystem size reflects new capacity (~9.8GB for 10Gi)
+- ✅ RDS volume file size updated to 10GiB
 
 **Troubleshooting:**
-- **Expansion stuck:** Check PVC events, check controller logs for ControllerExpandVolume errors
-- **Filesystem not resized:** Check node logs for NodeExpandVolume errors, verify filesystem supports online resize (ext4/xfs do)
-- **Expansion fails on RDS:** Verify RDS has enough free space, check SSH connectivity
+- **Expansion stuck:** Check PVC events, check controller logs for ControllerExpandVolume errors, verify RDS has free space
+- **Filesystem shows old size after expansion:** This is expected - pod restart is required for filesystem resize to take effect
+- **Filesystem still not resized after pod restart:** Check node logs for NodeExpandVolume errors, verify device path is correct
+- **Expansion fails on RDS:** Verify RDS has enough free space, check SSH connectivity, verify `/disk set file-size=...` command support on RouterOS 7.x
 
 ---
 
