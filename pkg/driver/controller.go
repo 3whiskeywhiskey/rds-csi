@@ -4,6 +4,8 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -989,9 +991,113 @@ func (cs *ControllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 	return &csi.DeleteSnapshotResponse{}, nil
 }
 
-// ListSnapshots is not yet implemented
+// ListSnapshots lists snapshots with CSI-compliant pagination
 func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListSnapshots is not yet implemented")
+	klog.V(4).Infof("ListSnapshots CSI call (snapshot_id=%s, source_volume_id=%s, max_entries=%d, starting_token=%s)",
+		req.GetSnapshotId(), req.GetSourceVolumeId(), req.GetMaxEntries(), req.GetStartingToken())
+
+	// Safety check
+	if cs.driver == nil || cs.driver.rdsClient == nil {
+		return nil, status.Error(codes.Internal, "RDS client not initialized")
+	}
+
+	// Handle single snapshot lookup by ID
+	if req.GetSnapshotId() != "" {
+		snapshotID := req.GetSnapshotId()
+		if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+			// Invalid ID format -- return empty (not error) per CSI spec
+			return &csi.ListSnapshotsResponse{}, nil
+		}
+
+		snap, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
+		if err != nil {
+			// Not found -> return empty response (not error)
+			return &csi.ListSnapshotsResponse{}, nil
+		}
+
+		return &csi.ListSnapshotsResponse{
+			Entries: []*csi.ListSnapshotsResponse_Entry{
+				{
+					Snapshot: &csi.Snapshot{
+						SnapshotId:     snap.Name,
+						SourceVolumeId: snap.SourceVolume,
+						CreationTime:   timestamppb.New(snap.CreatedAt),
+						SizeBytes:      snap.FileSizeBytes,
+						ReadyToUse:     true,
+					},
+				},
+			},
+		}, nil
+	}
+
+	// Fetch all snapshots from RDS
+	allSnapshots, err := cs.driver.rdsClient.ListSnapshots()
+	if err != nil {
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to list snapshots: %v", err)
+	}
+
+	// Filter by source volume if specified
+	if req.GetSourceVolumeId() != "" {
+		filtered := make([]rds.SnapshotInfo, 0)
+		for _, s := range allSnapshots {
+			if s.SourceVolume == req.GetSourceVolumeId() {
+				filtered = append(filtered, s)
+			}
+		}
+		allSnapshots = filtered
+	}
+
+	// Sort by name for deterministic pagination
+	sort.Slice(allSnapshots, func(i, j int) bool {
+		return allSnapshots[i].Name < allSnapshots[j].Name
+	})
+
+	// Handle pagination
+	startIndex := 0
+	if req.GetStartingToken() != "" {
+		idx, err := strconv.Atoi(req.GetStartingToken())
+		if err != nil {
+			return nil, status.Errorf(codes.Aborted, "invalid starting_token: %s", req.GetStartingToken())
+		}
+		if idx < 0 || idx > len(allSnapshots) {
+			return nil, status.Errorf(codes.Aborted, "starting_token out of range: %d (total: %d)", idx, len(allSnapshots))
+		}
+		startIndex = idx
+	}
+
+	// Build response entries
+	maxEntries := len(allSnapshots) - startIndex
+	if req.GetMaxEntries() > 0 && int(req.GetMaxEntries()) < maxEntries {
+		maxEntries = int(req.GetMaxEntries())
+	}
+
+	entries := make([]*csi.ListSnapshotsResponse_Entry, 0, maxEntries)
+	for i := startIndex; i < startIndex+maxEntries && i < len(allSnapshots); i++ {
+		s := allSnapshots[i]
+		entries = append(entries, &csi.ListSnapshotsResponse_Entry{
+			Snapshot: &csi.Snapshot{
+				SnapshotId:     s.Name,
+				SourceVolumeId: s.SourceVolume,
+				CreationTime:   timestamppb.New(s.CreatedAt),
+				SizeBytes:      s.FileSizeBytes,
+				ReadyToUse:     true,
+			},
+		})
+	}
+
+	// Set next token if more entries exist
+	var nextToken string
+	if startIndex+maxEntries < len(allSnapshots) {
+		nextToken = strconv.Itoa(startIndex + maxEntries)
+	}
+
+	return &csi.ListSnapshotsResponse{
+		Entries:   entries,
+		NextToken: nextToken,
+	}, nil
 }
 
 // ControllerExpandVolume expands a volume on the backend storage
