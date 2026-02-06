@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 28.2 of 28 (RDS Health & Performance Monitoring Research)
-Plan: 1 of 2 (In progress)
-Status: Phase 28.2 in progress - Monitoring data layer (SSH + SNMP) complete
-Last activity: 2026-02-06 — Completed 28.2-01-PLAN.md (Monitoring data layer via SSH and SNMP)
+Plan: 2 of 2 (Phase complete)
+Status: Phase 28.2 complete - RDS monitoring metrics exporter ready
+Last activity: 2026-02-06 — Completed 28.2-02-PLAN.md (Prometheus metrics exporter with dual-approach monitoring)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [███████████] 57.9% (11/19 plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [███████████] 63.2% (12/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 107 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 11 v0.10.0)
+- Total plans completed: 108 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 12 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 11/19 (57.9%)
-- Average duration: ~7 min per plan (v0.9.0), ~8 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 12/19 (63.2%)
+- Average duration: ~7 min per plan (v0.9.0), ~7 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -34,7 +34,7 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 | v0.10.0 Feature Enhancements | 26-28 | 11/19 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 5 phases (26-28.2), 11/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 in progress)
+- v0.10.0: 5 phases (26-28.2), 12/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,12 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28.2-02): GaugeFunc polls RDS on-demand during Prometheus scrape (no background goroutines)
+- v0.10.0 (Phase 28.2-02): Disk (SSH) and hardware (SNMP) use independent 1-second caches (prevent 19 network calls per scrape)
+- v0.10.0 (Phase 28.2-02): SSH/SNMP failures return zero snapshots (no scrape failure, graceful degradation)
+- v0.10.0 (Phase 28.2-02): DiskHealthSnapshot/HardwareHealthSnapshot in observability avoid import cycle with pkg/rds
+- v0.10.0 (Phase 28.2-02): Monitor storage-pool slot only (low cardinality, 19 total time series)
+- v0.10.0 (Phase 28.2-02): RDS metrics controller-only (node plugin has no RDS client)
 - v0.10.0 (Phase 28.2-01): Use SSH for disk performance metrics, SNMP for hardware health (dual-approach leverages protocol strengths)
 - v0.10.0 (Phase 28.2-01): Convert RouterOS rate units (bps/kbps/Mbps/Gbps) to bytes/sec (Prometheus convention)
 - v0.10.0 (Phase 28.2-01): Leave SNMP disk capacity OIDs at 0 (requires hardware validation of hrStorageTable index)
@@ -158,10 +164,22 @@ None. All pre-existing test failures resolved via Quick-003.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Phase 28.2-01 complete (monitoring data layer)
+Stopped at: Phase 28.2-02 complete (Prometheus metrics exporter)
 Resume file: None
-Next action: Continue with Phase 28.2-02 (Prometheus metrics exporter) - data layer ready for metric exposition.
+Next action: Continue with Phase 28 (Helm Chart) - RDS monitoring metrics ready for Grafana dashboard integration.
 
+**v0.10.0 Progress (12/19 plans):**
+- Phase 28.2-02: RDS monitoring metrics exporter via Prometheus (dual-approach SSH + SNMP)
+  - Added DiskHealthSnapshot and HardwareHealthSnapshot bridge structs in observability package
+  - Implemented SetRDSMonitoring method registering 19 GaugeFunc metrics (9 disk + 10 hardware)
+  - Separate 1-second caches for disk (SSH) and hardware (SNMP) prevent 19 network calls per scrape
+  - Disk metrics use rds_disk namespace with slot label (e.g., rds_disk_read_ops_per_second{slot="storage-pool"})
+  - Hardware metrics use rds_hardware namespace with no labels (e.g., rds_hardware_cpu_temperature_celsius)
+  - Error callbacks return zero snapshots (no scrape failure on SSH/SNMP timeout)
+  - Wired SetRDSMonitoring in driver.go (controller-only, after RDS client connection)
+  - Created MONITORING_DESIGN.md with dual-approach architecture, metrics catalog, Prometheus alert examples
+  - Added 4 unit tests: Registration, ErrorReturnsZero, DynamicUpdates, NotRegisteredWithoutCall
+  - All tests pass, 19 Prometheus metrics ready for Grafana dashboard integration
 **v0.10.0 Progress (11/19 plans):**
 - Phase 28.2-01: RDS monitoring data layer via SSH and SNMP (dual-protocol approach)
   - Added DiskMetrics struct with 10 fields (IOPS, throughput, latency, queue depth, active time)
