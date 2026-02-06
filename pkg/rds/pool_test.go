@@ -96,6 +96,14 @@ func (m *mockRDSClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateV
 	return nil
 }
 
+func (m *mockRDSClient) GetDiskMetrics(slot string) (*DiskMetrics, error) {
+	return &DiskMetrics{Slot: slot}, nil
+}
+
+func (m *mockRDSClient) GetHardwareHealth(snmpHost string, snmpCommunity string) (*HardwareHealthMetrics, error) {
+	return &HardwareHealthMetrics{}, nil
+}
+
 func TestNewConnectionPool(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -947,6 +947,122 @@ func (c *sshClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolum
 	return nil
 }
 
+// GetDiskMetrics retrieves real-time disk performance metrics via /disk monitor-traffic
+// Uses "once" modifier to get a single snapshot instead of continuous stream output.
+// The slot parameter is the disk slot name (e.g., "storage-pool") or disk number.
+func (c *sshClient) GetDiskMetrics(slot string) (*DiskMetrics, error) {
+	klog.V(4).Infof("Getting disk metrics for %s", slot)
+
+	// Validate slot name to prevent command injection
+	if err := validateSlotName(slot); err != nil {
+		return nil, err
+	}
+
+	// Use "once" to get snapshot, not continuous stream
+	// Continuous output uses terminal control sequences that break parsing
+	cmd := fmt.Sprintf(`/disk monitor-traffic %s once`, slot)
+
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get disk metrics: %w", err)
+	}
+
+	metrics, err := parseDiskMetrics(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse disk metrics: %w", err)
+	}
+
+	metrics.Slot = slot
+	return metrics, nil
+}
+
+// parseDiskMetrics parses /disk monitor-traffic output into DiskMetrics
+// Expected format (from RouterOS):
+//
+//	slot: storage-pool
+//	read-ops-per-second:               0
+//	write-ops-per-second:             76
+//	read-rate:            0bps
+//	write-rate:        12.8Mbps
+//	read-time:             0ms
+//	write-time:             0ms
+//	in-flight-ops:               0
+//	active-time:             0ms
+//	wait-time:             0ms
+func parseDiskMetrics(output string) (*DiskMetrics, error) {
+	metrics := &DiskMetrics{}
+
+	// Parse integer fields (IOPS, in-flight-ops)
+	intFields := map[string]*float64{
+		`read-ops-per-second:\s+(\d+)`:  &metrics.ReadOpsPerSecond,
+		`write-ops-per-second:\s+(\d+)`: &metrics.WriteOpsPerSecond,
+		`in-flight-ops:\s+(\d+)`:        &metrics.InFlightOps,
+	}
+
+	for pattern, field := range intFields {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(output); len(matches) > 1 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				*field = value
+			}
+		}
+	}
+
+	// Parse rate fields with units (e.g., "0bps", "12.8Mbps", "1.5Gbps")
+	rateFields := map[string]*float64{
+		`read-rate:\s+([\d.]+)\s*(\w+)`:  &metrics.ReadBytesPerSec,
+		`write-rate:\s+([\d.]+)\s*(\w+)`: &metrics.WriteBytesPerSec,
+	}
+
+	for pattern, field := range rateFields {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(output); len(matches) > 2 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				*field = convertRateToBytesPerSec(value, matches[2])
+			}
+		}
+	}
+
+	// Parse time fields (ms suffix)
+	timeFields := map[string]*float64{
+		`read-time:\s+([\d.]+)\s*ms`:   &metrics.ReadTimeMs,
+		`write-time:\s+([\d.]+)\s*ms`:  &metrics.WriteTimeMs,
+		`wait-time:\s+([\d.]+)\s*ms`:   &metrics.WaitTimeMs,
+		`active-time:\s+([\d.]+)\s*ms`: &metrics.ActiveTimeMs,
+	}
+
+	for pattern, field := range timeFields {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(output); len(matches) > 1 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				*field = value
+			}
+		}
+	}
+
+	return metrics, nil
+}
+
+// convertRateToBytesPerSec converts RouterOS rate units to bytes per second
+// RouterOS reports rates in bits per second with unit suffixes: bps, kbps, Mbps, Gbps
+func convertRateToBytesPerSec(value float64, unit string) float64 {
+	switch unit {
+	case "bps":
+		return value / 8
+	case "kbps", "Kbps":
+		return (value * 1000) / 8
+	case "Mbps":
+		return (value * 1_000_000) / 8
+	case "Gbps":
+		return (value * 1_000_000_000) / 8
+	default:
+		return value
+	}
+}
+
 // parseSnapshotInfo parses RouterOS Btrfs subvolume output for a single snapshot
 // TODO: RouterOS output format for /disk/btrfs/subvolume needs hardware validation.
 // Expected format is similar to /disk print detail with key=value pairs.

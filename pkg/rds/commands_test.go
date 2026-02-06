@@ -1181,3 +1181,164 @@ func TestValidateSnapshotID(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDiskMetrics(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected *DiskMetrics
+	}{
+		{
+			name: "full output with active writes",
+			output: `                  slot:    storage-pool
+              read-ops:         243 401
+   read-ops-per-second:               0
+            read-bytes:  33 131 503 616
+             read-rate:            0bps
+           read-merges:               0
+             read-time:             0ms
+             write-ops:      17 667 231
+  write-ops-per-second:              76
+           write-bytes: 515 659 673 600
+            write-rate:        12.8Mbps
+          write-merges:               0
+            write-time:             0ms
+         in-flight-ops:               0
+           active-time:             0ms
+             wait-time:             0ms
+           discard-ops:               0
+         discard-bytes:               0
+        discard-merges:               0
+          discard-time:             0ms
+             flush-ops:               0
+            flush-time:             0ms`,
+			expected: &DiskMetrics{
+				ReadOpsPerSecond:  0,
+				WriteOpsPerSecond: 76,
+				ReadBytesPerSec:   0,
+				WriteBytesPerSec:  1_600_000, // 12.8Mbps = 12.8 * 1_000_000 / 8 = 1_600_000
+				ReadTimeMs:        0,
+				WriteTimeMs:       0,
+				WaitTimeMs:        0,
+				InFlightOps:       0,
+				ActiveTimeMs:      0,
+			},
+		},
+		{
+			name: "active reads with Gbps throughput",
+			output: `   read-ops-per-second:            1500
+  write-ops-per-second:             200
+             read-rate:         1.5Gbps
+            write-rate:       100.0Mbps
+             read-time:             2ms
+            write-time:             5ms
+         in-flight-ops:               8
+           active-time:            10ms
+             wait-time:             1ms`,
+			expected: &DiskMetrics{
+				ReadOpsPerSecond:  1500,
+				WriteOpsPerSecond: 200,
+				ReadBytesPerSec:   187_500_000, // 1.5Gbps = 1.5 * 1_000_000_000 / 8
+				WriteBytesPerSec:  12_500_000,  // 100Mbps = 100 * 1_000_000 / 8
+				ReadTimeMs:        2,
+				WriteTimeMs:       5,
+				WaitTimeMs:        1,
+				InFlightOps:       8,
+				ActiveTimeMs:      10,
+			},
+		},
+		{
+			name: "idle disk - all zeros",
+			output: `   read-ops-per-second:               0
+  write-ops-per-second:               0
+             read-rate:            0bps
+            write-rate:            0bps
+             read-time:             0ms
+            write-time:             0ms
+         in-flight-ops:               0
+           active-time:             0ms
+             wait-time:             0ms`,
+			expected: &DiskMetrics{},
+		},
+		{
+			name: "kbps throughput",
+			output: `   read-ops-per-second:              10
+  write-ops-per-second:               5
+             read-rate:          500kbps
+            write-rate:          250kbps
+             read-time:             0ms
+            write-time:             0ms
+         in-flight-ops:               1
+           active-time:             0ms
+             wait-time:             0ms`,
+			expected: &DiskMetrics{
+				ReadOpsPerSecond:  10,
+				WriteOpsPerSecond: 5,
+				ReadBytesPerSec:   62_500, // 500kbps = 500 * 1000 / 8
+				WriteBytesPerSec:  31_250, // 250kbps = 250 * 1000 / 8
+				InFlightOps:       1,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseDiskMetrics(tt.output)
+			if err != nil {
+				t.Fatalf("parseDiskMetrics failed: %v", err)
+			}
+
+			if result.ReadOpsPerSecond != tt.expected.ReadOpsPerSecond {
+				t.Errorf("ReadOpsPerSecond: got %v, want %v", result.ReadOpsPerSecond, tt.expected.ReadOpsPerSecond)
+			}
+			if result.WriteOpsPerSecond != tt.expected.WriteOpsPerSecond {
+				t.Errorf("WriteOpsPerSecond: got %v, want %v", result.WriteOpsPerSecond, tt.expected.WriteOpsPerSecond)
+			}
+			if result.ReadBytesPerSec != tt.expected.ReadBytesPerSec {
+				t.Errorf("ReadBytesPerSec: got %v, want %v", result.ReadBytesPerSec, tt.expected.ReadBytesPerSec)
+			}
+			if result.WriteBytesPerSec != tt.expected.WriteBytesPerSec {
+				t.Errorf("WriteBytesPerSec: got %v, want %v", result.WriteBytesPerSec, tt.expected.WriteBytesPerSec)
+			}
+			if result.ReadTimeMs != tt.expected.ReadTimeMs {
+				t.Errorf("ReadTimeMs: got %v, want %v", result.ReadTimeMs, tt.expected.ReadTimeMs)
+			}
+			if result.WriteTimeMs != tt.expected.WriteTimeMs {
+				t.Errorf("WriteTimeMs: got %v, want %v", result.WriteTimeMs, tt.expected.WriteTimeMs)
+			}
+			if result.WaitTimeMs != tt.expected.WaitTimeMs {
+				t.Errorf("WaitTimeMs: got %v, want %v", result.WaitTimeMs, tt.expected.WaitTimeMs)
+			}
+			if result.InFlightOps != tt.expected.InFlightOps {
+				t.Errorf("InFlightOps: got %v, want %v", result.InFlightOps, tt.expected.InFlightOps)
+			}
+			if result.ActiveTimeMs != tt.expected.ActiveTimeMs {
+				t.Errorf("ActiveTimeMs: got %v, want %v", result.ActiveTimeMs, tt.expected.ActiveTimeMs)
+			}
+		})
+	}
+}
+
+func TestConvertRateToBytesPerSec(t *testing.T) {
+	tests := []struct {
+		value    float64
+		unit     string
+		expected float64
+	}{
+		{0, "bps", 0},
+		{8, "bps", 1},
+		{500, "kbps", 62_500},
+		{12.8, "Mbps", 1_600_000},
+		{1.5, "Gbps", 187_500_000},
+		{100, "unknown", 100}, // Unknown unit returns raw value
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%v_%s", tt.value, tt.unit), func(t *testing.T) {
+			result := convertRateToBytesPerSec(tt.value, tt.unit)
+			if result != tt.expected {
+				t.Errorf("convertRateToBytesPerSec(%v, %q) = %v, want %v", tt.value, tt.unit, result, tt.expected)
+			}
+		})
+	}
+}

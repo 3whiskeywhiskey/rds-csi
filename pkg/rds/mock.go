@@ -8,13 +8,15 @@ import (
 
 // MockClient is a mock implementation of RDSClient for testing
 type MockClient struct {
-	mu            sync.RWMutex
-	volumes       map[string]*VolumeInfo
-	snapshots     map[string]*SnapshotInfo
-	address       string
-	connected     bool  // Connection state (for testing connection manager)
-	nextError     error // Error to return on next operation
-	persistentErr error // Error to return on all operations until cleared
+	mu             sync.RWMutex
+	volumes        map[string]*VolumeInfo
+	snapshots      map[string]*SnapshotInfo
+	address        string
+	connected      bool                    // Connection state (for testing connection manager)
+	nextError      error                   // Error to return on next operation
+	persistentErr  error                   // Error to return on all operations until cleared
+	diskMetrics    *DiskMetrics            // Configurable disk metrics response (test helper)
+	hardwareHealth *HardwareHealthMetrics  // Configurable hardware health response (test helper)
 }
 
 // NewMockClient creates a new MockClient for testing
@@ -399,4 +401,68 @@ func (m *MockClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolu
 		Status:        "ready",
 	}
 	return nil
+}
+
+// SetDiskMetrics sets the disk metrics response for testing
+func (m *MockClient) SetDiskMetrics(metrics *DiskMetrics) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.diskMetrics = metrics
+}
+
+// GetDiskMetrics implements RDSClient
+func (m *MockClient) GetDiskMetrics(slot string) (*DiskMetrics, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return nil, err
+	}
+
+	if m.diskMetrics != nil {
+		copy := *m.diskMetrics
+		copy.Slot = slot
+		return &copy, nil
+	}
+
+	// Return zero metrics by default (idle disk)
+	return &DiskMetrics{Slot: slot}, nil
+}
+
+// SetHardwareHealth sets the hardware health metrics response for testing
+func (m *MockClient) SetHardwareHealth(metrics *HardwareHealthMetrics) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hardwareHealth = metrics
+}
+
+// GetHardwareHealth implements RDSClient
+func (m *MockClient) GetHardwareHealth(snmpHost string, snmpCommunity string) (*HardwareHealthMetrics, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return nil, err
+	}
+
+	if m.hardwareHealth != nil {
+		copy := *m.hardwareHealth
+		return &copy, nil
+	}
+
+	// Return reasonable defaults (healthy system)
+	return &HardwareHealthMetrics{
+		CPUTemperature:    40,
+		BoardTemperature:  35,
+		Fan1Speed:         7500,
+		Fan2Speed:         7600,
+		PSU1Power:         700,
+		PSU2Power:         680,
+		PSU1Temperature:   25,
+		PSU2Temperature:   25,
+		DiskPoolSizeBytes: 8_000_000_000_000, // 8TB
+		DiskPoolUsedBytes: 1_600_000_000_000, // 1.6TB (20% used)
+	}, nil
 }
