@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 26 of 28 (Volume Snapshots)
-Plan: 2 of 3
-Status: In progress - Snapshot SSH commands complete
-Last activity: 2026-02-06 — Completed 26-02-PLAN.md (snapshot SSH command implementations)
+Plan: 3 of 3 (Phase complete!)
+Status: Phase 26 complete - CSI controller snapshot service implemented
+Last activity: 2026-02-06 — Completed 26-03-PLAN.md (CSI controller snapshot RPCs)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [████████░░] 27.8% (5/18 plans estimated)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████░] 33.3% (6/18 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 101 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 5 v0.10.0)
+- Total plans completed: 102 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 6 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 5/18 (27.8%)
-- Average duration: ~7 min per plan (v0.9.0), ~4.6 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 6/18 (33.3%)
+- Average duration: ~7 min per plan (v0.9.0), ~4.0 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -31,10 +31,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 4/18 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 6/18 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 3 phases (26-28), 5/18 plans, in progress (Phase 26 active, Phase 27 complete)
+- v0.10.0: 3 phases (26-28), 6/18 plans, in progress (Phase 26 complete, Phase 27 complete)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 26-03): Use timestamppb for CSI CreationTime field (protobuf compatibility)
+- v0.10.0 (Phase 26-03): getBtrfsFSLabel checks params then defaults to storage-pool (configurable)
+- v0.10.0 (Phase 26-03): CreateSnapshot validates volume ID format before RDS operations (security)
+- v0.10.0 (Phase 26-03): DeleteSnapshot idempotent per CSI spec (not-found returns success)
 - v0.10.0 (Phase 26-02): CreateSnapshot uses read-only=yes for immutable snapshots
 - v0.10.0 (Phase 26-02): DeleteSnapshot idempotent (not found = return nil per CSI spec)
 - v0.10.0 (Phase 26-02): RestoreSnapshot creates writable clone (no read-only flag) + disk entry
@@ -121,12 +125,19 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 05:36
-Stopped at: Completed Phase 26 Plan 02 (snapshot SSH commands) - Phase 26 in progress
+Last session: 2026-02-06 05:49
+Stopped at: Completed Phase 26 Plan 03 (CSI controller snapshot RPCs) - Phase 26 COMPLETE
 Resume file: None
-Next action: Execute Phase 26 Plan 03 (controller service) using `/gsd:execute-phase 26 03`
+Next action: Phase 26 (Volume Snapshots) is complete. Ready for next phase or milestone planning.
 
-**v0.10.0 Progress (5/18 plans):**
+**v0.10.0 Progress (6/18 plans):**
+- Phase 26-03: CSI controller snapshot service (CreateSnapshot, DeleteSnapshot RPCs)
+  - Implemented CreateSnapshot with idempotency (same name + source = return existing)
+  - Implemented DeleteSnapshot with idempotency (not found = success)
+  - Registered CREATE_DELETE_SNAPSHOT and LIST_SNAPSHOTS capabilities
+  - Added timestamppb import for CSI timestamp handling
+  - Added getBtrfsFSLabel helper for Btrfs filesystem label resolution
+  - Updated tests to reflect snapshot RPCs now implemented
 - Phase 26-02: Snapshot SSH commands with RouterOS Btrfs subvolume operations
   - Implemented 5 sshClient snapshot methods (CreateSnapshot, DeleteSnapshot, GetSnapshot, ListSnapshots, RestoreSnapshot)
   - Added parseSnapshotInfo and parseSnapshotList for RouterOS output parsing
