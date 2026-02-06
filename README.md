@@ -17,9 +17,13 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 - **NVMe/TCP Protocol**: Low-latency, high-throughput block storage access
 - **File-backed Volumes**: Efficient storage allocation using file-backed disk images on Btrfs RAID
 - **SSH-based Management**: Secure remote administration using RouterOS CLI
-- **Orphan Volume Reconciliation**: Automatic detection and cleanup of orphaned volumes (optional) ✨ **New**
+- **Volume Expansion**: Dynamically resize volumes (ControllerExpandVolume, NodeExpandVolume)
+- **Block Volume Support**: CSI block volumes for KubeVirt VMs without filesystem formatting
+- **KubeVirt Live Migration**: VM migration validated with ~15s migration window
+- **NVMe-oF Reconnection Resilience**: Volumes remain accessible after network hiccups and RDS restarts
+- **Attachment Reconciliation**: Automatic recovery from stale VolumeAttachment state after infrastructure failures
+- **Orphan Volume Reconciliation**: Automatic detection and cleanup of orphaned volumes (optional)
 - **Enhanced Error Handling**: Comprehensive retry logic, idempotent operations, and audit logging
-- **Volume Expansion**: Resize volumes dynamically (planned)
 - **Snapshots**: Btrfs-based volume snapshots (planned)
 - **Volume Cloning**: Fast volume duplication for rapid VM provisioning (planned)
 
@@ -71,20 +75,30 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 
 ## Status
 
-**Current Phase**: 🚧 **Alpha / In Development**
+**Current Version**: v0.8.0 (v0.9.0 in progress)
 
+**Completed:**
 - [x] Project setup and documentation
 - [x] CSI Identity service
-- [x] Controller service (CreateVolume, DeleteVolume)
-- [x] Node service (mount/unmount operations)
-- [x] Kubernetes deployment manifests
+- [x] Controller service (CreateVolume, DeleteVolume, ValidateVolumeCapabilities, GetCapacity)
+- [x] Node service (NodeStageVolume, NodePublishVolume, NodeUnstageVolume, NodeUnpublishVolume)
+- [x] Kubernetes deployment manifests and RBAC
 - [x] E2E testing in production cluster
-- [ ] Helm chart
-- [ ] Production hardening and monitoring
+- [x] Volume expansion support
+- [x] Block volume support for KubeVirt
+- [x] KubeVirt live migration validation
+- [x] Orphan reconciliation
+- [x] NVMe-oF reconnection resilience
+- [x] Attachment reconciliation
+- [x] Helm chart
+- [x] Prometheus metrics endpoint
+- [x] Comprehensive test coverage (65%+)
 
-**Latest**: ✅ v0.1.6 - Successfully deployed and tested in production cluster with working volume lifecycle
+**In Progress (v0.9.0):**
+- [ ] Volume snapshots (Phase 26)
+- [ ] Documentation & hardware validation (Phase 27)
 
-See [ROADMAP.md](ROADMAP.md) for detailed implementation plan.
+See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress.
 
 ## Prerequisites
 
@@ -98,7 +112,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed implementation plan.
 - **Kubernetes Version**: 1.26+
 - **CSI Spec**: v1.5.0+ support
 - **Kernel**: Linux 5.0+ with NVMe-TCP kernel module (`nvme-tcp`)
-- **nvme-cli**: Installed on all worker nodes
+- **nvme-cli**: Installed on all worker nodes (for NVMe/TCP operations)
 
 ### Network
 - Worker nodes must have network connectivity to RDS on storage VLAN
@@ -228,7 +242,7 @@ See [docs/configuration.md](docs/configuration.md) for comprehensive configurati
 
 ### Prerequisites
 
-- Kubernetes v1.20+ with CSI support
+- Kubernetes v1.26+ with CSI support
 - Linux nodes with kernel 5.0+ (`nvme-tcp` module)
 - `nvme-cli` installed on all nodes
 - Network connectivity from nodes to RDS
@@ -319,9 +333,9 @@ See [docs/development.md](docs/development.md) for development environment setup
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for detailed implementation phases and timeline.
+See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress.
 
-**Current Focus**: Milestone 1 - Foundation (Weeks 1-3)
+**Current Focus**: v0.9.0 - Production Readiness & Test Maturity
 
 ## License
 
