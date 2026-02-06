@@ -84,11 +84,11 @@ Plans:
 **GitHub Issue**: #19
 **Requirements**: METRIC-01
 **Success Criteria** (what must be TRUE):
-  1. rds_csi_nvme_connections_active gauge reports actual count of active NVMe/TCP connections from attachment manager state
+  1. rds_csi_nvme_connections_active gauge reports actual count of active volumes with NVMe/TCP connections from attachment manager state (counts volumes, not per-node attachments during migration dual-attach)
   2. Metric value persists correctly across controller restarts (not derived from ephemeral counters)
   3. Metric accurately reflects VolumeAttachment count in cluster (validates via kubectl comparison)
   4. Unit tests verify metric updates on attach/detach operations
-  5. Integration test validates metric accuracy after controller restart
+  5. Unit test validates metric accuracy after controller restart (TestNVMeConnectionsActive_SurvivesRestart simulates restart scenario)
 **Plans**: 1 plan
 
 Plans:
