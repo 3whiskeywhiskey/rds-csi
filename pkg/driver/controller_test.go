@@ -435,6 +435,14 @@ func TestControllerPublishVolume_Success(t *testing.T) {
 		VolumeContext: map[string]string{
 			"nvmeAddress": "10.0.0.1",
 		},
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 
 	resp, err := cs.ControllerPublishVolume(ctx, req)
@@ -476,6 +484,14 @@ func TestControllerPublishVolume_Idempotent(t *testing.T) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeID2,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 
 	// First publish
@@ -511,6 +527,14 @@ func TestControllerPublishVolume_RWOConflict(t *testing.T) {
 	req1 := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeID3,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 	_, err := cs.ControllerPublishVolume(ctx, req1)
 	if err != nil {
@@ -521,6 +545,14 @@ func TestControllerPublishVolume_RWOConflict(t *testing.T) {
 	req2 := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeID3,
 		NodeId:   "node-2",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 	_, err = cs.ControllerPublishVolume(ctx, req2)
 	if err == nil {
@@ -562,6 +594,14 @@ func TestControllerPublishVolume_StaleAttachmentSelfHealing(t *testing.T) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeIDStale,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 	resp, err := cs.ControllerPublishVolume(ctx, req)
 	if err != nil {
@@ -593,6 +633,14 @@ func TestControllerPublishVolume_VolumeNotFound(t *testing.T) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId: nonExistentVolumeID,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 
 	_, err := cs.ControllerPublishVolume(ctx, req)
