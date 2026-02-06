@@ -9,7 +9,7 @@ The RDS CSI driver employs a multi-layered testing strategy:
 1. **Unit Tests** - Test individual functions and packages in isolation
 2. **Integration Tests** - Test driver + mock RDS interaction
 3. **Sanity Tests** - Validate CSI spec compliance (Identity + Controller services)
-4. **E2E Tests** - Validate full stack with real Kubernetes and hardware (planned)
+4. **E2E Tests** - Validate full stack with in-process driver and mock RDS using Ginkgo v2
 
 ## Running Tests Locally
 
@@ -68,6 +68,45 @@ make test-sanity-real RDS_ADDRESS=10.42.68.1 RDS_SSH_KEY=~/.ssh/id_rsa
 
 WARNING: This runs tests against real hardware and will create/delete actual volumes. Use a dedicated test RDS instance.
 
+### E2E Tests
+
+E2E (end-to-end) tests validate full driver behavior using the Ginkgo v2 framework with an in-process driver and mock RDS server.
+
+**Run E2E tests:**
+
+```bash
+make test-e2e
+```
+
+**What E2E tests cover:**
+- Volume lifecycle operations (create, delete, expand)
+- Block volume support (raw block mode)
+- Driver startup and shutdown
+- In-process testing for fast iteration
+
+**Test location:** `test/e2e/`
+
+**Key test suites:**
+- `lifecycle_test.go` - Volume create, delete, and expansion workflows
+- `block_volume_test.go` - Block mode volume operations
+
+**E2E in CI:** E2E tests run in a dedicated CI job without requiring real hardware, using the mock RDS server for fast validation.
+
+### Hardware Integration Tests
+
+For testing against real RDS hardware, use the hardware integration test suite:
+
+```bash
+RDS_ADDRESS=10.42.241.3 RDS_USER=admin RDS_PRIVATE_KEY_PATH=~/.ssh/id_rsa go test -v ./test/integration/ -run TestHardwareIntegration
+```
+
+**Key points:**
+- These tests are skipped by default (require `RDS_ADDRESS` env var)
+- Safe to run: creates test volume, verifies operations, deletes volume
+- Test file: `test/integration/hardware_integration_test.go`
+
+For comprehensive manual validation procedures against real hardware, see [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md).
+
 ### Verification Suite
 
 Run all code quality checks:
@@ -81,6 +120,7 @@ This runs:
 - `go vet` - Static analysis
 - `golangci-lint` - Comprehensive linting
 - Unit tests
+- Integration tests
 
 ## CSI Capability Matrix
 
@@ -282,31 +322,101 @@ To download artifacts:
 2. Scroll to "Artifacts" section
 3. Download `sanity-test-logs.zip`
 
-### Common Issues
+## Troubleshooting
 
-#### "invalid volume name format" in sanity tests
+### Troubleshooting: Unit Test Failures
 
-**Cause:** Volume ID validation is too strict.
+**Symptom:** "mock expectation not met"
+- **Cause:** Mock setup doesn't match new function signature
+- **Fix:** Check mock expectations match actual function calls in test
+- **Debug:** `go test -v -run TestXxx ./pkg/driver/... 2>&1 | head -50`
 
-**Fix:** Ensure `ValidateVolumeID` accepts alphanumeric names with hyphens, not just `pvc-<uuid>` format. CSI spec allows any safe volume name.
+**Symptom:** "context deadline exceeded"
+- **Cause:** Test timeout too short for realistic mock timing
+- **Fix:** Increase context timeout or check for deadlocks/infinite loops
+- **Debug:** Enable verbose logging to see where test hangs
 
-#### "nvme connect failed" in Node tests
+**Symptom:** "invalid IP address" or "invalid volume ID"
+- **Cause:** Test uses invalid input (empty string, malformed format)
+- **Fix:** Ensure test provides valid IPv4 addresses and properly formatted volume IDs
+- **Debug:** Check test setup, verify input validation logic
 
-**Cause:** Node tests require NVMe/TCP target hardware.
+### Troubleshooting: Integration Test Failures
 
-**Fix:** Skip Node tests with `--ginkgo.skip="Node"` when using mock RDS. Node tests deferred to E2E testing phase.
+**Symptom:** "connection refused on port 2222"
+- **Cause:** Mock RDS server failed to start; port already in use
+- **Fix:** Check for port conflicts, ensure no other processes using port 2222
+- **Debug:** `lsof -i :2222` to check port usage
 
-#### "connection refused" to driver socket
+**Symptom:** "unexpected SSH command output"
+- **Cause:** Mock RDS version mismatch or output format changed
+- **Fix:** Check `MOCK_RDS_ROUTEROS_VERSION` matches expected version, update parsers
+- **Debug:** `MOCK_RDS_ENABLE_HISTORY=true go test -v ./test/integration/...`
 
-**Cause:** Driver failed to start or socket path already in use.
+**Symptom:** "state inconsistency between tests"
+- **Cause:** Tests sharing mock state without cleanup
+- **Fix:** Ensure fresh mock per test or call `ClearCommandHistory()` between tests
+- **Debug:** Check test setup/teardown, verify mock isolation
 
-**Fix:** Check for existing socket file, verify driver startup logs, ensure no conflicting processes.
+### Troubleshooting: Sanity Test Failures
 
-#### Mock RDS state inconsistencies
+**Symptom:** "CreateVolume idempotency check failed"
+- **Cause:** Driver returning different volume ID for duplicate requests
+- **Fix:** Check volume ID generation logic, ensure same name returns same ID
+- **Debug:** `go test -v ./test/sanity/... -count=1 2>&1 | grep FAIL`
 
-**Cause:** Tests creating volumes that persist between test runs.
+**Symptom:** "DeleteVolume returned error for non-existent volume"
+- **Cause:** DeleteVolume not idempotent per CSI spec
+- **Fix:** Return success for already-deleted volumes (CSI spec requires idempotency)
+- **Debug:** Check DeleteVolume implementation handles VolumeNotFoundError
 
-**Fix:** Mock RDS resets state on restart. Each test run should start fresh. Call `mockRDS.ClearCommandHistory()` between test suites if needed.
+**Symptom:** "capability mismatch"
+- **Cause:** Driver reports capability but doesn't implement it (or vice versa)
+- **Fix:** Update GetCapabilities or implement missing RPC methods
+- **Debug:** Compare driver capabilities with test expectations
+
+### Troubleshooting: E2E Test Failures
+
+**Symptom:** "Ginkgo timeout waiting for PVC"
+- **Cause:** In-process driver startup slow or volume provisioning delayed
+- **Fix:** Increase Eventually timeout in test, check driver initialization logs
+- **Debug:** Add verbose Ginkgo output: `go test -v ./test/e2e/... -ginkgo.v`
+
+**Symptom:** "volume not found after create"
+- **Cause:** Race condition in mock or volume creation failed silently
+- **Fix:** Check mock RDS state, verify CreateVolume logic and error handling
+- **Debug:** Enable mock command history to trace volume operations
+
+**Symptom:** "block volume test skipped"
+- **Cause:** Block volume support not detected in driver capabilities
+- **Fix:** Verify driver reports BLOCK_VOLUME capability in GetCapabilities
+- **Debug:** Check driver initialization and capability registration
+
+### Troubleshooting: Mock-Reality Divergence
+
+The mock RDS server simulates RouterOS behavior but has inherent limitations that can lead to divergence from real hardware:
+
+**Timing Differences:**
+- **Mock:** Responds instantly to all commands
+- **Real RDS:** Takes 10-30s for volume operations (disk creation, deletion)
+- **Impact:** Tests may pass with mock but timeout with real hardware
+
+**NVMe/TCP Simulation:**
+- **Mock:** Does not simulate NVMe/TCP protocol or kernel device discovery
+- **Real RDS:** NVMe/TCP connection takes 2-5s, kernel device enumeration adds latency
+- **Impact:** Node service operations untestable with mock alone
+
+**Capacity Enforcement:**
+- **Mock:** Does not enforce disk capacity limits
+- **Real RDS:** Will fail volume creation if storage pool is full
+- **Impact:** Out-of-space scenarios require real hardware testing
+
+**Command Output Format:**
+- **Mock:** Simulates RouterOS 7.16 output format
+- **Real RDS:** Output format may vary across RouterOS versions (7.1-7.16+)
+- **Impact:** Parser may fail on different RouterOS versions
+
+**Recommendation:** After making changes to volume operations or command parsing, validate against real hardware using [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) procedures. Mock tests provide fast feedback, but real hardware testing catches integration issues.
 
 ## Contributing Tests
 
@@ -361,10 +471,14 @@ The sanity tests use the official `csi-test` package and should not need modific
 
 ## Test Coverage Goals
 
-**Current coverage:** ~60% (established as realistic target for hardware-dependent code)
+**Current coverage:** 68.6% (as of v0.9.0)
+
+**CI enforcement:** Minimum 65% coverage required. Coverage drops below this threshold will fail the build.
 
 **Coverage by package:**
 - `pkg/driver` - Target: 70% (core CSI logic, well testable)
+- `pkg/driver/attachment` - Target: 65% (reconciliation logic)
+- `pkg/driver/connection` - Target: 60% (connection manager)
 - `pkg/rds` - Target: 50% (SSH client, hardware dependent)
 - `pkg/utils` - Target: 80% (pure functions, fully testable)
 
@@ -380,13 +494,17 @@ All PRs run automated tests via GitHub Actions (`.github/workflows/pr.yml`):
 1. **Verify job** - Code quality checks (fmt, vet, lint) + unit tests + integration tests
 2. **Sanity-tests job** - CSI spec compliance validation with mock RDS
 3. **Build-test job** - Docker image build for linux/amd64 and linux/arm64
+4. **E2E job** - Full stack E2E tests with Ginkgo
 
 **Build fails if:**
 - Any unit test fails
 - Any integration test fails
 - Any sanity test fails (strict CSI compliance required)
+- Any E2E test fails
 - Linting errors detected
-- Code coverage drops significantly
+- Code coverage drops below 65%
+
+For complete CI/CD documentation, see [ci-cd.md](ci-cd.md).
 
 ## Performance Testing
 
