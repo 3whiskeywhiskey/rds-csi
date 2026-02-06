@@ -2292,3 +2292,490 @@ func TestSanityRegression_VolumeContextParameters(t *testing.T) {
 		})
 	}
 }
+
+// ========================================
+// Snapshot Tests
+// ========================================
+
+// Test snapshot IDs (snap-<uuid> format)
+const (
+	testSnapshotID1 = "snap-11111111-1111-1111-1111-111111111111"
+	testSnapshotID2 = "snap-22222222-2222-2222-2222-222222222222"
+	testSnapshotID3 = "snap-33333333-3333-3333-3333-333333333333"
+)
+
+func TestCreateSnapshot(t *testing.T) {
+	ctx := context.Background()
+	cs, mockRDS := testControllerServer(t)
+
+	// Add a test source volume
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:          testVolumeID1,
+		FilePath:      "/storage-pool/metal-csi/" + testVolumeID1 + ".img",
+		FileSizeBytes: 10 * 1024 * 1024 * 1024, // 10 GiB
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID1,
+	})
+
+	tests := []struct {
+		name           string
+		snapshotName   string
+		sourceVolumeID string
+		wantErr        bool
+		wantCode       codes.Code
+	}{
+		{
+			name:           "success: create snapshot with valid source",
+			snapshotName:   "test-snapshot-1",
+			sourceVolumeID: testVolumeID1,
+			wantErr:        false,
+		},
+		{
+			name:           "error: missing snapshot name",
+			snapshotName:   "",
+			sourceVolumeID: testVolumeID1,
+			wantErr:        true,
+			wantCode:       codes.InvalidArgument,
+		},
+		{
+			name:           "error: missing source volume ID",
+			snapshotName:   "test-snapshot-2",
+			sourceVolumeID: "",
+			wantErr:        true,
+			wantCode:       codes.InvalidArgument,
+		},
+		{
+			name:           "error: source volume not found",
+			snapshotName:   "test-snapshot-3",
+			sourceVolumeID: "pvc-99999999-9999-9999-9999-999999999999", // Valid format but doesn't exist
+			wantErr:        true,
+			wantCode:       codes.NotFound,
+		},
+		{
+			name:           "idempotent: same name and same source",
+			snapshotName:   "test-snapshot-1", // Same as first test
+			sourceVolumeID: testVolumeID1,
+			wantErr:        false,
+		},
+		{
+			name:           "error: same name but different source",
+			snapshotName:   "test-snapshot-conflict",
+			sourceVolumeID: testVolumeID2, // Different volume
+			wantErr:        true,
+			wantCode:       codes.AlreadyExists,
+		},
+	}
+
+	// Pre-create second volume for conflict test
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:          testVolumeID2,
+		FilePath:      "/storage-pool/metal-csi/" + testVolumeID2 + ".img",
+		FileSizeBytes: 10 * 1024 * 1024 * 1024,
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID2,
+	})
+
+	// Pre-create a snapshot for conflict test
+	_, _ = cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "test-snapshot-conflict",
+		SourceVolumeId: testVolumeID1, // Create with volume 1
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &csi.CreateSnapshotRequest{
+				Name:           tt.snapshotName,
+				SourceVolumeId: tt.sourceVolumeID,
+			}
+
+			resp, err := cs.CreateSnapshot(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Expected error but got nil")
+					// Cleanup created snapshot
+					if resp != nil {
+						_ = mockRDS.DeleteSnapshot(resp.Snapshot.SnapshotId)
+					}
+					return
+				}
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Errorf("Expected gRPC status error, got: %T", err)
+					return
+				}
+				if st.Code() != tt.wantCode {
+					t.Errorf("Expected code %v, got %v", tt.wantCode, st.Code())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
+				if resp == nil || resp.Snapshot == nil {
+					t.Error("Expected snapshot response, got nil")
+					return
+				}
+				if resp.Snapshot.SourceVolumeId != tt.sourceVolumeID {
+					t.Errorf("Expected source volume %s, got %s", tt.sourceVolumeID, resp.Snapshot.SourceVolumeId)
+				}
+				if !resp.Snapshot.ReadyToUse {
+					t.Error("Expected ReadyToUse=true for Btrfs snapshot")
+				}
+			}
+		})
+	}
+}
+
+func TestDeleteSnapshot(t *testing.T) {
+	ctx := context.Background()
+	cs, mockRDS := testControllerServer(t)
+
+	// Add a test volume
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:          testVolumeID1,
+		FilePath:      "/storage-pool/metal-csi/" + testVolumeID1 + ".img",
+		FileSizeBytes: 10 * 1024 * 1024 * 1024,
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID1,
+	})
+
+	// Create a test snapshot
+	createResp, err := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "test-snapshot-delete",
+		SourceVolumeId: testVolumeID1,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create test snapshot: %v", err)
+	}
+	snapshotID := createResp.Snapshot.SnapshotId
+
+	tests := []struct {
+		name       string
+		snapshotID string
+		wantErr    bool
+		wantCode   codes.Code
+	}{
+		{
+			name:       "success: delete existing snapshot",
+			snapshotID: snapshotID,
+			wantErr:    false,
+		},
+		{
+			name:       "error: missing snapshot ID",
+			snapshotID: "",
+			wantErr:    true,
+			wantCode:   codes.InvalidArgument,
+		},
+		{
+			name:       "idempotent: delete non-existent snapshot",
+			snapshotID: "snap-99999999-9999-9999-9999-999999999999", // Valid format but doesn't exist
+			wantErr:    false,                                       // Per CSI spec, not found = success
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &csi.DeleteSnapshotRequest{
+				SnapshotId: tt.snapshotID,
+			}
+
+			_, err := cs.DeleteSnapshot(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got nil")
+					return
+				}
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Errorf("Expected gRPC status error, got: %T", err)
+					return
+				}
+				if st.Code() != tt.wantCode {
+					t.Errorf("Expected code %v, got %v", tt.wantCode, st.Code())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestListSnapshots(t *testing.T) {
+	ctx := context.Background()
+	cs, mockRDS := testControllerServer(t)
+
+	// Add test volumes
+	for i, volID := range []string{testVolumeID1, testVolumeID2, testVolumeID3} {
+		mockRDS.AddVolume(&rds.VolumeInfo{
+			Slot:          volID,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", volID),
+			FileSizeBytes: int64((i + 1) * 10 * 1024 * 1024 * 1024),
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + volID,
+		})
+	}
+
+	// Create test snapshots
+	snap1, _ := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "test-snap-1",
+		SourceVolumeId: testVolumeID1,
+	})
+	snap2, _ := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "test-snap-2",
+		SourceVolumeId: testVolumeID1, // Same source as snap1
+	})
+	snap3, _ := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "test-snap-3",
+		SourceVolumeId: testVolumeID2, // Different source
+	})
+
+	tests := []struct {
+		name         string
+		snapshotID   string
+		sourceVolume string
+		maxEntries   int32
+		startToken   string
+		wantCount    int
+		wantErr      bool
+		wantCode     codes.Code
+	}{
+		{
+			name:      "list all snapshots",
+			wantCount: 3,
+		},
+		{
+			name:       "filter by snapshot ID",
+			snapshotID: snap1.Snapshot.SnapshotId,
+			wantCount:  1,
+		},
+		{
+			name:       "filter by snapshot ID (not found)",
+			snapshotID: "snap-nonexistent",
+			wantCount:  0, // Empty response, not error
+		},
+		{
+			name:         "filter by source volume",
+			sourceVolume: testVolumeID1,
+			wantCount:    2, // snap1 and snap2
+		},
+		{
+			name:         "filter by source volume (single match)",
+			sourceVolume: testVolumeID2,
+			wantCount:    1, // snap3 only
+		},
+		{
+			name:       "pagination: max_entries=1",
+			maxEntries: 1,
+			wantCount:  1,
+		},
+		{
+			name:       "pagination: max_entries=2",
+			maxEntries: 2,
+			wantCount:  2,
+		},
+		{
+			name:       "pagination: use starting_token",
+			maxEntries: 1,
+			startToken: "1", // Start from second entry
+			wantCount:  1,
+		},
+		{
+			name:       "error: invalid starting_token",
+			startToken: "invalid",
+			wantErr:    true,
+			wantCode:   codes.Aborted,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &csi.ListSnapshotsRequest{
+				SnapshotId:     tt.snapshotID,
+				SourceVolumeId: tt.sourceVolume,
+				MaxEntries:     tt.maxEntries,
+				StartingToken:  tt.startToken,
+			}
+
+			resp, err := cs.ListSnapshots(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got nil")
+					return
+				}
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Errorf("Expected gRPC status error, got: %T", err)
+					return
+				}
+				if st.Code() != tt.wantCode {
+					t.Errorf("Expected code %v, got %v", tt.wantCode, st.Code())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
+				if resp == nil {
+					t.Error("Expected response, got nil")
+					return
+				}
+				if len(resp.Entries) != tt.wantCount {
+					t.Errorf("Expected %d entries, got %d", tt.wantCount, len(resp.Entries))
+				}
+				// Check pagination token if max_entries was set and more entries exist
+				if tt.maxEntries > 0 && len(resp.Entries) == int(tt.maxEntries) {
+					if tt.startToken == "" && tt.wantCount < 3 && resp.NextToken == "" {
+						t.Error("Expected NextToken to be set for partial results")
+					}
+				}
+			}
+		})
+	}
+
+	// Cleanup
+	_ = mockRDS.DeleteSnapshot(snap1.Snapshot.SnapshotId)
+	_ = mockRDS.DeleteSnapshot(snap2.Snapshot.SnapshotId)
+	_ = mockRDS.DeleteSnapshot(snap3.Snapshot.SnapshotId)
+}
+
+func TestCreateVolumeFromSnapshot(t *testing.T) {
+	ctx := context.Background()
+	cs, mockRDS := testControllerServer(t)
+
+	// Add test volume
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:          testVolumeID1,
+		FilePath:      "/storage-pool/metal-csi/" + testVolumeID1 + ".img",
+		FileSizeBytes: 10 * 1024 * 1024 * 1024, // 10 GiB
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID1,
+	})
+
+	// Create test snapshot
+	snapResp, err := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "test-snapshot-restore",
+		SourceVolumeId: testVolumeID1,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create test snapshot: %v", err)
+	}
+	snapshotID := snapResp.Snapshot.SnapshotId
+
+	tests := []struct {
+		name          string
+		volumeName    string
+		snapshotID    string
+		requestedSize int64
+		wantErr       bool
+		wantCode      codes.Code
+	}{
+		{
+			name:          "success: restore from snapshot",
+			volumeName:    "restored-volume-1",
+			snapshotID:    snapshotID,
+			requestedSize: 10 * 1024 * 1024 * 1024, // Same size
+			wantErr:       false,
+		},
+		{
+			name:          "success: restore with larger size",
+			volumeName:    "restored-volume-2",
+			snapshotID:    snapshotID,
+			requestedSize: 20 * 1024 * 1024 * 1024, // Larger
+			wantErr:       false,
+		},
+		{
+			name:          "error: snapshot not found",
+			volumeName:    "restored-volume-3",
+			snapshotID:    "snap-99999999-9999-9999-9999-999999999999", // Valid format but doesn't exist
+			requestedSize: 10 * 1024 * 1024 * 1024,
+			wantErr:       true,
+			wantCode:      codes.NotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &csi.CreateVolumeRequest{
+				Name: tt.volumeName,
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: tt.requestedSize,
+				},
+				VolumeContentSource: &csi.VolumeContentSource{
+					Type: &csi.VolumeContentSource_Snapshot{
+						Snapshot: &csi.VolumeContentSource_SnapshotSource{
+							SnapshotId: tt.snapshotID,
+						},
+					},
+				},
+				Parameters: map[string]string{
+					"volumePath": "/storage-pool/metal-csi",
+					"nvmePort":   "4420",
+				},
+			}
+
+			resp, err := cs.CreateVolume(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got nil")
+					if resp != nil {
+						// Cleanup
+						_, _ = cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+					}
+					return
+				}
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Errorf("Expected gRPC status error, got: %T", err)
+					return
+				}
+				if st.Code() != tt.wantCode {
+					t.Errorf("Expected code %v, got %v", tt.wantCode, st.Code())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
+				if resp == nil || resp.Volume == nil {
+					t.Error("Expected volume response, got nil")
+					return
+				}
+				// Verify ContentSource is populated
+				if resp.Volume.ContentSource == nil {
+					t.Error("Expected ContentSource in response")
+				} else {
+					snapSource := resp.Volume.ContentSource.GetSnapshot()
+					if snapSource == nil || snapSource.SnapshotId != tt.snapshotID {
+						t.Errorf("Expected ContentSource snapshot ID %s, got %v", tt.snapshotID, snapSource)
+					}
+				}
+				// Verify size is at least snapshot size
+				if resp.Volume.CapacityBytes < snapResp.Snapshot.SizeBytes {
+					t.Errorf("Restored volume size %d smaller than snapshot size %d",
+						resp.Volume.CapacityBytes, snapResp.Snapshot.SizeBytes)
+				}
+				// Cleanup
+				_, _ = cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+			}
+		})
+	}
+
+	// Cleanup snapshot
+	_ = mockRDS.DeleteSnapshot(snapshotID)
+}
