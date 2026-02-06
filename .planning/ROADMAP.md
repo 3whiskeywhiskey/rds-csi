@@ -92,7 +92,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 28.1-01-PLAN.md -- Replace counter-derived gauge with GaugeFunc querying AttachmentManager + unit tests
+- [x] 28.1-01-PLAN.md -- Replace counter-derived gauge with GaugeFunc querying AttachmentManager + unit tests
 
 **Root Cause**: Metric derived from attach/detach counters (attach_total - detach_total) instead of querying attachment manager current state. Counters reset on restart while attachments persist.
 
@@ -125,8 +125,8 @@ Phases execute in numeric order: 26 → 27 → 28.1 → 28
 | 1-25.2 | v0.1.0-v0.9.0 | Complete | ✅ Complete | 2026-02-06 |
 | 26. Volume Snapshots | v0.10.0 | 6/6 | ✅ Complete | 2026-02-06 |
 | 27. Documentation & Hardware Validation | v0.10.0 | 3/3 | ✅ Complete | 2026-02-05 |
-| 28.1. Fix Metric Accuracy | v0.10.0 | 0/1 | Not started | - |
+| 28.1. Fix Metric Accuracy | v0.10.0 | 1/1 | ✅ Complete | 2026-02-06 |
 | 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-06 after Phase 28.1 planning*
+*Last updated: 2026-02-06 after Phase 28.1 execution*
