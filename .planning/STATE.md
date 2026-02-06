@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 Phase: 26 of 27 (Volume Snapshots)
 Plan: Ready to start
-Status: Phase 25.2 complete
-Last activity: 2026-02-05 — Completed 25.2-02-PLAN.md
+Status: Quick-004 complete (documentation update)
+Last activity: 2026-02-06 — Completed Quick-004 (updated README, ROADMAP, MILESTONES to reflect current state)
 
 Progress: [████░░░░░░] ~37% (20/TBD plans complete in v0.9.0)
 
@@ -99,14 +99,15 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-05 20:34
-Stopped at: Completed Quick-003 (fixed 22 test failures in pkg/utils and pkg/driver)
+Last session: 2026-02-06 02:29
+Stopped at: Completed Quick-004 (updated README, ROADMAP, MILESTONES to current state)
 Resume file: None
-Next action: All tests passing. Ready to proceed to Phase 26 (Volume Snapshots).
+Next action: All tests passing, documentation current. Ready to proceed to Phase 26 (Volume Snapshots).
 
 **Quick tasks completed:**
 - Quick 002 (2026-02-05): Fixed AttachmentReconciler shutdown deadlock with priority-select pattern
 - Quick 003 (2026-02-05): Fixed 22 test failures (IP validation, ControllerPublishVolume, NodeGetVolumeStats)
+- Quick 004 (2026-02-06): Updated documentation to reflect v0.8.0 shipped, v0.9.0 in progress (README, ROADMAP, MILESTONES)
 
 ---
-*Last updated: 2026-02-05 after Quick-003*
+*Last updated: 2026-02-06 after Quick-004*
