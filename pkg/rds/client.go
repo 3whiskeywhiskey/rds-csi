@@ -37,6 +37,10 @@ type RDSClient interface {
 	GetSnapshot(snapshotID string) (*SnapshotInfo, error)
 	ListSnapshots() ([]SnapshotInfo, error)
 	RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolumeOptions) error
+
+	// Monitoring operations
+	GetDiskMetrics(slot string) (*DiskMetrics, error)
+	GetHardwareHealth(snmpHost string, snmpCommunity string) (*HardwareHealthMetrics, error)
 }
 
 // ClientConfig holds configuration for creating an RDS client
