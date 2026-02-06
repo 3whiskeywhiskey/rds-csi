@@ -733,3 +733,24 @@ func parseRouterOSTime(normalized string) time.Time {
 	// Return zero time if no match found
 	return time.Time{}
 }
+
+// Snapshot operations (stubs - implemented in Plan 26-02)
+func (c *sshClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, error) {
+	return nil, fmt.Errorf("snapshot operations not yet implemented")
+}
+
+func (c *sshClient) DeleteSnapshot(snapshotID string) error {
+	return fmt.Errorf("snapshot operations not yet implemented")
+}
+
+func (c *sshClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
+	return nil, fmt.Errorf("snapshot operations not yet implemented")
+}
+
+func (c *sshClient) ListSnapshots() ([]SnapshotInfo, error) {
+	return nil, fmt.Errorf("snapshot operations not yet implemented")
+}
+
+func (c *sshClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolumeOptions) error {
+	return fmt.Errorf("snapshot operations not yet implemented")
+}

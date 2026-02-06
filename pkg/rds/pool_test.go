@@ -76,6 +76,26 @@ func (m *mockRDSClient) GetCapacity(basePath string) (*CapacityInfo, error) {
 	return nil, nil
 }
 
+func (m *mockRDSClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) DeleteSnapshot(snapshotID string) error {
+	return nil
+}
+
+func (m *mockRDSClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) ListSnapshots() ([]SnapshotInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolumeOptions) error {
+	return nil
+}
+
 func TestNewConnectionPool(t *testing.T) {
 	tests := []struct {
 		name        string
