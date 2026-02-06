@@ -98,9 +98,36 @@ Plans:
 
 **Impact**: Unreliable monitoring dashboards, alerting, and debugging. Production cluster shows 16 active volumes but metric reports 0.
 
+#### Phase 28.2: RDS Health & Performance Monitoring (INSERTED)
+**Goal**: Implement RDS storage health monitoring via SSH polling of /disk monitor-traffic, exposing IOPS, throughput, latency, and queue depth as Prometheus metrics
+**Depends on**: Phase 28.1 (metric accuracy fixed, GaugeFunc pattern established)
+**Requirements**: MON-01, MON-02, MON-03
+**Success Criteria** (what must be TRUE):
+  1. RouterOS /disk monitor-traffic command capabilities documented (IOPS, throughput, latency, queue depth metrics available)
+  2. SNMP monitoring capabilities researched (OIDs for disk health, available MIBs documented)
+  3. RouterOS API REST/socket capabilities investigated (alternative to SSH polling for real-time metrics)
+  4. Polling approach recommendations documented (frequency, performance impact, metric selection)
+  5. Metric naming conventions defined (rds_disk_* namespace, labels for slot/operation type)
+  6. Implementation complexity assessed (simple SSH polling vs API integration vs SNMP agent)
+  7. Production impact analysis (CPU/memory overhead of polling, SSH connection limits)
+**Plans**: 2 plans
+
+Plans:
+- [ ] 28.2-01-PLAN.md -- RDS disk metrics SSH command, parsing, types, mock, and unit tests
+- [ ] 28.2-02-PLAN.md -- Prometheus GaugeFunc metric registration, driver wiring, and monitoring design doc
+
+**Discovery**: User found `/disk monitor-traffic <slot>` command exposes:
+- read-ops-per-second, write-ops-per-second (IOPS)
+- read-rate, write-rate (throughput in bps)
+- read-time, write-time, wait-time (latency indicators)
+- in-flight-ops (queue depth)
+- active-time (disk utilization)
+
+**Approach**: SSH polling with GaugeFunc collectors (research concluded SSH > SNMP > API for this use case).
+
 #### Phase 28: Helm Chart
 **Goal**: Helm chart for easy deployment and configuration
-**Depends on**: Phase 28.1 (metric accuracy fixed for reliable monitoring)
+**Depends on**: Phase 28.2 (monitoring research complete for decision: include in Helm or defer)
 **Requirements**: HELM-01, HELM-02, HELM-03, HELM-04, HELM-05
 **Success Criteria** (what must be TRUE):
   1. Helm chart deploys controller and node plugin with configurable values
@@ -118,7 +145,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 26 → 27 → 28.1 → 28
+Phases execute in numeric order: 26 → 27 → 28.1 → 28.2 → 28
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -126,7 +153,8 @@ Phases execute in numeric order: 26 → 27 → 28.1 → 28
 | 26. Volume Snapshots | v0.10.0 | 6/6 | ✅ Complete | 2026-02-06 |
 | 27. Documentation & Hardware Validation | v0.10.0 | 3/3 | ✅ Complete | 2026-02-05 |
 | 28.1. Fix Metric Accuracy | v0.10.0 | 1/1 | ✅ Complete | 2026-02-06 |
+| 28.2. RDS Health & Performance Monitoring | v0.10.0 | 0/2 | 🚧 Planned | - |
 | 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-06 after Phase 28.1 execution*
+*Last updated: 2026-02-06 after Phase 28.2 planning*
