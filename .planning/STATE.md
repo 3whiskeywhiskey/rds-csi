@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 
 ## Current Position
 
-Phase: 28.1 of 28 (Fix rds_csi_nvme_connections_active Metric Accuracy)
-Plan: 1 of 1 (Phase complete!)
-Status: Phase 28.1 complete - GaugeFunc-based metric querying AttachmentManager state
-Last activity: 2026-02-06 — Completed 28.1-01-PLAN.md (Replace counter-derived gauge with GaugeFunc)
+Phase: 28.2 of 28 (RDS Health & Performance Monitoring Research)
+Plan: 1 of 2 (In progress)
+Status: Phase 28.2 in progress - Monitoring data layer (SSH + SNMP) complete
+Last activity: 2026-02-06 — Completed 28.2-01-PLAN.md (Monitoring data layer via SSH and SNMP)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [███████████] 52.6% (10/19 plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [███████████] 57.9% (11/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 106 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 10 v0.10.0)
+- Total plans completed: 107 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 11 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 10/19 (52.6%)
-- Average duration: ~7 min per plan (v0.9.0), ~7 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 11/19 (57.9%)
+- Average duration: ~7 min per plan (v0.9.0), ~8 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -31,10 +31,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 9/18 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 11/19 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 4 phases (26-28.1), 10/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete)
+- v0.10.0: 5 phases (26-28.2), 11/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 in progress)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28.2-01): Use SSH for disk performance metrics, SNMP for hardware health (dual-approach leverages protocol strengths)
+- v0.10.0 (Phase 28.2-01): Convert RouterOS rate units (bps/kbps/Mbps/Gbps) to bytes/sec (Prometheus convention)
+- v0.10.0 (Phase 28.2-01): Leave SNMP disk capacity OIDs at 0 (requires hardware validation of hrStorageTable index)
+- v0.10.0 (Phase 28.2-01): MockClient returns healthy system defaults when metrics not configured (simplifies test setup)
 - v0.10.0 (Phase 28.1-01): Use func() int callback instead of AttachmentCounter interface (simpler, avoids import cycle)
 - v0.10.0 (Phase 28.1-01): SetAttachmentManager registers GaugeFunc dynamically (metric only appears in controller)
 - v0.10.0 (Phase 28.1-01): Metric counts volumes not per-node attachments (dual-attach during migration = 1 not 2)
@@ -137,6 +141,12 @@ Recent decisions affecting current work:
   - **Scope**: Fix gauge to query current attachment manager state, add unit/integration tests, validate metric accuracy
   - **Priority**: Must fix before Helm chart release - users deploying via Helm will rely on accurate metrics for production monitoring
 
+- **Phase 28.2 inserted after Phase 28.1**: RDS Health & Performance Monitoring Research
+  - **Trigger**: Discovery that RouterOS `/disk monitor-traffic` command exposes IOPS, throughput, latency, and queue depth metrics previously thought unavailable
+  - **Impact**: Without RDS-side health metrics, operators have limited visibility into storage performance and can't detect degraded RAID, high latency, or disk saturation before failures occur
+  - **Scope**: Research monitoring options (SNMP MIBs, RouterOS API, SSH polling of /disk monitor-traffic), document metric capabilities, assess implementation complexity and production overhead
+  - **Priority**: Research before Helm chart (Phase 28) to determine if RDS health metrics should be included in initial Helm release or deferred to future version
+
 ### Pending Todos
 
 None yet. (Use `/gsd:add-todo` to capture ideas during execution)
@@ -148,11 +158,22 @@ None. All pre-existing test failures resolved via Quick-003.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Phase 28.1 complete (metric accuracy fix)
+Stopped at: Phase 28.2-01 complete (monitoring data layer)
 Resume file: None
-Next action: Continue with Phase 28 (Helm chart) - metric fix unblocks Helm release.
+Next action: Continue with Phase 28.2-02 (Prometheus metrics exporter) - data layer ready for metric exposition.
 
-**v0.10.0 Progress (10/19 plans):**
+**v0.10.0 Progress (11/19 plans):**
+- Phase 28.2-01: RDS monitoring data layer via SSH and SNMP (dual-protocol approach)
+  - Added DiskMetrics struct with 10 fields (IOPS, throughput, latency, queue depth, active time)
+  - Added HardwareHealthMetrics struct with 10 fields (CPU/board temps, fans, PSU power/temps, disk capacity)
+  - Implemented GetDiskMetrics via SSH `/disk monitor-traffic <slot> once` command
+  - Implemented GetHardwareHealth via SNMP MIKROTIK-MIB OID queries (gosnmp v1.37.0)
+  - Added parseDiskMetrics with rate unit conversion (bps/kbps/Mbps/Gbps → bytes/sec)
+  - Added parseFloat64 for SNMP PDU type conversion (Integer/Gauge32/Counter32)
+  - Extended MockClient with SetDiskMetrics/SetHardwareHealth and reasonable defaults
+  - Created 10 unit tests: disk metrics parsing (4), rate conversion (6), SNMP parsing (4), mock behavior (1)
+  - All tests pass, interface satisfaction verified on sshClient and MockClient
+  - Ready for Phase 28.2-02 Prometheus metrics exporter
 - Phase 28.1-01: Fix rds_csi_nvme_connections_active metric accuracy (GitHub Issue #19)
   - Replaced counter-derived gauge (Inc/Dec pattern) with GaugeFunc querying AttachmentManager state
   - Metric now survives controller restarts (derived from persistent attachment state)
@@ -229,4 +250,4 @@ Next action: Continue with Phase 28 (Helm chart) - metric fix unblocks Helm rele
 - Quick 005 (2026-02-06): Fixed README.md inaccuracies (removed fake Helm section, updated URLs to GitHub)
 
 ---
-*Last updated: 2026-02-06 after Phase 26-02 completion*
+*Last updated: 2026-02-06 after Phase 28.2-01 completion*
