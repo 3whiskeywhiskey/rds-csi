@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 26 of 28 (Volume Snapshots)
-Plan: 1 of 3
-Status: In progress - Snapshot data model foundation complete
-Last activity: 2026-02-06 — Completed 26-01-PLAN.md (snapshot types and interface foundation)
+Plan: 2 of 3
+Status: In progress - Snapshot SSH commands complete
+Last activity: 2026-02-06 — Completed 26-02-PLAN.md (snapshot SSH command implementations)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [████████░░] 22.2% (4/18 plans estimated)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [████████░░] 27.8% (5/18 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 100 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 4 v0.10.0)
+- Total plans completed: 101 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 5 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 4/18 (22.2%)
-- Average duration: ~7 min per plan (v0.9.0), ~4.5 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 5/18 (27.8%)
+- Average duration: ~7 min per plan (v0.9.0), ~4.6 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -34,7 +34,7 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 | v0.10.0 Feature Enhancements | 26-28 | 4/18 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 3 phases (26-28), 4/18 plans, in progress (Phase 26 active, Phase 27 complete)
+- v0.10.0: 3 phases (26-28), 5/18 plans, in progress (Phase 26 active, Phase 27 complete)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,11 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 26-02): CreateSnapshot uses read-only=yes for immutable snapshots
+- v0.10.0 (Phase 26-02): DeleteSnapshot idempotent (not found = return nil per CSI spec)
+- v0.10.0 (Phase 26-02): RestoreSnapshot creates writable clone (no read-only flag) + disk entry
+- v0.10.0 (Phase 26-02): parseSnapshotInfo handles missing fields gracefully (controller tracks metadata)
+- v0.10.0 (Phase 26-02): ListSnapshots filters snap-* prefix at parse level (defense in depth)
 - v0.10.0 (Phase 26-01): Reuse volumeNamespace UUID for SnapshotNameToID (no collision risk between volume names and snapshot names)
 - v0.10.0 (Phase 26-01): MockClient.CreateSnapshot is idempotent (same name + same source = return existing)
 - v0.10.0 (Phase 26-01): MockClient.DeleteSnapshot is idempotent (not found = return nil)
@@ -116,18 +121,24 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 05:33
-Stopped at: Completed Phase 26 Plan 01 (snapshot data model foundation) - Phase 26 in progress
+Last session: 2026-02-06 05:36
+Stopped at: Completed Phase 26 Plan 02 (snapshot SSH commands) - Phase 26 in progress
 Resume file: None
-Next action: Execute Phase 26 Plan 02 (snapshot SSH commands) using `/gsd:execute-phase 26 02`
+Next action: Execute Phase 26 Plan 03 (controller service) using `/gsd:execute-phase 26 03`
 
-**v0.10.0 Progress (4/18 plans):**
+**v0.10.0 Progress (5/18 plans):**
+- Phase 26-02: Snapshot SSH commands with RouterOS Btrfs subvolume operations
+  - Implemented 5 sshClient snapshot methods (CreateSnapshot, DeleteSnapshot, GetSnapshot, ListSnapshots, RestoreSnapshot)
+  - Added parseSnapshotInfo and parseSnapshotList for RouterOS output parsing
+  - Auto-cleanup on partial failures, idempotent operations per CSI spec
+  - RestoreSnapshot uses writable snapshot-of-snapshot + disk entry
+  - Full unit test coverage (4 test functions, all passing)
 - Phase 26-01: Snapshot data model foundation with types, ID utilities, RDSClient interface extension, and MockClient implementation
   - Created SnapshotInfo, CreateSnapshotOptions, SnapshotNotFoundError types
   - Created snapshotid.go with GenerateSnapshotID, ValidateSnapshotID, SnapshotNameToID
   - Extended RDSClient interface with 5 snapshot methods
   - Implemented full snapshot CRUD in MockClient with idempotency
-  - Added stub implementations to sshClient (returns "not yet implemented")
+  - Added stub implementations to sshClient (replaced by Plan 26-02)
 - Phase 27-01: Hardware validation guide with 7 test cases (TC-01 through TC-07)
   - Created HARDWARE_VALIDATION.md (1565 lines) with executable test procedures
   - Performance baselines documented (timings, I/O benchmarks)
@@ -157,4 +168,4 @@ Next action: Execute Phase 26 Plan 02 (snapshot SSH commands) using `/gsd:execut
 - Quick 005 (2026-02-06): Fixed README.md inaccuracies (removed fake Helm section, updated URLs to GitHub)
 
 ---
-*Last updated: 2026-02-06 after Phase 27 completion (3/3 plans)*
+*Last updated: 2026-02-06 after Phase 26-02 completion*
