@@ -47,16 +47,16 @@
 
 ### Volume Snapshots (SNAP)
 
-- [ ] **SNAP-01**: CreateSnapshot capability advertised in controller service
-- [ ] **SNAP-02**: CreateSnapshot creates Btrfs snapshot via SSH/RouterOS
-- [ ] **SNAP-03**: CreateSnapshot stores snapshot metadata in VolumeSnapshotContent
-- [ ] **SNAP-04**: DeleteSnapshot removes Btrfs snapshot and cleans up metadata
-- [ ] **SNAP-05**: ListSnapshots returns existing snapshots via RouterOS query
-- [ ] **SNAP-06**: CreateVolume from snapshot (restore) creates new volume from Btrfs snapshot
-- [ ] **SNAP-07**: Snapshot operations pass CSI sanity snapshot tests
-- [ ] **SNAP-08**: external-snapshotter sidecar integrated in controller deployment
-- [ ] **SNAP-09**: VolumeSnapshotClass StorageClass parameter support
-- [ ] **SNAP-10**: Snapshot size and creation timestamp tracked in metadata
+- [x] **SNAP-01**: CreateSnapshot capability advertised in controller service
+- [x] **SNAP-02**: CreateSnapshot creates Btrfs snapshot via SSH/RouterOS
+- [x] **SNAP-03**: CreateSnapshot stores snapshot metadata in VolumeSnapshotContent
+- [x] **SNAP-04**: DeleteSnapshot removes Btrfs snapshot and cleans up metadata
+- [x] **SNAP-05**: ListSnapshots returns existing snapshots via RouterOS query
+- [x] **SNAP-06**: CreateVolume from snapshot (restore) creates new volume from Btrfs snapshot
+- [x] **SNAP-07**: Snapshot operations pass CSI sanity snapshot tests
+- [x] **SNAP-08**: external-snapshotter sidecar integrated in controller deployment
+- [x] **SNAP-09**: VolumeSnapshotClass StorageClass parameter support
+- [x] **SNAP-10**: Snapshot size and creation timestamp tracked in metadata
 
 ### Documentation & Validation (DOC)
 
@@ -138,16 +138,16 @@
 | COV-04 | Phase 25 | Complete |
 | COV-05 | Phase 25 | Complete |
 | COV-06 | Phase 25 | Complete |
-| SNAP-01 | Phase 26 | Pending |
-| SNAP-02 | Phase 26 | Pending |
-| SNAP-03 | Phase 26 | Pending |
-| SNAP-04 | Phase 26 | Pending |
-| SNAP-05 | Phase 26 | Pending |
-| SNAP-06 | Phase 26 | Pending |
-| SNAP-07 | Phase 26 | Pending |
-| SNAP-08 | Phase 26 | Pending |
-| SNAP-09 | Phase 26 | Pending |
-| SNAP-10 | Phase 26 | Pending |
+| SNAP-01 | Phase 26 | Complete |
+| SNAP-02 | Phase 26 | Complete |
+| SNAP-03 | Phase 26 | Complete |
+| SNAP-04 | Phase 26 | Complete |
+| SNAP-05 | Phase 26 | Complete |
+| SNAP-06 | Phase 26 | Complete |
+| SNAP-07 | Phase 26 | Complete |
+| SNAP-08 | Phase 26 | Complete |
+| SNAP-09 | Phase 26 | Complete |
+| SNAP-10 | Phase 26 | Complete |
 | DOC-01 | Phase 27 | Complete |
 | DOC-02 | Phase 27 | Complete |
 | DOC-03 | Phase 27 | Complete |

@@ -52,12 +52,12 @@ See milestone archives in `.planning/milestones/` for complete phase details:
 **Plans**: 6 plans
 
 Plans:
-- [ ] 26-01-PLAN.md -- Snapshot foundation (types, ID utils, interface extension, mock support)
-- [ ] 26-02-PLAN.md -- RDS SSH snapshot commands (Btrfs subvolume operations + unit tests)
-- [ ] 26-03-PLAN.md -- Controller RPCs: CreateSnapshot, DeleteSnapshot + capability registration
-- [ ] 26-04-PLAN.md -- Controller RPCs: ListSnapshots pagination + CreateVolume from snapshot restore
-- [ ] 26-05-PLAN.md -- Deployment manifests (RBAC, csi-snapshotter sidecar, VolumeSnapshotClass)
-- [ ] 26-06-PLAN.md -- Testing (CSI sanity snapshot config + controller unit tests)
+- [x] 26-01-PLAN.md -- Snapshot foundation (types, ID utils, interface extension, mock support)
+- [x] 26-02-PLAN.md -- RDS SSH snapshot commands (Btrfs subvolume operations + unit tests)
+- [x] 26-03-PLAN.md -- Controller RPCs: CreateSnapshot, DeleteSnapshot + capability registration
+- [x] 26-04-PLAN.md -- Controller RPCs: ListSnapshots pagination + CreateVolume from snapshot restore
+- [x] 26-05-PLAN.md -- Deployment manifests (RBAC, csi-snapshotter sidecar, VolumeSnapshotClass)
+- [x] 26-06-PLAN.md -- Testing (CSI sanity snapshot config + controller unit tests)
 
 #### Phase 27: Documentation & Hardware Validation
 **Goal**: Comprehensive documentation for hardware validation, testing, capabilities, and troubleshooting -- enabling operators to validate v0.9.0 against production hardware
@@ -103,9 +103,9 @@ Phases execute in numeric order: 26 → 27 → 28
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-25.2 | v0.1.0-v0.9.0 | Complete | ✅ Complete | 2026-02-06 |
-| 26. Volume Snapshots | v0.10.0 | 0/6 | Not started | - |
+| 26. Volume Snapshots | v0.10.0 | 6/6 | ✅ Complete | 2026-02-06 |
 | 27. Documentation & Hardware Validation | v0.10.0 | 3/3 | ✅ Complete | 2026-02-05 |
 | 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-06 after Phase 26 planning*
+*Last updated: 2026-02-06 after Phase 26 execution*
