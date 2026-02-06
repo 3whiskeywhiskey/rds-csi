@@ -110,7 +110,7 @@ func TestRecordNVMeConnect(t *testing.T) {
 	// Test failure
 	m.RecordNVMeConnect(errors.New("connection failed"), 0)
 
-	// Verify active connections gauge increased on success
+	// Verify counters and histogram work without SetAttachmentManager
 	handler := m.Handler()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -120,20 +120,25 @@ func TestRecordNVMeConnect(t *testing.T) {
 	if !strings.Contains(body, "rds_csi_nvme_connects_total") {
 		t.Error("expected nvme_connects_total metric")
 	}
-	if !strings.Contains(body, "rds_csi_nvme_connections_active") {
-		t.Error("expected nvme_connections_active metric")
-	}
 	if !strings.Contains(body, "rds_csi_nvme_connect_duration_seconds") {
 		t.Error("expected nvme_connect_duration_seconds metric")
+	}
+	// nvme_connections_active should NOT appear without SetAttachmentManager
+	if strings.Contains(body, "rds_csi_nvme_connections_active") {
+		t.Error("nvme_connections_active should not appear without SetAttachmentManager")
 	}
 }
 
 func TestRecordNVMeConnect_ActiveConnectionsGauge(t *testing.T) {
 	m := NewMetrics()
 
-	// Connect successfully 3 times
-	m.RecordNVMeConnect(nil, 100*time.Millisecond)
-	m.RecordNVMeConnect(nil, 100*time.Millisecond)
+	// Create a mock attachment count function
+	attachmentCount := 3
+	m.SetAttachmentManager(func() int {
+		return attachmentCount
+	})
+
+	// RecordNVMeConnect should still work for counters
 	m.RecordNVMeConnect(nil, 100*time.Millisecond)
 
 	handler := m.Handler()
@@ -150,13 +155,14 @@ func TestRecordNVMeConnect_ActiveConnectionsGauge(t *testing.T) {
 func TestRecordNVMeDisconnect(t *testing.T) {
 	m := NewMetrics()
 
-	// Connect first
-	m.RecordNVMeConnect(nil, 100*time.Millisecond)
+	// Set up attachment manager with 0 attachments
+	m.SetAttachmentManager(func() int {
+		return 0
+	})
 
-	// Disconnect
+	// RecordNVMeDisconnect should not panic
 	m.RecordNVMeDisconnect()
 
-	// Active connections should be 0
 	handler := m.Handler()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -171,23 +177,121 @@ func TestRecordNVMeDisconnect(t *testing.T) {
 func TestRecordNVMeDisconnect_MultipleConnections(t *testing.T) {
 	m := NewMetrics()
 
-	// Connect 3 times
-	m.RecordNVMeConnect(nil, 100*time.Millisecond)
-	m.RecordNVMeConnect(nil, 100*time.Millisecond)
-	m.RecordNVMeConnect(nil, 100*time.Millisecond)
+	// Start with 3 attachments, then reduce to 2
+	attachmentCount := 3
+	m.SetAttachmentManager(func() int {
+		return attachmentCount
+	})
 
-	// Disconnect once
-	m.RecordNVMeDisconnect()
+	// Verify starts at 3
+	body := scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 3") {
+		t.Errorf("expected nvme_connections_active to be 3, got:\n%s", body)
+	}
 
+	// Simulate detach (reduce count)
+	attachmentCount = 2
+
+	// Verify now shows 2
+	body = scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 2") {
+		t.Errorf("expected nvme_connections_active to be 2, got:\n%s", body)
+	}
+}
+
+func TestNVMeConnectionsActive_QueriesAttachmentManager(t *testing.T) {
+	m := NewMetrics()
+
+	// Without SetAttachmentManager, metric should not appear
+	body := scrapeMetrics(t, m)
+	if strings.Contains(body, "nvme_connections_active") {
+		t.Error("nvme_connections_active should not appear without SetAttachmentManager")
+	}
+
+	// Set up with 5 attachments
+	m.SetAttachmentManager(func() int {
+		return 5
+	})
+
+	body = scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 5") {
+		t.Errorf("expected nvme_connections_active to be 5, got:\n%s", body)
+	}
+}
+
+func TestNVMeConnectionsActive_SurvivesRestart(t *testing.T) {
+	// Simulate first controller instance
+	m1 := NewMetrics()
+	count1 := 16
+	m1.SetAttachmentManager(func() int {
+		return count1
+	})
+
+	body := scrapeMetrics(t, m1)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 16") {
+		t.Errorf("first instance should show 16, got:\n%s", body)
+	}
+
+	// Simulate controller restart: new Metrics instance, same attachment count
+	// (AttachmentManager rebuilds state from VolumeAttachments on startup)
+	m2 := NewMetrics()
+	count2 := 16 // Same count - rebuilt from VolumeAttachments
+	m2.SetAttachmentManager(func() int {
+		return count2
+	})
+
+	body = scrapeMetrics(t, m2)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 16") {
+		t.Errorf("after restart, should still show 16 (rebuilt from VolumeAttachments), got:\n%s", body)
+	}
+}
+
+func TestNVMeConnectionsActive_DynamicUpdates(t *testing.T) {
+	m := NewMetrics()
+	count := 0
+	m.SetAttachmentManager(func() int {
+		return count
+	})
+
+	// Start at 0
+	body := scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 0") {
+		t.Errorf("expected 0, got:\n%s", body)
+	}
+
+	// Add attachments
+	count = 5
+	body = scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 5") {
+		t.Errorf("expected 5, got:\n%s", body)
+	}
+
+	// Remove some
+	count = 2
+	body = scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 2") {
+		t.Errorf("expected 2, got:\n%s", body)
+	}
+
+	// Remove all
+	count = 0
+	body = scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_csi_nvme_connections_active 0") {
+		t.Errorf("expected 0, got:\n%s", body)
+	}
+}
+
+// scrapeMetrics is a test helper that scrapes the /metrics endpoint and returns the body.
+func scrapeMetrics(t *testing.T, m *Metrics) string {
+	t.Helper()
 	handler := m.Handler()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "rds_csi_nvme_connections_active 2") {
-		t.Errorf("expected nvme_connections_active to be 2, got:\n%s", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics endpoint returned status %d", rec.Code)
 	}
+	return rec.Body.String()
 }
 
 func TestRecordMountOp(t *testing.T) {
@@ -372,6 +476,11 @@ func TestRecordEventPosted_ReasonLabels(t *testing.T) {
 
 func TestMetricsNamespace(t *testing.T) {
 	m := NewMetrics()
+
+	// Set up attachment manager to ensure nvme_connections_active is included
+	m.SetAttachmentManager(func() int {
+		return 1
+	})
 
 	// Record something to populate metrics
 	m.RecordStaleMountDetected()
