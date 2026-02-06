@@ -244,6 +244,7 @@ For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubern
 
 ## Documentation
 
+- **[Hardware Validation Guide](docs/HARDWARE_VALIDATION.md)** - Step-by-step test procedures for production RDS hardware
 - **[Kubernetes Setup Guide](docs/kubernetes-setup.md)** - Complete deployment guide
 - [Architecture](docs/architecture.md) - System design and component interactions
 - [RDS Commands Reference](docs/rds-commands.md) - RouterOS CLI commands used
