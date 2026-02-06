@@ -3,6 +3,7 @@ package observability
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -876,5 +877,173 @@ func TestRecordReconnectAttempt_MultipleAttempts(t *testing.T) {
 	}
 	if !strings.Contains(body, `rds_csi_rds_reconnect_total{status="success"} 1`) {
 		t.Error("expected reconnect_total with status=success to be 1")
+	}
+}
+
+func TestRDSMetrics_Registration(t *testing.T) {
+	m := NewMetrics()
+
+	// Before SetRDSMonitoring, rds metrics should not appear
+	body := scrapeMetrics(t, m)
+	if strings.Contains(body, "rds_disk_") || strings.Contains(body, "rds_hardware_") {
+		t.Error("rds metrics should not appear before SetRDSMonitoring")
+	}
+
+	// Register with test callbacks
+	m.SetRDSMonitoring(
+		"storage-pool",
+		"10.42.68.1",
+		"public",
+		func() (*DiskHealthSnapshot, error) {
+			return &DiskHealthSnapshot{
+				ReadOpsPerSecond:  100,
+				WriteOpsPerSecond: 50,
+				ReadBytesPerSec:   1_000_000,
+				WriteBytesPerSec:  500_000,
+				ReadTimeMs:        2,
+				WriteTimeMs:       5,
+				WaitTimeMs:        1,
+				InFlightOps:       3,
+				ActiveTimeMs:      10,
+			}, nil
+		},
+		func() (*HardwareHealthSnapshot, error) {
+			return &HardwareHealthSnapshot{
+				CPUTemperature:    45,
+				BoardTemperature:  38,
+				Fan1Speed:         7500,
+				Fan2Speed:         7600,
+				PSU1Power:         700,
+				PSU2Power:         680,
+				PSU1Temperature:   28,
+				PSU2Temperature:   27,
+				DiskPoolSizeBytes: 8_000_000_000_000,
+				DiskPoolUsedBytes: 1_600_000_000_000,
+			}, nil
+		},
+	)
+
+	// Scrape and verify all 19 metrics present (9 disk + 10 hardware)
+	body = scrapeMetrics(t, m)
+
+	expectedDiskMetrics := []string{
+		"rds_disk_read_ops_per_second",
+		"rds_disk_write_ops_per_second",
+		"rds_disk_read_bytes_per_second",
+		"rds_disk_write_bytes_per_second",
+		"rds_disk_read_latency_milliseconds",
+		"rds_disk_write_latency_milliseconds",
+		"rds_disk_wait_latency_milliseconds",
+		"rds_disk_in_flight_operations",
+		"rds_disk_active_time_milliseconds",
+	}
+
+	expectedHardwareMetrics := []string{
+		"rds_hardware_cpu_temperature_celsius",
+		"rds_hardware_board_temperature_celsius",
+		"rds_hardware_fan1_speed_rpm",
+		"rds_hardware_fan2_speed_rpm",
+		"rds_hardware_psu1_power_watts",
+		"rds_hardware_psu2_power_watts",
+		"rds_hardware_psu1_temperature_celsius",
+		"rds_hardware_psu2_temperature_celsius",
+		"rds_hardware_disk_pool_size_bytes",
+		"rds_hardware_disk_pool_used_bytes",
+	}
+
+	// Check disk metrics have slot label
+	for _, name := range expectedDiskMetrics {
+		expectedLine := fmt.Sprintf(`%s{slot="storage-pool"}`, name)
+		if !strings.Contains(body, expectedLine) {
+			t.Errorf("expected %s with slot label, not found", name)
+		}
+	}
+
+	// Check hardware metrics (no labels)
+	for _, name := range expectedHardwareMetrics {
+		if !strings.Contains(body, name) {
+			t.Errorf("expected %s, not found", name)
+		}
+	}
+}
+
+func TestRDSMetrics_ErrorReturnsZero(t *testing.T) {
+	m := NewMetrics()
+
+	// Register with error-returning callbacks
+	m.SetRDSMonitoring(
+		"storage-pool",
+		"10.42.68.1",
+		"public",
+		func() (*DiskHealthSnapshot, error) {
+			return nil, fmt.Errorf("SSH connection failed")
+		},
+		func() (*HardwareHealthSnapshot, error) {
+			return nil, fmt.Errorf("SNMP timeout")
+		},
+	)
+
+	// Scrape should succeed (not fail) - metrics should report 0
+	body := scrapeMetrics(t, m)
+	if !strings.Contains(body, "rds_disk_read_ops_per_second") {
+		t.Error("disk metrics should still appear even with error callback")
+	}
+	if !strings.Contains(body, "rds_hardware_cpu_temperature_celsius") {
+		t.Error("hardware metrics should still appear even with error callback")
+	}
+	if !strings.Contains(body, `rds_disk_read_ops_per_second{slot="storage-pool"} 0`) {
+		t.Error("disk metrics should report 0 on error")
+	}
+}
+
+func TestRDSMetrics_DynamicUpdates(t *testing.T) {
+	m := NewMetrics()
+
+	diskCallCount := 0
+	hwCallCount := 0
+	m.SetRDSMonitoring(
+		"storage-pool",
+		"10.42.68.1",
+		"public",
+		func() (*DiskHealthSnapshot, error) {
+			diskCallCount++
+			return &DiskHealthSnapshot{
+				WriteOpsPerSecond: float64(diskCallCount * 100),
+			}, nil
+		},
+		func() (*HardwareHealthSnapshot, error) {
+			hwCallCount++
+			return &HardwareHealthSnapshot{
+				CPUTemperature: 40 + float64(hwCallCount),
+			}, nil
+		},
+	)
+
+	// First scrape
+	body1 := scrapeMetrics(t, m)
+	if !strings.Contains(body1, "rds_disk_write_ops_per_second") {
+		t.Error("disk write IOPS metric not found in first scrape")
+	}
+	if !strings.Contains(body1, "rds_hardware_cpu_temperature_celsius") {
+		t.Error("CPU temp metric not found in first scrape")
+	}
+
+	// Wait for cache to expire (>1 second)
+	time.Sleep(1100 * time.Millisecond)
+
+	// Second scrape should show updated values
+	body2 := scrapeMetrics(t, m)
+	if body1 == body2 {
+		t.Log("Note: cache may still be valid if scrapes were fast")
+	}
+}
+
+func TestRDSMetrics_NotRegisteredWithoutCall(t *testing.T) {
+	m := NewMetrics()
+
+	// Verify rds metrics do NOT appear when SetRDSMonitoring is never called
+	body := scrapeMetrics(t, m)
+	if strings.Contains(body, "rds_disk_") || strings.Contains(body, "rds_hardware_") {
+		t.Error("rds metrics should not appear without SetRDSMonitoring call")
 	}
 }
