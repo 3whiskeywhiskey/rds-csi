@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 26 of 28 (Volume Snapshots)
-Plan: 3 of 3 (Phase complete!)
-Status: Phase 26 complete - CSI controller snapshot service implemented
-Last activity: 2026-02-06 — Completed 26-03-PLAN.md (CSI controller snapshot RPCs)
+Plan: 4 of 4 (Phase complete!)
+Status: Phase 26 complete - Full snapshot lifecycle with restore
+Last activity: 2026-02-06 — Completed 26-04-PLAN.md (ListSnapshots & snapshot restore)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████░] 33.3% (6/18 plans estimated)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████░] 38.9% (7/18 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 102 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 6 v0.10.0)
+- Total plans completed: 103 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 7 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 6/18 (33.3%)
-- Average duration: ~7 min per plan (v0.9.0), ~4.0 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 7/18 (38.9%)
+- Average duration: ~7 min per plan (v0.9.0), ~3.5 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 26-04): ListSnapshots uses integer-based pagination tokens (CSI spec pattern, matching hostpath driver)
+- v0.10.0 (Phase 26-04): ListSnapshots returns empty response (not error) for invalid/missing snapshot ID (CSI spec)
+- v0.10.0 (Phase 26-04): CreateVolume from snapshot enforces minimum size >= snapshot size (CSI spec requirement)
+- v0.10.0 (Phase 26-04): ContentSource included in CreateVolume response for Kubernetes tracking
 - v0.10.0 (Phase 26-03): Use timestamppb for CSI CreationTime field (protobuf compatibility)
 - v0.10.0 (Phase 26-03): getBtrfsFSLabel checks params then defaults to storage-pool (configurable)
 - v0.10.0 (Phase 26-03): CreateSnapshot validates volume ID format before RDS operations (security)
@@ -125,12 +129,20 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 05:49
-Stopped at: Completed Phase 26 Plan 03 (CSI controller snapshot RPCs) - Phase 26 COMPLETE
+Last session: 2026-02-06 06:08
+Stopped at: Completed Phase 26 Plan 04 (ListSnapshots & snapshot restore) - Phase 26 COMPLETE
 Resume file: None
-Next action: Phase 26 (Volume Snapshots) is complete. Ready for next phase or milestone planning.
+Next action: Phase 26 (Volume Snapshots) complete. Ready for next phase (Phase 28: Cross-Cluster Volume Migration).
 
-**v0.10.0 Progress (6/18 plans):**
+**v0.10.0 Progress (7/18 plans):**
+- Phase 26-04: ListSnapshots with pagination and CreateVolume snapshot restore
+  - Implemented ListSnapshots with CSI-compliant integer-based pagination
+  - Single snapshot lookup, source volume filtering, deterministic sorting
+  - CreateVolume detects VolumeContentSource and routes to snapshot restore
+  - createVolumeFromSnapshot validates snapshot exists, enforces minimum size
+  - ContentSource included in response for Kubernetes tracking
+  - Reject volume cloning with actionable error (not yet supported)
+  - Updated tests to reflect ListSnapshots now implemented
 - Phase 26-03: CSI controller snapshot service (CreateSnapshot, DeleteSnapshot RPCs)
   - Implemented CreateSnapshot with idempotency (same name + source = return existing)
   - Implemented DeleteSnapshot with idempotency (not found = success)
