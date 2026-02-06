@@ -211,6 +211,7 @@ func TestNodeGetVolumeStats_AlwaysReturnsVolumeCondition(t *testing.T) {
 			name:     "healthy volume returns healthy condition (no stale checker)",
 			volumeID: "pvc-12345678-1234-1234-1234-123456789012",
 			setupServer: func(m *mockMounter) *NodeServer {
+				m.isLikelyMounted = true
 				m.stats = &mount.DeviceStats{
 					TotalBytes:      100 * 1024 * 1024,
 					UsedBytes:       50 * 1024 * 1024,
@@ -228,6 +229,7 @@ func TestNodeGetVolumeStats_AlwaysReturnsVolumeCondition(t *testing.T) {
 			name:     "stale mount due to mount not found returns abnormal condition",
 			volumeID: "pvc-12345678-1234-1234-1234-123456789012",
 			setupServer: func(m *mockMounter) *NodeServer {
+				m.isLikelyMounted = true
 				return createNodeServerWithStaleBehavior(m, staleCheckBehavior{
 					stale:  true,
 					reason: mount.StaleReasonMountNotFound,
@@ -240,6 +242,7 @@ func TestNodeGetVolumeStats_AlwaysReturnsVolumeCondition(t *testing.T) {
 			name:     "stale mount due to device disappeared returns abnormal condition",
 			volumeID: "pvc-12345678-1234-1234-1234-123456789012",
 			setupServer: func(m *mockMounter) *NodeServer {
+				m.isLikelyMounted = true
 				return createNodeServerWithStaleBehavior(m, staleCheckBehavior{
 					stale:  true,
 					reason: mount.StaleReasonDeviceDisappeared,
@@ -255,6 +258,7 @@ func TestNodeGetVolumeStats_AlwaysReturnsVolumeCondition(t *testing.T) {
 				// On macOS, device mismatch test is not possible because /dev/nvme devices
 				// don't exist. Instead, test that when stale checker returns an error,
 				// the VolumeCondition is still set (as "inconclusive").
+				m.isLikelyMounted = true
 				return createNodeServerWithStaleBehavior(m, staleCheckBehavior{
 					stale:  true,
 					reason: mount.StaleReasonDeviceMismatch,
@@ -267,6 +271,7 @@ func TestNodeGetVolumeStats_AlwaysReturnsVolumeCondition(t *testing.T) {
 			name:     "invalid volume ID still returns condition (defaults to healthy)",
 			volumeID: "invalid-volume-id", // Can't derive NQN
 			setupServer: func(m *mockMounter) *NodeServer {
+				m.isLikelyMounted = true
 				m.stats = &mount.DeviceStats{
 					TotalBytes:      100 * 1024 * 1024,
 					UsedBytes:       50 * 1024 * 1024,
@@ -379,6 +384,7 @@ func TestNodeGetVolumeStats_Validation(t *testing.T) {
 // TestNodeGetVolumeStats_UsageReported tests that volume usage stats are reported
 func TestNodeGetVolumeStats_UsageReported(t *testing.T) {
 	mounter := &mockMounter{
+		isLikelyMounted: true,
 		stats: &mount.DeviceStats{
 			TotalBytes:      1024 * 1024 * 1024, // 1GB
 			UsedBytes:       512 * 1024 * 1024,  // 512MB
@@ -445,7 +451,9 @@ func TestNodeGetVolumeStats_UsageReported(t *testing.T) {
 // TestNodeGetVolumeStats_StaleMountReturnsEmptyUsage tests that stale mounts
 // return empty usage but still have VolumeCondition
 func TestNodeGetVolumeStats_StaleMountReturnsEmptyUsage(t *testing.T) {
-	mounter := &mockMounter{}
+	mounter := &mockMounter{
+		isLikelyMounted: true,
+	}
 
 	ns := createNodeServerWithStaleBehavior(mounter, staleCheckBehavior{
 		stale:  true,
@@ -479,7 +487,9 @@ func TestNodeGetVolumeStats_StaleMountReturnsEmptyUsage(t *testing.T) {
 // TestNodeGetVolumeStats_MetricsRecorded tests that stale mount detection
 // records metrics
 func TestNodeGetVolumeStats_MetricsRecorded(t *testing.T) {
-	mounter := &mockMounter{}
+	mounter := &mockMounter{
+		isLikelyMounted: true,
+	}
 
 	ns := createNodeServerWithStaleBehavior(mounter, staleCheckBehavior{
 		stale:  true,
@@ -1219,7 +1229,9 @@ func TestNodeGetVolumeStats_VolumeConditionNeverNil(t *testing.T) {
 			name:     "with stale checker",
 			volumeID: "pvc-12345678-1234-1234-1234-123456789012",
 			setup: func() *NodeServer {
-				return createNodeServerNoStaleChecker(&mockMounter{})
+				return createNodeServerNoStaleChecker(&mockMounter{
+					isLikelyMounted: true,
+				})
 			},
 		},
 		{
@@ -1233,7 +1245,9 @@ func TestNodeGetVolumeStats_VolumeConditionNeverNil(t *testing.T) {
 				}
 				return &NodeServer{
 					driver:       driver,
-					mounter:      &mockMounter{},
+					mounter:      &mockMounter{
+						isLikelyMounted: true,
+					},
 					nodeID:       "test-node",
 					staleChecker: nil, // Explicitly nil
 				}
@@ -1243,7 +1257,9 @@ func TestNodeGetVolumeStats_VolumeConditionNeverNil(t *testing.T) {
 			name:     "invalid volume ID (can't derive NQN)",
 			volumeID: "not-a-pvc-format",
 			setup: func() *NodeServer {
-				return createNodeServerNoStaleChecker(&mockMounter{})
+				return createNodeServerNoStaleChecker(&mockMounter{
+					isLikelyMounted: true,
+				})
 			},
 		},
 	}
