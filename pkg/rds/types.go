@@ -51,3 +51,29 @@ type VolumeNotFoundError struct {
 func (e *VolumeNotFoundError) Error() string {
 	return fmt.Sprintf("volume not found: %s", e.Slot)
 }
+
+// SnapshotInfo represents an RDS Btrfs snapshot
+type SnapshotInfo struct {
+	Name          string    // Snapshot name (snap-<uuid>)
+	SourceVolume  string    // Source volume slot (pvc-<uuid>)
+	FileSizeBytes int64     // Size of snapshot (same as source volume)
+	CreatedAt     time.Time // Creation timestamp
+	ReadOnly      bool      // Should always be true for snapshots
+	FSLabel       string    // Btrfs filesystem label
+}
+
+// CreateSnapshotOptions contains parameters for creating a snapshot
+type CreateSnapshotOptions struct {
+	Name         string // snap-<uuid>
+	SourceVolume string // pvc-<uuid> (parent subvolume)
+	FSLabel      string // Btrfs filesystem label
+}
+
+// SnapshotNotFoundError is returned when a snapshot is not found
+type SnapshotNotFoundError struct {
+	Name string
+}
+
+func (e *SnapshotNotFoundError) Error() string {
+	return fmt.Sprintf("snapshot not found: %s", e.Name)
+}
