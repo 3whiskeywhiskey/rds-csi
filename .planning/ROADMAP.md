@@ -132,10 +132,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Helm chart deploys controller and node plugin with configurable values
   2. Chart supports customization of RDS connection parameters (address, SSH port, NVMe port)
-  3. Chart includes RBAC, ServiceAccount, and Secret management
+  3. Chart includes RBAC, ServiceAccount, and Secret reference management (user creates Secret, chart references it)
   4. Chart supports multiple storage classes with different configurations
   5. Chart documentation includes installation instructions and configuration examples
-  6. Chart published to Helm repository (GitHub Pages or OCI registry)
+  6. Chart distributed via git repository (users install from local clone or deploy/helm/ directory)
 **Plans**: 3 plans
 
 Plans:
@@ -158,4 +158,4 @@ Phases execute in numeric order: 26 → 27 → 28.1 → 28.2 → 28
 | 28. Helm Chart | v0.10.0 | 0/3 | Not started | - |
 
 ---
-*Last updated: 2026-02-06 after Phase 28 planning*
+*Last updated: 2026-02-06 after Phase 28 plan revision*
