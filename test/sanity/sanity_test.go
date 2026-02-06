@@ -200,6 +200,12 @@ func TestCSISanity(t *testing.T) {
 		"nvmePort":   "4420",
 	}
 
+	// Snapshot test parameters (enables snapshot sanity test suite)
+	config.TestSnapshotParameters = map[string]string{
+		// No special parameters needed for Btrfs snapshots
+		// btrfsFSLabel is resolved to default "storage-pool" by the controller
+	}
+
 	// Staging/target paths (not used for controller-only tests, but required by config)
 	config.TargetPath = "/tmp/csi-target"
 	config.StagingPath = "/tmp/csi-staging"

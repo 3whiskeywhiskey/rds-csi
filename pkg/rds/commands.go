@@ -774,6 +774,13 @@ func (c *sshClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, e
 		return nil, fmt.Errorf("snapshot creation verification failed: %w", err)
 	}
 
+	// NOTE: SourceVolume should be populated by parseSnapshotInfo if the backend provides it
+	// (mock server does for testing, real RouterOS may not - tracked by Kubernetes instead)
+	// If not populated, set it manually from opts for testing compatibility
+	if snapshot.SourceVolume == "" {
+		snapshot.SourceVolume = opts.SourceVolume
+	}
+
 	klog.V(2).Infof("Created snapshot %s from volume %s", opts.Name, opts.SourceVolume)
 	klog.V(4).Infof("Created snapshot %s (source=%s, fs=%s)", opts.Name, opts.SourceVolume, opts.FSLabel)
 	return snapshot, nil
@@ -969,9 +976,15 @@ func parseSnapshotInfo(output string) (*SnapshotInfo, error) {
 		snapshot.FSLabel = match[1]
 	}
 
-	// NOTE: RouterOS may not return source volume or creation time in subvolume output.
-	// These fields will be tracked by the CSI controller layer in VolumeSnapshotContent annotations.
-	// For now, we leave them empty and the controller will populate them from its metadata.
+	// Extract source volume if present (mock server provides this for testing, real RouterOS doesn't)
+	// NOTE: Real RouterOS may not return source volume or creation time in subvolume output.
+	// These fields are tracked by the CSI controller layer in VolumeSnapshotContent annotations.
+	// The mock server provides source-volume for testing idempotency without Kubernetes.
+	if match := regexp.MustCompile(`source-volume="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.SourceVolume = match[1]
+	} else if match := regexp.MustCompile(`source-volume=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.SourceVolume = match[1]
+	}
 
 	return snapshot, nil
 }
