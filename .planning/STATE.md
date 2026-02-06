@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 
 ## Current Position
 
-Phase: 26 of 28 (Volume Snapshots)
-Plan: 6 of 6 (Phase complete!)
-Status: Phase 26 complete - Full snapshot lifecycle with comprehensive testing
-Last activity: 2026-02-06 — Completed 26-06-PLAN.md (Snapshot testing - CSI sanity & unit tests)
+Phase: 28.1 of 28 (Fix rds_csi_nvme_connections_active Metric Accuracy)
+Plan: 1 of 1 (Phase complete!)
+Status: Phase 28.1 complete - GaugeFunc-based metric querying AttachmentManager state
+Last activity: 2026-02-06 — Completed 28.1-01-PLAN.md (Replace counter-derived gauge with GaugeFunc)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██████████] 50.0% (9/18 plans estimated)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [███████████] 52.6% (10/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 105 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 9 v0.10.0)
+- Total plans completed: 106 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 10 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 9/18 (50.0%)
-- Average duration: ~7 min per plan (v0.9.0), ~6 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 10/19 (52.6%)
+- Average duration: ~7 min per plan (v0.9.0), ~7 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -34,7 +34,7 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 | v0.10.0 Feature Enhancements | 26-28 | 9/18 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 3 phases (26-28), 9/18 plans, in progress (Phase 26 complete, Phase 27 complete)
+- v0.10.0: 4 phases (26-28.1), 10/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28.1-01): Use func() int callback instead of AttachmentCounter interface (simpler, avoids import cycle)
+- v0.10.0 (Phase 28.1-01): SetAttachmentManager registers GaugeFunc dynamically (metric only appears in controller)
+- v0.10.0 (Phase 28.1-01): Metric counts volumes not per-node attachments (dual-attach during migration = 1 not 2)
+- v0.10.0 (Phase 28.1-01): RecordNVMeDisconnect retained with empty body (API compatibility)
 - v0.10.0 (Phase 26-06): Mock RDS server outputs source-volume field for testing (real RouterOS doesn't)
 - v0.10.0 (Phase 26-06): parseSnapshotInfo extracts source-volume opportunistically (testing compatibility)
 - v0.10.0 (Phase 26-06): CreateSnapshot populates SourceVolume from opts if backend doesn't provide it
@@ -144,11 +148,18 @@ None. All pre-existing test failures resolved via Quick-003.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Phase 28.1 inserted (GitHub Issue #19 - metric accuracy bug)
+Stopped at: Phase 28.1 complete (metric accuracy fix)
 Resume file: None
-Next action: Plan Phase 28.1 to fix rds_csi_nvme_connections_active metric accuracy bug before Helm chart work.
+Next action: Continue with Phase 28 (Helm chart) - metric fix unblocks Helm release.
 
-**v0.10.0 Progress (9/18 plans):**
+**v0.10.0 Progress (10/19 plans):**
+- Phase 28.1-01: Fix rds_csi_nvme_connections_active metric accuracy (GitHub Issue #19)
+  - Replaced counter-derived gauge (Inc/Dec pattern) with GaugeFunc querying AttachmentManager state
+  - Metric now survives controller restarts (derived from persistent attachment state)
+  - Added SetAttachmentManager wiring in driver.go with func() int callback (no import cycle)
+  - Updated 4 existing tests, added 3 new tests (QueriesAttachmentManager, SurvivesRestart, DynamicUpdates)
+  - All 7 NVMe tests pass, metric correctly reports 16 connections after restart
+  - Production observability bug resolved, ready for Helm chart release
 - Phase 26-06: Snapshot testing (CSI sanity tests + controller unit tests)
   - Configured CSI sanity tests with TestSnapshotParameters (snapshot test suite enabled)
   - Extended mock RDS server with Btrfs snapshot command handlers (create/delete/list/get)
