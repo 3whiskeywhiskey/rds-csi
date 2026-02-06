@@ -295,8 +295,12 @@ sanity: test-sanity-mock
 lint:
 	@echo "Running linters..."
 	@if ! command -v golangci-lint &> /dev/null; then \
-		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.1.5; \
+		echo "Installing golangci-lint v2.1.5..."; \
+		curl -sSfL https://github.com/golangci/golangci-lint/releases/download/v2.1.5/golangci-lint-2.1.5-linux-amd64.tar.gz | \
+		tar -xz -C /tmp && \
+		mkdir -p $(shell go env GOPATH)/bin && \
+		mv /tmp/golangci-lint-2.1.5-linux-amd64/golangci-lint $(shell go env GOPATH)/bin/golangci-lint && \
+		rm -rf /tmp/golangci-lint-2.1.5-linux-amd64; \
 	fi
 	golangci-lint run --timeout 5m
 
