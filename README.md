@@ -1,9 +1,9 @@
 # RDS CSI Driver
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/whiskey/rds-csi-driver)](https://goreportcard.com/report/github.com/whiskey/rds-csi-driver)
-[![Dev Build](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/dev.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/dev.yml)
-[![Main Build](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/main.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/main.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/3whiskeywhiskey/rds-csi)](https://goreportcard.com/report/github.com/3whiskeywhiskey/rds-csi)
+[![Dev Build](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/dev.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/dev.yml)
+[![Main Build](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/main.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/main.yml)
 
 Kubernetes CSI (Container Storage Interface) driver for **MikroTik ROSE Data Server (RDS)** NVMe/TCP storage.
 
@@ -90,7 +90,7 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 - [x] Orphan reconciliation
 - [x] NVMe-oF reconnection resilience
 - [x] Attachment reconciliation
-- [x] Helm chart
+- [ ] Helm chart (planned)
 - [x] Prometheus metrics endpoint
 - [x] Comprehensive test coverage (65%+)
 
@@ -122,27 +122,6 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress
 ## Quick Start
 
 ### Installation
-
-#### Via Helm (Recommended)
-
-```bash
-# Add repository
-helm repo add rds-csi https://git.srvlab.io/whiskey/rds-csi-driver/helm
-
-# Create SSH key secret
-kubectl create secret generic rds-ssh-key \
-  --from-file=id_rsa=/path/to/rds-ssh-key \
-  --namespace kube-system
-
-# Install driver
-helm install rds-csi rds-csi/rds-csi-driver \
-  --namespace kube-system \
-  --set rds.address=10.42.68.1 \
-  --set rds.sshUser=admin \
-  --set rds.nvmePort=4420
-```
-
-#### Via kubectl
 
 ```bash
 # Apply manifests
@@ -307,8 +286,8 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for more details.
 
 ```bash
 # Clone repository
-git clone ssh://git@git.srvlab.io:2222/whiskey/rds-csi-driver.git
-cd rds-csi-driver
+git clone https://github.com/3whiskeywhiskey/rds-csi.git
+cd rds-csi
 
 # Build binary
 make build
@@ -350,7 +329,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Support
 
-- **Issues**: [git.srvlab.io/whiskey/rds-csi-driver/issues](https://git.srvlab.io/whiskey/rds-csi-driver/issues)
+- **Issues**: [github.com/3whiskeywhiskey/rds-csi/issues](https://github.com/3whiskeywhiskey/rds-csi/issues)
 - **Discussions**: Use issue tracker for questions and feature requests
 
 ## Acknowledgments
