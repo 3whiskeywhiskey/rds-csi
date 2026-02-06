@@ -4,194 +4,40 @@
 
 - ✅ **v0.1.0 Foundation** - Phases 1-3 (shipped 2024-03-15)
 - ✅ **v0.2.0 Controller Service** - Phases 4-5 (shipped 2024-04-01)
-- ✅ **v0.3.0 Node Service** - Phases 6-8 (shipped 2024-05-15)
+- ✅ **v0.3.0 Volume Fencing** - Phases 6-8 (shipped 2026-02-03)
 - ✅ **v0.4.0 Production Hardening** - Phases 9-11 (shipped 2024-06-30)
 - ✅ **v0.5.0 NVMe-oF Reconnection** - Phases 12-14 (shipped 2025-01-15)
 - ✅ **v0.6.0 Block Volumes & KubeVirt** - Phases 15-16 (shipped 2025-11-15)
 - ✅ **v0.7.0 Migration Tracking** - Phases 17-19 (shipped 2026-01-20)
 - ✅ **v0.8.0 Code Quality & Logging** - Phases 20-21 (shipped 2026-02-04)
-- 🚧 **v0.9.0 Production Readiness & Test Maturity** - Phases 22-27 (in progress)
+- ✅ **v0.9.0 Production Readiness & Test Maturity** - Phases 22-25.2 (shipped 2026-02-06)
+- 🚧 **v0.10.0 Feature Enhancements** - Phases 26-28 (planned)
 
 ## Phases
 
 <details>
-<summary>✅ v0.1.0 Foundation (Phases 1-3) - SHIPPED 2024-03-15</summary>
+<summary>✅ v0.1.0-v0.9.0 (Phases 1-25.2) - SHIPPED 2026-02-06</summary>
 
-[Historical phases collapsed for brevity]
-
-</details>
-
-<details>
-<summary>✅ v0.2.0 Controller Service (Phases 4-5) - SHIPPED 2024-04-01</summary>
-
-[Historical phases collapsed for brevity]
-
-</details>
-
-<details>
-<summary>✅ v0.3.0 Node Service (Phases 6-8) - SHIPPED 2024-05-15</summary>
-
-[Historical phases collapsed for brevity]
+See milestone archives in `.planning/milestones/` for complete phase details:
+- `.planning/milestones/v0.1.0-ROADMAP.md`
+- `.planning/milestones/v0.2.0-ROADMAP.md`
+- `.planning/milestones/v0.3.0-ROADMAP.md`
+- `.planning/milestones/v0.4.0-ROADMAP.md`
+- `.planning/milestones/v0.5.0-ROADMAP.md`
+- `.planning/milestones/v0.6.0-ROADMAP.md`
+- `.planning/milestones/v0.7.0-ROADMAP.md`
+- `.planning/milestones/v0.8.0-ROADMAP.md`
+- `.planning/milestones/v0.9.0-ROADMAP.md`
 
 </details>
 
-<details>
-<summary>✅ v0.4.0 Production Hardening (Phases 9-11) - SHIPPED 2024-06-30</summary>
+### 🚧 v0.10.0 Feature Enhancements (Planned)
 
-[Historical phases collapsed for brevity]
-
-</details>
-
-<details>
-<summary>✅ v0.5.0 NVMe-oF Reconnection (Phases 12-14) - SHIPPED 2025-01-15</summary>
-
-[Historical phases collapsed for brevity]
-
-</details>
-
-<details>
-<summary>✅ v0.6.0 Block Volumes & KubeVirt (Phases 15-16) - SHIPPED 2025-11-15</summary>
-
-[Historical phases collapsed for brevity]
-
-</details>
-
-<details>
-<summary>✅ v0.7.0 Migration Tracking (Phases 17-19) - SHIPPED 2026-01-20</summary>
-
-[Historical phases collapsed for brevity]
-
-</details>
-
-<details>
-<summary>✅ v0.8.0 Code Quality & Logging (Phases 20-21) - SHIPPED 2026-02-04</summary>
-
-[Historical phases collapsed for brevity]
-
-</details>
-
-### 🚧 v0.9.0 Production Readiness & Test Maturity (In Progress)
-
-**Milestone Goal:** Validate CSI spec compliance and build production-ready testing infrastructure enabling confident v1.0 release
-
-#### Phase 22: CSI Sanity Tests Integration
-**Goal**: CSI spec compliance validated through automated sanity testing in CI
-**Depends on**: Nothing (first phase)
-**Requirements**: COMP-01, COMP-02, COMP-03, COMP-04, COMP-05, COMP-06
-**Success Criteria** (what must be TRUE):
-  1. csi-sanity test suite runs in CI without failures for Identity and Controller services
-  2. All controller service methods pass idempotency validation (CreateVolume/DeleteVolume called multiple times with same parameters return correct responses)
-  3. Negative test cases validate proper CSI error codes (ALREADY_EXISTS, NOT_FOUND, INVALID_ARGUMENT, RESOURCE_EXHAUSTED)
-  4. CSI capability matrix is documented showing which optional capabilities are implemented vs deferred
-  5. Sanity test results are published in CI artifacts for traceability
-**Plans**: 2 plans
-
-Plans:
-- [x] 22-01-PLAN.md — Go-based sanity test infrastructure with mock RDS
-- [x] 22-02-PLAN.md — CI integration and capability documentation
-
-#### Phase 23: Mock RDS Enhancements
-**Goal**: Mock RDS server matches real hardware behavior enabling reliable CI testing
-**Depends on**: Phase 22 (sanity tests identify mock gaps)
-**Requirements**: MOCK-01, MOCK-02, MOCK-03, MOCK-04, MOCK-05, MOCK-06, MOCK-07
-**Success Criteria** (what must be TRUE):
-  1. Mock RDS server handles all volume lifecycle commands used by driver (/disk add, /disk remove, /file print detail)
-  2. Mock server simulates realistic SSH latency (200ms average, 150-250ms range) exposing timeout bugs
-  3. Mock server supports error injection for disk full scenarios, SSH timeout failures, and command parsing errors
-  4. Mock server maintains stateful volume tracking so sequential operations (create, create same ID, delete, delete same ID) behave correctly
-  5. Mock server returns RouterOS-formatted output matching production RDS (version 7.16) for parser validation
-  6. Mock server handles concurrent SSH connections for stress testing without corrupting state
-**Plans**: 2 plans
-
-Plans:
-- [x] 23-01-PLAN.md — Configuration system, timing simulation, and error injection infrastructure
-- [x] 23-02-PLAN.md — Concurrent stress tests and documentation
-
-#### Phase 24: Automated E2E Test Suite
-**Goal**: Kubernetes integration validated through automated E2E tests running in CI
-**Depends on**: Phase 23 (enhanced mock enables reliable E2E CI)
-**Requirements**: E2E-01, E2E-02, E2E-03, E2E-04, E2E-05, E2E-06, E2E-07, E2E-08, E2E-09
-**Success Criteria** (what must be TRUE):
-  1. Automated volume lifecycle test completes full flow (create PVC, stage volume, publish to pod, write data, unpublish, unstage, delete PVC) in CI
-  2. Block volume test with KubeVirt VirtualMachineInstance validates VM can boot and access RDS block storage
-  3. Volume expansion test validates filesystem resizes correctly after PVC expansion request
-  4. Multi-volume test validates driver handles 5+ concurrent volume operations without conflicts
-  5. Cleanup test validates orphan detection finds and reconciles unused volumes on RDS
-  6. Node failure simulation test validates volumes unstage cleanly when node is deleted from cluster
-  7. Controller restart test validates driver rebuilds state from VolumeAttachment objects after pod restart
-  8. E2E test cleanup prevents orphaned resources between runs (unique volume ID prefix per test run)
-**Plans**: 4 plans
-
-Plans:
-- [x] 24-01-PLAN.md — E2E suite infrastructure with Ginkgo v2 and in-process driver
-- [x] 24-02-PLAN.md — Core volume tests (lifecycle, block volume, expansion)
-- [x] 24-03-PLAN.md — Advanced tests (concurrent operations, orphan detection)
-- [x] 24-04-PLAN.md — State recovery tests and CI integration
-
-#### Phase 25: Coverage & Quality Improvements
-**Goal**: Test coverage increased to 70% with critical error paths validated
-**Depends on**: Phase 24 (E2E tests reveal coverage gaps)
-**Requirements**: COV-01, COV-02, COV-03, COV-04, COV-05, COV-06
-**Success Criteria** (what must be TRUE):
-  1. Error paths in controller service have test coverage for SSH failures, disk full scenarios, and invalid parameters
-  2. Error paths in node service have test coverage for NVMe connection failures, mount failures, and device path changes
-  3. Edge cases from sanity test failures have regression tests preventing reoccurrence
-  4. Negative test scenarios validate error handling returns correct CSI error codes for invalid volume IDs, missing volumes, and duplicate operations
-  5. Coverage enforcement in CI fails builds below 65% baseline preventing regression
-  6. Flaky tests are identified and either fixed with proper synchronization or skipped with documented rationale in TESTING.md
-**Plans**: 4 plans
-
-Plans:
-- [x] 25-01-PLAN.md — Controller and RDS client error path tests
-- [x] 25-02-PLAN.md — Node service and mount error path tests
-- [x] 25-03-PLAN.md — CSI negative test scenarios and sanity regression tests
-- [x] 25-04-PLAN.md — CI threshold update, flaky test detection, TESTING.md documentation
-
-#### Phase 25.1: Attachment Reconciliation & RDS Resilience (INSERTED)
-**Goal**: Driver automatically recovers from infrastructure failures without manual intervention
-**Depends on**: Phase 25 (quality foundation for production fixes)
-**Requirements**: RECON-01, RECON-02, RECON-03, RECON-04, RECON-05, RECON-06
-**Success Criteria** (what must be TRUE):
-  1. Controller reconciliation loop detects stale VolumeAttachment objects on startup by querying actual attachment state from nodes
-  2. Stale attachments (marked attached=true in etcd but not actually mounted on node) are automatically marked as detached
-  3. Node NotReady watcher triggers proactive attachment validation and cleanup for volumes on failed nodes
-  4. RDS connection loss triggers automatic reconnect with exponential backoff (1s, 2s, 4s, 8s, max 16s)
-  5. CSI Probe health check returns ready=false when RDS client is disconnected, preventing misleading health status
-  6. After RDS reconnection, controller triggers attachment reconciliation to clean up any stale state
-  7. Kubernetes events are emitted for stale attachment detection and RDS connection state changes
-  8. Prometheus metrics expose stale attachment count and RDS connection status for observability
-**Plans**: 3 plans
-
-Plans:
-- [x] 25.1-01-PLAN.md — Node watcher and TriggerReconcile for event-driven reconciliation
-- [x] 25.1-02-PLAN.md — RDS connection manager with exponential backoff and metrics
-- [x] 25.1-03-PLAN.md — Wire components into driver, startup reconciliation, connection-aware probe
-
-**Context**: Production incident on 2026-02-05 where RDS storage crash caused node failures, leaving stale VolumeAttachments that prevented volume reattachment. Required manual finalizer removal and CSI controller restart to restore service (3-hour outage extended to 5+ hours).
-
-#### Phase 25.2: Fix Linter Issues Blocking CI Verification (INSERTED)
-**Goal**: Resolve 134 pre-existing linter issues to unblock CI/CD verification pipeline
-**Depends on**: Phase 25.1 (golangci-lint v2 upgrade complete)
-**Requirements**: LINT-01, LINT-02, LINT-03
-**Success Criteria** (what must be TRUE):
-  1. All 63 errcheck issues resolved (unchecked error returns properly handled)
-  2. All 56 cyclop complexity issues resolved (functions refactored to complexity ≤10 or thresholds adjusted with justification)
-  3. All 7 gocyclo complexity issues resolved (high-complexity functions below threshold)
-  4. All 8 staticcheck issues resolved (error string capitalization, dot imports, De Morgan simplifications)
-  5. `make verify` passes without lint failures (exit code 0)
-  6. CI/CD pipeline verification step succeeds
-  7. No new linter issues introduced during fixes
-**Plans**: 2 plans
-
-Plans:
-- [x] 25.2-01-PLAN.md — Fix golangci-lint v2 config format and resolve 7 staticcheck code issues
-- [x] 25.2-02-PLAN.md — Document complexity threshold justification and verify full CI pipeline
-
-**Context**: golangci-lint v2 upgrade in Phase 25.1 left config in broken v1 format (linters-settings, issues.exclude-rules, version as number) causing v2 to silently ignore settings/exclusions. Root cause: 126 of 134 issues were from config format, only 7 required code changes.
+**Milestone Goal:** Add volume snapshots, comprehensive documentation, and Helm chart for easier deployment
 
 #### Phase 26: Volume Snapshots
 **Goal**: Btrfs-based volume snapshots enable backup and restore workflows
-**Depends on**: Phase 25 (quality foundation for snapshot feature)
+**Depends on**: Phase 25.2 (all v0.9.0 work complete)
 **Requirements**: SNAP-01, SNAP-02, SNAP-03, SNAP-04, SNAP-05, SNAP-06, SNAP-07, SNAP-08, SNAP-09, SNAP-10
 **Success Criteria** (what must be TRUE):
   1. CreateSnapshot capability is advertised in controller service GetControllerCapabilities
@@ -228,22 +74,34 @@ Plans:
 - [ ] 27-01: TBD
 - [ ] 27-02: TBD
 
+#### Phase 28: Helm Chart
+**Goal**: Helm chart for easy deployment and configuration
+**Depends on**: Phase 27 (documentation complete for chart templates)
+**Requirements**: HELM-01, HELM-02, HELM-03, HELM-04, HELM-05
+**Success Criteria** (what must be TRUE):
+  1. Helm chart deploys controller and node plugin with configurable values
+  2. Chart supports customization of RDS connection parameters (address, SSH port, NVMe port)
+  3. Chart includes RBAC, ServiceAccount, and Secret management
+  4. Chart supports multiple storage classes with different configurations
+  5. Chart documentation includes installation instructions and configuration examples
+  6. Chart published to Helm repository (GitHub Pages or OCI registry)
+**Plans**: TBD
+
+Plans:
+- [ ] 28-01: TBD
+- [ ] 28-02: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 22 → 23 → 24 → 25 → 25.1 → 25.2 → 26 → 27
+Phases execute in numeric order: 26 → 27 → 28
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1-21 | v0.1.0-v0.8.0 | Complete | Complete | 2026-02-04 |
-| 22. CSI Sanity Tests Integration | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
-| 23. Mock RDS Enhancements | v0.9.0 | 2/2 | ✅ Complete | 2026-02-04 |
-| 24. Automated E2E Test Suite | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
-| 25. Coverage & Quality Improvements | v0.9.0 | 4/4 | ✅ Complete | 2026-02-05 |
-| 25.1 Attachment Reconciliation & RDS Resilience | v0.9.0 | 3/3 | ✅ Complete | 2026-02-05 |
-| 25.2 Fix Linter Issues Blocking CI Verification | v0.9.0 | 2/2 | ✅ Complete | 2026-02-05 |
-| 26. Volume Snapshots | v0.9.0 | 0/TBD | Not started | - |
-| 27. Documentation & Hardware Validation | v0.9.0 | 0/TBD | Not started | - |
+| 1-25.2 | v0.1.0-v0.9.0 | Complete | ✅ Complete | 2026-02-06 |
+| 26. Volume Snapshots | v0.10.0 | 0/TBD | Not started | - |
+| 27. Documentation & Hardware Validation | v0.10.0 | 0/TBD | Not started | - |
+| 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-02-05 after Phase 25.2 insertion*
+*Last updated: 2026-02-06 after v0.9.0 completion*

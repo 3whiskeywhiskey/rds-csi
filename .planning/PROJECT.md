@@ -8,33 +8,33 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current Milestone: v0.9.0 Production Readiness & Test Maturity
+## Current Milestone: v0.10.0 Feature Enhancements
 
-**Goal:** Validate CSI spec compliance and build production-ready testing infrastructure
+**Goal:** Add volume snapshots, comprehensive documentation, and Helm chart for easier deployment
 
 **Target features:**
-- CSI sanity test suite integration and compliance validation
-- Comprehensive RDS mock for automated CI testing
-- E2E test framework with both automated and manual test scenarios
-- Critical coverage gaps closed (error paths, edge cases)
-- Opportunistic package refactoring when code substantially modified
+- Btrfs-based volume snapshots with restore capability
+- Comprehensive documentation (hardware validation, testing guide, capability analysis)
+- Helm chart for simplified deployment and configuration
 
-## Latest Milestone: v0.8.0 Code Quality and Logging Cleanup (Shipped: 2026-02-04)
+## Latest Milestone: v0.9.0 Production Readiness & Test Maturity (Shipped: 2026-02-06)
 
-**Delivered:** Systematic codebase cleanup with improved maintainability, reduced log noise, and comprehensive test coverage
+**Delivered:** Production-ready testing infrastructure with CSI spec compliance validation and resilience features
 
 **Shipped features:**
-- Logging cleanup: 78% reduction in security logger code, V(3) eliminated codebase-wide
-- Error handling standardization: 96.1% %w compliance, 10 sentinel errors integrated
-- Test coverage expansion: 65.0% total coverage (up from 48%)
-- Code quality improvements: Severity mapping table, complexity metrics configured
-- Test infrastructure stabilization: 148 tests pass consistently
-- Maintainability improvements: Documented conventions in CONVENTIONS.md
+- CSI sanity test integration running in CI with comprehensive compliance validation
+- Mock RDS server with realistic SSH latency simulation and error injection
+- Automated E2E test suite with Ginkgo v2 framework running in CI
+- Test coverage increased to 68.6% (exceeds 65% target)
+- Attachment reconciliation for automatic stale VolumeAttachment cleanup
+- RDS connection manager with exponential backoff and auto-reconnection
+- Resolved 134 linter issues, golangci-lint v2 upgraded and enforced in CI
+- Production incident response infrastructure (Phase 25.1 and 25.2 insertions)
 
 ## Current State
 
-**Version:** v0.8.0 (shipped 2026-02-04)
-**LOC:** 33,687 Go
+**Version:** v0.9.0 (shipped 2026-02-06)
+**LOC:** 34,000+ Go
 **Tech Stack:** Go 1.24, CSI Spec v1.5.0+, NVMe/TCP, SSH/RouterOS CLI
 
 ### What's Working
@@ -91,20 +91,27 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - ✓ Test coverage >60% on critical paths — v0.8.0 (65.0% total, enforcement configured)
 - ✓ Common patterns extracted into reusable utilities — v0.8.0 (table-driven helpers, Wrap*Error functions)
 - ✓ Code smells from analysis resolved or explicitly deferred — v0.8.0 (4 resolved, 1 deferred with rationale)
+- ✓ CSI sanity tests pass with zero failures in CI — v0.9.0
+- ✓ Mock RDS server supports all driver commands with latency simulation — v0.9.0
+- ✓ E2E test suite runs in CI without real hardware — v0.9.0
+- ✓ Critical error paths have test coverage (controller, node, RDS client) — v0.9.0
+- ✓ Attachment reconciliation detects and cleans stale VolumeAttachments — v0.9.0
+- ✓ RDS connection manager with exponential backoff and auto-reconnection — v0.9.0
+- ✓ Probe health check reflects RDS connection state — v0.9.0
+- ✓ golangci-lint v2 enforced in CI with all issues resolved — v0.9.0
 
 ### Active
 
-- [ ] CSI sanity tests pass with zero failures
-- [ ] Mock RDS server supports all driver commands
-- [ ] E2E test suite runs in CI without real hardware
-- [ ] Critical error paths have test coverage
+- [ ] Volume snapshots via Btrfs snapshot operations
+- [ ] CreateVolume from snapshot (restore workflow)
 - [ ] Manual test scenarios documented for hardware validation
+- [ ] CSI capability gap analysis vs peer drivers
+- [ ] Helm chart for simplified deployment
 
 ### Out of Scope
 
-- Volume snapshots — separate milestone
-- Controller HA — separate milestone, requires leader election
-- Volume encryption — separate milestone, different concern
+- Controller HA — requires leader election, separate milestone after v1.0
+- Volume encryption — different concern, separate security milestone
 - NVMe multipath — single RDS controller, not applicable
 - Automatic pod restart — CSI spec says drivers report, orchestrators act
 - Security hardening (SSH host key verification, injection fuzzing) — separate security milestone
@@ -127,6 +134,15 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 | Sentinel errors over string matching | Type-safe, errors.Is() compatible | ✓ Good |
 | V(2) for outcomes, V(4) for diagnostics | Clear operator vs debug separation | ✓ Good |
 | Defer QUAL-03 package refactoring | Risk > benefit at current scale | ✓ Good |
+| CSI sanity tests in CI with artifact capture | Debugging test failures, traceability | ✓ Good |
+| Mock RDS 200ms SSH latency | Exposes timeout bugs, realistic behavior | ✓ Good |
+| E2E tests use in-process driver | Faster iteration, easier debugging | ✓ Good |
+| Coverage threshold 65% with CI enforcement | Prevents regression, realistic target | ✓ Good |
+| Node watcher after informer cache sync | Avoids race conditions on startup | ✓ Good |
+| Connection manager polls every 5s | Production-friendly, not chatty | ✓ Good |
+| MaxElapsedTime=0 for reconnection | Never give up on RDS reconnection | ✓ Good |
+| Complexity threshold 50 | Justified by CSI spec compliance needs | ✓ Good |
+| golangci-lint v2 nested config | Required for v2 compatibility | ✓ Good |
 
 ## Constraints
 
@@ -135,4 +151,4 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
 
 ---
-*Last updated: 2026-02-04 after starting v0.9.0 milestone*
+*Last updated: 2026-02-06 after v0.9.0 milestone completion*

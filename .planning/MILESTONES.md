@@ -1,27 +1,33 @@
 # Project Milestones: RDS CSI Driver
 
-## v0.9.0 Production Readiness & Test Maturity (In Progress)
+## v0.9.0 Production Readiness & Test Maturity (Shipped: 2026-02-06)
 
-**Goal:** Validate CSI spec compliance and build production-ready testing infrastructure enabling confident v1.0 release
+**Delivered:** Production-ready testing infrastructure with CSI spec compliance validation and resilience features
 
-**Phases:** 22-27
+**Phases completed:** 22-25.2 (17 plans total)
 
-**Progress:** 6 phases complete (22, 23, 24, 25, 25.1, 25.2), 2 remaining (26, 27)
+**Key accomplishments:**
+- CSI sanity test integration with comprehensive compliance validation in CI
+- Mock RDS server with realistic SSH latency simulation and error injection capabilities
+- Automated E2E test suite with Ginkgo v2 framework running in CI
+- Test coverage increased to 68.6% (exceeds 65% target) with critical error path validation
+- Attachment reconciliation system for automatic stale VolumeAttachment cleanup after infrastructure failures
+- RDS connection manager with exponential backoff and auto-reconnection (never gives up)
+- Resolved 134 linter issues blocking CI verification (golangci-lint v2 upgrade)
+- Production incident response: Phase 25.1 inserted after 5-hour outage from stale attachments
+- Code quality gates: Phase 25.2 inserted to unblock CI/CD verification pipeline
 
-**Key accomplishments to date:**
-- CSI sanity test integration with comprehensive compliance validation
-- Mock RDS server with realistic SSH latency simulation and error injection
-- Automated E2E test suite with Ginkgo v2 framework
-- Test coverage increased to 65%+ with critical error path validation
-- Attachment reconciliation system for automatic stale state cleanup
-- RDS connection manager with exponential backoff and auto-reconnection
-- Resolved 134 linter issues blocking CI verification
+**Stats:**
+- 122 files modified (+24,055 insertions, -910 deletions)
+- 34,000+ lines of Go (current codebase)
+- 6 phases (including 2 inserted decimal phases), 17 plans
+- 92 days timeline (2025-11-05 to 2026-02-06)
 
-**Next phases:**
-- Phase 26: Volume Snapshots (Btrfs-based snapshots via RouterOS)
-- Phase 27: Documentation & Hardware Validation
+**Git range:** `ce86034` (feat(22-01)) → `HEAD`
 
-**See:** `.planning/ROADMAP.md`
+**See:** `.planning/milestones/v0.9.0-ROADMAP.md`
+
+**What's next:** v0.10.0 Feature Enhancements - Volume snapshots, documentation, and Helm chart
 
 ---
 
