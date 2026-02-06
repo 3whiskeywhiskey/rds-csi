@@ -126,7 +126,7 @@ Plans:
 **Approach**: SSH polling with GaugeFunc collectors (research concluded SSH > SNMP > API for this use case).
 
 #### Phase 28: Helm Chart
-**Goal**: Helm chart for easy deployment and configuration
+**Goal**: Helm chart enables one-command deployment of the RDS CSI driver with configurable values for RDS connection, storage classes, monitoring, and all component settings
 **Depends on**: Phase 28.2 (monitoring research complete for decision: include in Helm or defer)
 **Requirements**: HELM-01, HELM-02, HELM-03, HELM-04, HELM-05
 **Success Criteria** (what must be TRUE):
@@ -136,11 +136,12 @@ Plans:
   4. Chart supports multiple storage classes with different configurations
   5. Chart documentation includes installation instructions and configuration examples
   6. Chart published to Helm repository (GitHub Pages or OCI registry)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 28-01: TBD
-- [ ] 28-02: TBD
+- [ ] 28-01-PLAN.md -- Chart skeleton (Chart.yaml, values.yaml, values.schema.json, _helpers.tpl)
+- [ ] 28-02-PLAN.md -- Core templates (controller Deployment, node DaemonSet, RBAC, CSIDriver, ServiceAccount)
+- [ ] 28-03-PLAN.md -- Feature templates (StorageClass, VolumeSnapshotClass, ServiceMonitor, NOTES.txt, README)
 
 ## Progress
 
@@ -154,7 +155,7 @@ Phases execute in numeric order: 26 → 27 → 28.1 → 28.2 → 28
 | 27. Documentation & Hardware Validation | v0.10.0 | 3/3 | ✅ Complete | 2026-02-05 |
 | 28.1. Fix Metric Accuracy | v0.10.0 | 1/1 | ✅ Complete | 2026-02-06 |
 | 28.2. RDS Health & Performance Monitoring | v0.10.0 | 2/2 | ✅ Complete | 2026-02-06 |
-| 28. Helm Chart | v0.10.0 | 0/TBD | Not started | - |
+| 28. Helm Chart | v0.10.0 | 0/3 | Not started | - |
 
 ---
-*Last updated: 2026-02-06 after Phase 28.2 planning*
+*Last updated: 2026-02-06 after Phase 28 planning*
