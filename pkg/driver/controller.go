@@ -146,7 +146,18 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}, nil
 	}
 
-	// Volume doesn't exist, create it
+	// Volume doesn't exist - check for volume content source (snapshot restore)
+	if contentSource := req.GetVolumeContentSource(); contentSource != nil {
+		if snapshotSource := contentSource.GetSnapshot(); snapshotSource != nil {
+			return cs.createVolumeFromSnapshot(ctx, req, volumeID, snapshotSource.GetSnapshotId(), requiredBytes)
+		}
+		// Volume clone (not yet supported)
+		if contentSource.GetVolume() != nil {
+			return nil, status.Error(codes.InvalidArgument, "volume cloning is not supported, use snapshot restore instead")
+		}
+	}
+
+	// No content source - create new empty volume
 	// Get parameters from StorageClass
 	params := req.GetParameters()
 	volumeBasePath := defaultVolumeBasePath
@@ -235,6 +246,111 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 				"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
 				"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
 				"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
+			},
+		},
+	}, nil
+}
+
+// createVolumeFromSnapshot handles CreateVolume with a snapshot source (restore workflow)
+func (cs *ControllerServer) createVolumeFromSnapshot(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+	volumeID string,
+	snapshotID string,
+	requiredBytes int64,
+) (*csi.CreateVolumeResponse, error) {
+	klog.V(4).Infof("Creating volume %s from snapshot %s", volumeID, snapshotID)
+
+	// Validate snapshot ID
+	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid snapshot ID: %v", err)
+	}
+
+	// Verify snapshot exists
+	snapshotInfo, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
+	if err != nil {
+		if _, ok := err.(*rds.SnapshotNotFoundError); ok {
+			return nil, status.Errorf(codes.NotFound, "snapshot %s not found", snapshotID)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get snapshot: %v", err)
+	}
+
+	// CSI spec: volume size must not be less than snapshot size
+	if requiredBytes < snapshotInfo.FileSizeBytes {
+		requiredBytes = snapshotInfo.FileSizeBytes
+	}
+
+	// Get parameters
+	params := req.GetParameters()
+	volumeBasePath := defaultVolumeBasePath
+	if path, ok := params[paramVolumePath]; ok {
+		volumeBasePath = path
+	}
+
+	nvmePort := defaultNVMETCPPort
+	if portStr, ok := params[paramNVMEPort]; ok {
+		var port int
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil {
+			nvmePort = port
+		}
+	}
+
+	// Parse NVMe connection parameters
+	nvmeParams, err := ParseNVMEConnectionParams(params)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
+	}
+	migrationTimeout := ParseMigrationTimeout(params)
+
+	// Generate NQN and file path for new volume
+	nqn, err := utils.VolumeIDToNQN(volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate NQN: %v", err)
+	}
+	filePath, err := utils.VolumeIDToFilePath(volumeID, volumeBasePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate file path: %v", err)
+	}
+
+	// Restore: create new volume from snapshot via RDS
+	restoreOpts := rds.CreateVolumeOptions{
+		Slot:          volumeID,
+		FilePath:      filePath,
+		FileSizeBytes: requiredBytes,
+		NVMETCPPort:   nvmePort,
+		NVMETCPNQN:    nqn,
+	}
+
+	if err := cs.driver.rdsClient.RestoreSnapshot(snapshotID, restoreOpts); err != nil {
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to restore snapshot: %v", err)
+	}
+
+	klog.V(2).Infof("Restored volume %s from snapshot %s", volumeID, snapshotID)
+
+	return &csi.CreateVolumeResponse{
+		Volume: &csi.Volume{
+			VolumeId:      volumeID,
+			CapacityBytes: requiredBytes,
+			VolumeContext: map[string]string{
+				"rdsAddress":              cs.getRDSAddress(params),
+				"nvmeAddress":             cs.getNVMEAddress(params),
+				"nvmePort":                fmt.Sprintf("%d", nvmePort),
+				"nqn":                     nqn,
+				"volumePath":              filePath,
+				"ctrlLossTmo":             fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+				"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+				"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+				"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
+			},
+			ContentSource: &csi.VolumeContentSource{
+				Type: &csi.VolumeContentSource_Snapshot{
+					Snapshot: &csi.VolumeContentSource_SnapshotSource{
+						SnapshotId: snapshotID,
+					},
+				},
 			},
 		},
 	}, nil

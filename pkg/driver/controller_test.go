@@ -289,12 +289,12 @@ func TestUnimplementedMethods(t *testing.T) {
 	// Test all unimplemented methods return Unimplemented error
 	// Note: ControllerPublishVolume and ControllerUnpublishVolume are now implemented
 	// Note: ControllerExpandVolume is now implemented, so it's not in this test
-	// Note: CreateSnapshot and DeleteSnapshot are now implemented, so they're not in this test
+	// Note: CreateSnapshot, DeleteSnapshot, and ListSnapshots are now implemented, so they're not in this test
 
 	// Currently all previously unimplemented methods have been implemented
 	// This test is kept as a placeholder for future unimplemented methods
-	t.Run("ListSnapshots", func(t *testing.T) {
-		_, err := cs.ListSnapshots(context.Background(), &csi.ListSnapshotsRequest{})
+	t.Run("ControllerGetVolume", func(t *testing.T) {
+		_, err := cs.ControllerGetVolume(context.Background(), &csi.ControllerGetVolumeRequest{})
 		if err == nil {
 			t.Error("Expected unimplemented error")
 		}
