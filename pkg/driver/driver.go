@@ -222,6 +222,64 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		klog.Info("Attachment manager created")
 	}
 
+	// Wire RDS monitoring (disk performance + hardware health) into Prometheus metrics.
+	// GaugeFunc callbacks poll via SSH (/disk monitor-traffic) and SNMP (MIKROTIK-MIB)
+	// during Prometheus scrape. Only registers in controller mode (node plugin has no RDS client).
+	if config.EnableController && config.Metrics != nil && driver.rdsClient != nil {
+		// Monitor the storage pool disk (configurable via basePath extraction)
+		// Default: "storage-pool" - the primary Btrfs RAID6 pool
+		storageSlot := "storage-pool"
+
+		// SNMP target configuration (use storage VLAN IP, same as SSH operations)
+		// CSI controller runs in environment with access to storage network
+		snmpHost := "10.42.68.1"  // TODO: make configurable via helm values
+		snmpCommunity := "public" // TODO: make configurable via helm values
+
+		config.Metrics.SetRDSMonitoring(
+			storageSlot,
+			snmpHost,
+			snmpCommunity,
+			// Disk performance metrics callback (SSH)
+			func() (*observability.DiskHealthSnapshot, error) {
+				metrics, err := driver.rdsClient.GetDiskMetrics(storageSlot)
+				if err != nil {
+					return nil, err
+				}
+				return &observability.DiskHealthSnapshot{
+					ReadOpsPerSecond:  metrics.ReadOpsPerSecond,
+					WriteOpsPerSecond: metrics.WriteOpsPerSecond,
+					ReadBytesPerSec:   metrics.ReadBytesPerSec,
+					WriteBytesPerSec:  metrics.WriteBytesPerSec,
+					ReadTimeMs:        metrics.ReadTimeMs,
+					WriteTimeMs:       metrics.WriteTimeMs,
+					WaitTimeMs:        metrics.WaitTimeMs,
+					InFlightOps:       metrics.InFlightOps,
+					ActiveTimeMs:      metrics.ActiveTimeMs,
+				}, nil
+			},
+			// Hardware health metrics callback (SNMP)
+			func() (*observability.HardwareHealthSnapshot, error) {
+				metrics, err := driver.rdsClient.GetHardwareHealth(snmpHost, snmpCommunity)
+				if err != nil {
+					return nil, err
+				}
+				return &observability.HardwareHealthSnapshot{
+					CPUTemperature:    metrics.CPUTemperature,
+					BoardTemperature:  metrics.BoardTemperature,
+					Fan1Speed:         metrics.Fan1Speed,
+					Fan2Speed:         metrics.Fan2Speed,
+					PSU1Power:         metrics.PSU1Power,
+					PSU2Power:         metrics.PSU2Power,
+					PSU1Temperature:   metrics.PSU1Temperature,
+					PSU2Temperature:   metrics.PSU2Temperature,
+					DiskPoolSizeBytes: metrics.DiskPoolSizeBytes,
+					DiskPoolUsedBytes: metrics.DiskPoolUsedBytes,
+				}, nil
+			},
+		)
+		klog.Infof("RDS monitoring enabled (disk slot=%s, snmp=%s)", storageSlot, snmpHost)
+	}
+
 	// Initialize informer factory if we have k8s client (needed for attachment reconciler caching)
 	if config.EnableController && config.K8sClient != nil {
 		// Create informer factory with 5-minute resync period
