@@ -126,6 +126,13 @@ Recent decisions affecting current work:
   - **Scope**: Resolve 63 errcheck, 56 cyclop, 7 gocyclo, 8 staticcheck issues
   - **Priority**: Required before Phase 26 - must unblock CI enforcement of linter checks
 
+- **Phase 28.1 inserted after Phase 27**: Fix rds_csi_nvme_connections_active Metric Accuracy (URGENT)
+  - **Trigger**: GitHub Issue #19 - Production observability bug discovered during v0.9.0 monitoring
+  - **Impact**: Metric reports 0 instead of actual connection count (16 volumes attached), making monitoring dashboards, alerting, and debugging unreliable
+  - **Root Cause**: Metric derived from attach/detach counters instead of querying attachment manager state; counters reset on restart while attachments persist
+  - **Scope**: Fix gauge to query current attachment manager state, add unit/integration tests, validate metric accuracy
+  - **Priority**: Must fix before Helm chart release - users deploying via Helm will rely on accurate metrics for production monitoring
+
 ### Pending Todos
 
 None yet. (Use `/gsd:add-todo` to capture ideas during execution)

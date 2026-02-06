@@ -78,9 +78,29 @@ Plans:
 - [x] 27-02-PLAN.md -- Capabilities gap analysis (CAPABILITIES.md) + README.md known limitations
 - [x] 27-03-PLAN.md -- Testing guide updates (TESTING.md) + CI/CD integration guide (ci-cd.md)
 
+#### Phase 28.1: Fix rds_csi_nvme_connections_active Metric Accuracy (INSERTED)
+**Goal**: Fix production observability bug where rds_csi_nvme_connections_active metric incorrectly reports 0 instead of actual connection count
+**Depends on**: Phase 27 (documentation complete)
+**GitHub Issue**: #19
+**Requirements**: METRIC-01
+**Success Criteria** (what must be TRUE):
+  1. rds_csi_nvme_connections_active gauge reports actual count of active NVMe/TCP connections from attachment manager state
+  2. Metric value persists correctly across controller restarts (not derived from ephemeral counters)
+  3. Metric accurately reflects VolumeAttachment count in cluster (validates via kubectl comparison)
+  4. Unit tests verify metric updates on attach/detach operations
+  5. Integration test validates metric accuracy after controller restart
+**Plans**: TBD
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 28.1 to break down)
+
+**Root Cause**: Metric derived from attach/detach counters (attach_total - detach_total) instead of querying attachment manager current state. Counters reset on restart while attachments persist.
+
+**Impact**: Unreliable monitoring dashboards, alerting, and debugging. Production cluster shows 16 active volumes but metric reports 0.
+
 #### Phase 28: Helm Chart
 **Goal**: Helm chart for easy deployment and configuration
-**Depends on**: Phase 27 (documentation complete for chart templates)
+**Depends on**: Phase 28.1 (metric accuracy fixed for reliable monitoring)
 **Requirements**: HELM-01, HELM-02, HELM-03, HELM-04, HELM-05
 **Success Criteria** (what must be TRUE):
   1. Helm chart deploys controller and node plugin with configurable values
@@ -98,7 +118,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 26 → 27 → 28
+Phases execute in numeric order: 26 → 27 → 28.1 → 28
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
