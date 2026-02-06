@@ -1,455 +1,335 @@
-# Technology Stack for KubeVirt Live Migration Support
+# Stack Research: v0.9.0 Testing Infrastructure
 
-**Project:** RDS CSI Driver
-**Research Focus:** Stack additions for KubeVirt VM live migration
-**Researched:** 2026-02-03
-**Overall Confidence:** HIGH
+**Domain:** Kubernetes CSI Driver Testing
+**Researched:** 2026-02-04
+**Confidence:** HIGH
 
-## Executive Summary
+## Recommended Stack
 
-**Key Finding:** No new dependencies or libraries are required. KubeVirt live migration support requires only **capability declaration changes** in the existing CSI driver code.
+### Core Testing Technologies
 
-**Current State:**
-- Driver supports `SINGLE_NODE_WRITER` and `SINGLE_NODE_READER_ONLY` (RWO/ROX)
-- ControllerPublish/Unpublish implemented with RWO enforcement
-- Attachment tracking and grace period mechanism already in place
-- VMI grouper for per-VMI operation serialization already exists
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| csi-test/csi-sanity | v5.4.0 | CSI spec compliance testing | Official Kubernetes-CSI testing framework; validates all CSI gRPC methods against spec; used by all production CSI drivers (hostpath, NFS, AWS EBS, vSphere) |
+| Ginkgo | v2.28.1 | BDD test framework | Required by csi-test sanity framework; provides expressive test specs and test organization; standard in Kubernetes ecosystem |
+| Gomega | v1.36.2 | Matcher/assertion library | Official companion to Ginkgo; provides expressive assertions like `Expect(x).To(Equal(y))`; more readable than testify for complex assertions |
+| testify | v1.11.1 (existing) | Unit test assertions | Already in use; excellent for table-driven tests; `assert` and `require` packages provide clean test code; keep for existing unit tests |
+| golang.org/x/crypto/ssh | v0.41.0 (existing) | Mock SSH server | Standard library provides `ssh/test` package for creating test SSH servers; already a dependency; zero additional install |
 
-**Required Change:**
-- Add `MULTI_NODE_MULTI_WRITER` access mode to volume capabilities
-- KubeVirt checks `VMI.status.conditions.LiveMigratable` based on PVC access mode
-- With ReadWriteMany (RWX) support advertised, KubeVirt will enable live migration
+### Supporting Libraries
 
-**No new stack components needed.** This is a configuration/capability change, not a technology addition.
-
----
-
-## Current Stack (No Changes)
-
-The existing stack is sufficient for live migration support:
-
-| Component | Version | Purpose | Status |
-|-----------|---------|---------|--------|
-| Go | 1.24 | Driver implementation | No change |
-| github.com/container-storage-interface/spec | v1.10.0 | CSI spec types (VolumeCapability_AccessMode) | No change |
-| NVMe/TCP | Protocol | Data plane (multi-node capable) | Already supports concurrent access |
-| SSH/RouterOS CLI | Protocol | Control plane (volume management) | No change |
-| k8s.io/client-go | v0.28.0 | Kubernetes API client | No change |
-| Attachment Manager | pkg/attachment | RWO enforcement, grace period | Already handles handoff |
-| VMI Grouper | pkg/driver | Per-VMI operation serialization | Already exists |
-
-### Existing KubeVirt-Related Infrastructure
-
-The driver already has significant infrastructure for KubeVirt support:
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| AttachmentManager | `pkg/attachment/manager.go` | Tracks volume-to-node attachments |
-| AttachmentReconciler | `pkg/attachment/reconciler.go` | Reconciles stale attachments |
-| VMIGrouper | `pkg/driver/vmi_grouper.go` | Per-VMI operation serialization |
-| Grace period support | `manager.go:IsWithinGracePeriod()` | Allows attachment handoff |
-| EventPoster | `pkg/driver/events.go` | Kubernetes events for lifecycle |
-
----
-
-## What IS Needed: Capability Declaration
-
-### Code Changes Required
-
-**File:** `pkg/driver/driver.go`
-
-**Current (lines 252-261):**
-```go
-func (d *Driver) addVolumeCapabilities() {
-	d.vcaps = []*csi.VolumeCapability_AccessMode{
-		{
-			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-		},
-		{
-			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
-		},
-	}
-}
-```
-
-**Required Addition:**
-```go
-func (d *Driver) addVolumeCapabilities() {
-	d.vcaps = []*csi.VolumeCapability_AccessMode{
-		{
-			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-		},
-		{
-			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
-		},
-		{
-			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-		},
-	}
-}
-```
-
-**That's it for capability declaration.** However, additional behavioral changes are needed in the attachment manager.
-
----
-
-## CSI Access Mode Reference
-
-From the CSI spec (v1.10.0), the complete access mode enum:
-
-| Mode | Value | Definition |
-|------|-------|------------|
-| UNKNOWN | 0 | Not specified |
-| SINGLE_NODE_WRITER | 1 | Can only be published once as read/write on a single node |
-| SINGLE_NODE_READER_ONLY | 2 | Can only be published once as readonly on a single node |
-| MULTI_NODE_READER_ONLY | 3 | Can be published as readonly at multiple nodes simultaneously |
-| MULTI_NODE_SINGLE_WRITER | 4 | Multiple nodes, only one can write |
-| **MULTI_NODE_MULTI_WRITER** | **5** | **Can be published as read/write at multiple nodes simultaneously** |
-| SINGLE_NODE_SINGLE_WRITER | 6 | (Alpha) Single workload on single node |
-| SINGLE_NODE_MULTI_WRITER | 7 | (Alpha) Multiple workloads on single node |
-
-**For KubeVirt Live Migration:** `MULTI_NODE_MULTI_WRITER` (5) is required.
-
-**Source:** [CSI Proto Definition](https://github.com/container-storage-interface/spec/blob/master/csi.proto)
-
----
-
-## Why This Works: NVMe/TCP Multi-Node Characteristics
-
-### NVMe/TCP Native Multi-Attach
-
-NVMe/TCP protocol inherently supports multiple initiators connecting to the same target:
-
-1. **Protocol-native multipath support** - Multiple nodes can connect to the same NQN simultaneously
-2. **No filesystem state on nodes** - Block devices have no local state that prevents multi-attach
-3. **RDS export model** - RouterOS exports volumes as NVMe/TCP targets; clients connect independently
-4. **Built-in NVMe multipath** - RHEL 9+/modern Linux kernels enable NVMe multipath by default
-
-**Key insight from Portworx:** "VMs only need volume visibility (not simultaneous access) during migration." The source node writes until cutover, then the destination node takes over. True concurrent writes don't happen.
-
-**Source:** [Portworx - Kubernetes Native Virtualization Meets Enterprise Storage](https://portworx.com/blog/kubernetes-native-virtualization-meets-enterprise-storage/)
-
-### Block Mode vs Filesystem Mode
-
-**Critical Distinction:**
-- **Block volumes** (volumeMode: Block): Support `MULTI_NODE_MULTI_WRITER` without complications
-- **Filesystem volumes** (volumeMode: Filesystem): Require distributed filesystem or careful coordination
-
-**RDS CSI Driver:** Supports both modes. For live migration:
-- Block mode: Native multi-attach, no issues
-- Filesystem mode: Requires cluster-aware filesystem (ext4/xfs NOT cluster-aware)
-
-**Implication:** Live migration works best with `volumeMode: Block` or requires filesystem-level coordination for mount mode.
-
-**Source:** [Kubernetes CSI - Raw Block Volume](https://kubernetes-csi.github.io/docs/raw-block.html) - "Block volumes are much more likely to support multi-node flavors of VolumeCapability_AccessMode_Mode than mount volumes"
-
----
-
-## Attachment Manager Behavioral Changes
-
-### Current Behavior
-
-The existing attachment manager enforces strict RWO:
-
-```go
-// pkg/attachment/manager.go - TrackAttachment
-if exists {
-    if existing.NodeID == nodeID {
-        return nil  // Idempotent
-    }
-    return fmt.Errorf("volume %s already attached to node %s", volumeID, existing.NodeID)
-}
-```
-
-### Required Behavioral Change for RWX
-
-For `MULTI_NODE_MULTI_WRITER` volumes, dual attachment must be allowed:
-
-```go
-// Conceptual change - check access mode before rejecting
-if exists {
-    if existing.NodeID == nodeID {
-        return nil  // Idempotent
-    }
-    // NEW: Allow dual attachment for RWX volumes
-    if accessMode == MULTI_NODE_MULTI_WRITER {
-        // Track secondary attachment for migration
-        return am.trackSecondaryAttachment(ctx, volumeID, nodeID)
-    }
-    return fmt.Errorf("volume %s already attached to node %s", volumeID, existing.NodeID)
-}
-```
-
-### Migration Window Handling
-
-During live migration, the driver sees this sequence:
-
-1. **ControllerPublishVolume(volume, targetNode)** - Target node requests attachment
-2. **ControllerUnpublishVolume(volume, sourceNode)** - Source node releases (after VM cutover)
-
-**The window between steps 1 and 2 is the dual-attachment period.**
-
-**Existing grace period (30s)** can be repurposed:
-- Currently: Allows new attachment if recent detach
-- New use: Configurable migration timeout for dual-attachment window
-
-### Recommended: Extend AttachmentState
-
-```go
-// pkg/attachment/types.go
-type AttachmentState struct {
-    VolumeID       string
-    NodeID         string      // Primary attachment
-    AttachedAt     time.Time
-    DetachedAt     *time.Time
-
-    // NEW: Migration support
-    SecondaryNodeID    string     // Secondary attachment during migration
-    MigrationStartedAt *time.Time // When dual-attach began
-    AccessMode         int32      // CSI access mode for this volume
-}
-```
-
-**No new dependencies required** - this extends existing structures.
-
----
-
-## KubeVirt Live Migration Flow with Multi-Attach
-
-### How KubeVirt Uses ReadWriteMany (RWX)
-
-When a VM is started, KubeVirt calculates the `VMI.status.conditions.LiveMigratable` condition:
-
-```
-Check PVC Access Mode
-├─ ReadWriteMany (RWX) → LiveMigratable: True (memory-only migration)
-├─ ReadWriteOnce (RWO) → LiveMigratable: False, reason: "DisksNotLiveMigratable"
-└─ Error: "cannot migrate VMI: PVC X is not shared"
-```
-
-**Source:** [KubeVirt - Live Migration](https://kubevirt.io/user-guide/compute/live_migration/)
-
-### Migration Method Classification
-
-Based on storage capabilities:
-- **LiveMigration**: Only memory copied (requires RWX volumes on shared storage)
-- **BlockMigration**: Memory + disk blocks copied (for non-shared storage)
-
-**With RWX support:** RDS CSI driver enables `LiveMigration` method (memory-only transfer), which is faster and doesn't require disk copying.
-
-**Source:** [KubeVirt - Live Migration](https://kubevirt.io/2020/Live-migration.html)
-
-### Migration Workflow (Detailed)
-
-```
-1. User initiates VM migration
-   │
-2. KubeVirt checks VMI.status.conditions.LiveMigratable
-   │ └─ If False: Migration rejected
-   │
-3. KubeVirt creates virt-launcher pod on target node
-   │
-4. CSI external-attacher calls ControllerPublishVolume(targetNode)
-   │ └─ RDS CSI: Allow dual attachment (MULTI_NODE_MULTI_WRITER)
-   │
-5. NodeStageVolume/NodePublishVolume on target node
-   │ └─ NVMe/TCP connect (second initiator to same target)
-   │
-6. VM memory migration proceeds
-   │
-7. Cutover: VM paused on source, resumed on target
-   │
-8. Source virt-launcher pod terminates
-   │
-9. CSI external-attacher calls ControllerUnpublishVolume(sourceNode)
-   │ └─ RDS CSI: Remove primary attachment, promote secondary
-   │
-10. NodeUnpublishVolume/NodeUnstageVolume on source node
-    └─ NVMe/TCP disconnect (first initiator disconnects)
-```
-
----
-
-## StorageClass Configuration
-
-### Current StorageClass (RWO only)
-
-```yaml
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: rds-nvme
-provisioner: rds.csi.srvlab.io
-parameters:
-  rdsAddress: "10.42.241.3"
-  nvmeAddress: "10.42.68.1"
-  nvmePort: "4420"
-  volumePath: "/storage-pool/metal-csi"
-volumeBindingMode: WaitForFirstConsumer
-allowVolumeExpansion: true
-```
-
-### Post-Change: No StorageClass Modification Required
-
-**After adding MULTI_NODE_MULTI_WRITER capability:**
-- Same StorageClass definition
-- PVCs can request `accessModes: [ReadWriteMany]`
-- Driver validates and accepts RWX requests
-- KubeVirt sees RWX PVC → enables live migration
-
-### User-Facing PVC Change
-
-```yaml
-# PVC for VM with live migration
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vm-disk
-spec:
-  accessModes:
-    - ReadWriteMany  # <-- Enables live migration
-  volumeMode: Block   # <-- Recommended for NVMe/TCP
-  resources:
-    requests:
-      storage: 10Gi
-  storageClassName: rds-nvme
-```
-
----
-
-## Optional Enhancements (Not Required for Basic Support)
-
-### Optional: Migration-Specific Metrics
-
-Using existing prometheus/client_golang (no new dependency):
-
-```go
-// pkg/observability/prometheus.go - Add metrics
-liveMigrationStarted   *prometheus.CounterVec   // Labels: volume_id
-dualAttachmentDuration *prometheus.HistogramVec // Duration in dual-attach state
-migrationTimeout       *prometheus.CounterVec   // Migration window exceeded
-```
-
-### Optional: KubeVirt API Client
-
-For enhanced migration awareness:
-
-| Library | Version | Purpose | When to Add |
+| Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| kubevirt.io/client-go | v1.3.0 | Watch VMI migration events | If CSI signals insufficient |
+| k8s.io/client-go/kubernetes/fake | v0.28.0 (existing) | Fake Kubernetes API | Already in use; E2E tests that need PV/PVC/StorageClass operations without real cluster |
+| github.com/stretchr/testify/mock | v1.11.1 (existing) | Mock generation | Creating mocks for interfaces (RDSClient, Mounter); already in use in test/mock/rds_server.go |
+| github.com/stretchr/testify/suite | v1.11.1 (existing) | Test suite organization | Optional; for E2E tests needing setup/teardown hooks; not required for simple tests |
 
-**Why optional:** The driver can function without direct KubeVirt API access:
-1. Using existing VMIGrouper's pod-based VMI detection
-2. Relying on CSI ControllerPublish/Unpublish call patterns
-3. Using grace period for handoff timing
+### Development Tools
 
----
+| Tool | Purpose | Notes |
+|------|---------|-------|
+| golangci-lint | Static analysis and linting | Already configured in project; run via `make lint`; includes coverage checks |
+| go tool cover | Coverage analysis and reporting | Built-in; use `make test-coverage` to generate HTML reports; current: 65% overall |
+| Docker Compose | Integration test environment | For running mock RDS server + CSI driver in isolated environment; see test/docker/ |
 
-## What NOT to Add (Anti-Patterns)
+## Installation
 
-### DO NOT: Add NFS Layer
+```bash
+# Core testing frameworks (add to go.mod)
+go get github.com/kubernetes-csi/csi-test/v5@v5.4.0
+go get github.com/onsi/ginkgo/v2@v2.28.1
+go get github.com/onsi/gomega@v1.36.2
 
-**Anti-Pattern:** Some solutions (OpenEBS Mayastor) add NFS Server Provisioner as RWX workaround.
+# Already installed (existing dependencies)
+# github.com/stretchr/testify v1.11.1
+# golang.org/x/crypto v0.41.0
+# k8s.io/client-go v0.28.0
 
-**Why Avoid:**
-- NFS adds latency (network overhead + filesystem overhead)
-- NFS unsuitable for VM boot volumes (performance, reliability)
-- RDS already provides shared block storage natively
-- Portworx explicitly avoids this: "Rather than layering NFS over block storage..."
+# Development tools (optional, if not using Nix)
+go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.1
+```
 
-**Source:** [Portworx Blog](https://portworx.com/blog/kubernetes-native-virtualization-meets-enterprise-storage/)
+## Alternatives Considered
 
-### DO NOT: Implement Distributed Filesystem
+| Recommended | Alternative | When to Use Alternative |
+|-------------|-------------|-------------------------|
+| csi-test/csi-sanity | Manual gRPC testing | Never; sanity tests are CSI spec requirement; all production drivers use csi-sanity |
+| Ginkgo/Gomega | testify only | Small projects without BDD needs; however, csi-sanity requires Ginkgo, so must install anyway |
+| golang.org/x/crypto/ssh | gliderlabs/ssh | If need more SSH server features (shell, SFTP); for mock RouterOS CLI, stdlib is sufficient |
+| Mock RDS (test/mock/rds_server.go) | Real RDS in CI | If CI has access to dedicated RDS hardware; not practical for GitHub Actions/external CI |
+| Fake Kubernetes client | Real cluster in tests | E2E tests with full Kubernetes; expensive and slow; use for final validation only |
 
-**Anti-Pattern:** Add GlusterFS, CephFS, or similar for RWX filesystem mode.
+## What NOT to Use
 
-**Why Avoid:**
-- NVMe/TCP block devices already support multi-attach
-- Distributed filesystems add complexity for minimal benefit
-- KubeVirt VMs use block devices directly (virtio-blk, not filesystem)
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| go.uber.org/mock (gomock) | Renamed from golang/mock; confusing with testify/mock; extra dependency | testify/mock (already in use) or manual interface mocks |
+| CSI mock driver (csi-test/mock) | Generic in-memory driver; not RDS-specific; doesn't test SSH/NVMe/TCP | Custom mock RDS server (test/mock/rds_server.go) |
+| Kubernetes E2E framework (import k8s.io/kubernetes/test/e2e) | Massive dependency (100MB+); requires real cluster; slow | csi-sanity + lightweight E2E with fake client |
+| Old csi-test versions (v4, v3) | Outdated; v5 supports CSI spec v1.10.0 | csi-test/v5 v5.4.0 |
+| Manual grpc.Dial for testing | Reinvents csi-sanity; doesn't validate CSI spec; error-prone | Use csi-sanity which connects via Unix socket |
 
-**Recommendation:** Use `volumeMode: Block` for VMs, avoid filesystem mode.
+## Stack Patterns by Testing Type
 
-### DO NOT: Add External Lock Manager
+### Pattern 1: Unit Tests (pkg/*)
+**Existing pattern - KEEP:**
+- Framework: Go `testing` package + testify/assert
+- Mocking: Manual mocks implementing interfaces (mockMounter, mockRDSClient)
+- Assertions: `assert.Equal`, `assert.NoError`, `require.NotNil`
+- Structure: Table-driven tests with `t.Run()`
 
-**Anti-Pattern:** Add etcd, Redis, or SCSI-3 persistent reservations for coordination.
+**Why:** Simple, fast, no external dependencies, works well for 148 existing tests
 
-**Why Avoid:**
-- Attachment manager already provides per-volume locking
-- NVMe/TCP doesn't have native reservation support like iSCSI
-- In-memory locks with PV annotation persistence is sufficient
-- VMs don't actually write concurrently - sequential during migration
+### Pattern 2: CSI Sanity Tests (test/sanity/)
+**NEW - IMPLEMENT:**
+- Framework: Ginkgo + Gomega (required by csi-sanity)
+- Driver: RDS CSI driver (real implementation)
+- Backend: Mock RDS server (test/mock/rds_server.go) OR real RDS (if available)
+- Invocation: `csi-sanity --csi.endpoint=/var/run/csi/csi.sock`
 
-### DO NOT: Disable RWO Enforcement Globally
+**Why:** Validates CSI spec compliance; required for production readiness; catches protocol errors
 
-**Anti-Pattern:** Remove RWO checking to enable RWX.
+### Pattern 3: Integration Tests (test/integration/)
+**Existing pattern - ENHANCE:**
+- Framework: Go `testing` + testify
+- Environment: Mock RDS server + real SSH client + real NVMe logic
+- Scope: Full volume lifecycle (create → stage → publish → unstage → delete)
+- Assertions: testify/assert for clear error messages
 
-**Why Avoid:**
-- RWO enforcement is per-PVC based on requested access mode
-- Existing logic validates capabilities per request
-- Multi-mode support is native to CSI spec (driver can support both RWO and RWX)
+**Why:** Tests real RDS integration without hardware; validates SSH command parsing and NVMe operations
 
----
+### Pattern 4: E2E Tests (test/e2e/)
+**NEW - IMPLEMENT:**
+- Framework: Ginkgo + Gomega OR Go testing (both viable)
+- Environment: Kubernetes with fake client OR kind cluster
+- Scope: PVC creation → Pod mounting → Data persistence → Cleanup
+- Storage: Mock RDS for CI, real RDS for manual testing
 
-## Version Compatibility Matrix
+**Why:** Validates full Kubernetes workflow; tests CSI sidecars (provisioner, attacher, node-driver-registrar)
 
-| Component | Minimum Version | Tested With | Notes |
-|-----------|-----------------|-------------|-------|
-| Kubernetes | 1.26+ | 1.28 | CSI v1.5+ required |
-| KubeVirt | 0.56+ | - | Live migration enabled by default |
-| Linux kernel | 5.0+ | 6.x | NVMe/TCP module |
-| nvme-cli | 2.0+ | 2.11 | For nvme connect/disconnect |
-| RouterOS | 7.1+ | 7.x | RDS NVMe-oF export |
+## Mock Infrastructure Patterns
 
----
+### Pattern A: Mock RDS Server (CURRENT - ENHANCE)
+**Implementation:** `test/mock/rds_server.go`
+- Uses `golang.org/x/crypto/ssh` to create SSH server
+- Simulates RouterOS CLI (`/disk add`, `/disk remove`, `/disk print`)
+- Stores volumes in memory map
+- Responds with RouterOS-style output
 
-## Confidence Assessment
+**When to use:** Unit tests, integration tests, CSI sanity tests, CI/CD
 
-| Area | Confidence | Rationale |
-|------|------------|-----------|
-| No new dependencies needed | **HIGH** | CSI spec already includes MULTI_NODE_MULTI_WRITER enum, no external libraries required |
-| NVMe/TCP multi-attach support | **HIGH** | Protocol specification and industry documentation confirm multi-initiator support |
-| KubeVirt access mode check | **HIGH** | Official KubeVirt documentation and GitHub issues confirm RWX requirement |
-| Capability declaration approach | **HIGH** | CSI specification and multiple driver examples show same pattern |
-| Block mode recommendation | **HIGH** | CSI docs, Portworx, and NVMe characteristics confirm block mode superiority |
-| Attachment manager changes | **MEDIUM** | Logic is straightforward but needs testing with real migrations |
-| Migration timeout values | **MEDIUM** | Optimal timeout values need E2E testing |
+**Enhancements needed for v0.9.0:**
+- Add support for `/file print` (capacity queries)
+- Simulate command errors (disk full, invalid slot)
+- Add delay/timeout simulation for reliability testing
+- Support concurrent SSH connections
 
----
+### Pattern B: Real RDS (OPTIONAL)
+**Setup:** Export `RDS_ADDRESS`, `RDS_SSH_KEY` environment variables
+**When to use:** Manual validation before releases; hardware validation
 
-## Implementation Phases
+**Trade-off:** Requires physical hardware; slower than mock; not suitable for CI
 
-### Phase 1: Core RWX Support (Minimal Changes)
-- Add MULTI_NODE_MULTI_WRITER to volume capabilities
-- Modify ControllerPublishVolume to allow dual attachment for RWX volumes
-- Add access mode awareness to attachment tracking
-- **Estimated effort:** 2-3 days
+### Pattern C: Mock NVMe Subsystem (FUTURE)
+**Not implemented yet**
+**Would need:** Simulate `/sys/class/nvme/` filesystem for device resolution
+**Complexity:** High; requires extensive sysfs mocking
+**Priority:** LOW; current tests use real NVMe logic with mocked exec commands
 
-### Phase 2: Enhanced Tracking (Recommended)
-- Extend AttachmentState for migration info
-- Add migration timeout handling
-- Improve reconciler for migration cleanup
-- **Estimated effort:** 2-3 days
+## Version Compatibility
 
-### Phase 3: Metrics and Observability (Optional)
-- Add migration-specific Prometheus metrics
-- Dashboard updates
-- Alerting rules for stuck migrations
-- **Estimated effort:** 1-2 days
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| csi-test/v5 v5.4.0 | CSI spec v1.10.0 | RDS driver uses v1.10.0; fully compatible |
+| Ginkgo v2.28.1 | Go 1.20+ | RDS driver uses Go 1.24; fully compatible |
+| Gomega v1.36.2 | Ginkgo v2.x | Use matching major version |
+| testify v1.11.1 | All Go versions | Already in use; no conflicts with Ginkgo |
+| csi-test/v5 | Ginkgo v2.x | csi-sanity uses Ginkgo internally; must use v2 |
 
----
+**Critical compatibility note:** csi-test v5 requires Ginkgo v2. Do NOT use Ginkgo v1 (deprecated).
+
+## Gap Analysis Methodology
+
+### Tool 1: go tool cover (CURRENT)
+**Purpose:** Line coverage percentage per package
+**Usage:**
+```bash
+make test-coverage          # Generates coverage.html
+go tool cover -func=coverage.out | grep total
+```
+
+**Strengths:**
+- Built-in; no installation
+- Fast; runs with tests
+- HTML visualization shows uncovered lines
+
+**Weaknesses:**
+- Doesn't identify WHAT scenarios are missing
+- Line coverage ≠ behavior coverage
+- No CSI spec coverage mapping
+
+### Tool 2: csi-sanity (NEW - RECOMMENDED)
+**Purpose:** CSI specification compliance testing
+**Usage:**
+```bash
+make test-sanity-mock       # Uses mock RDS
+make test-sanity-real       # Uses real RDS (requires RDS_ADDRESS)
+```
+
+**What it tests:**
+- All CSI gRPC methods (CreateVolume, DeleteVolume, NodeStageVolume, etc.)
+- Error handling (missing parameters, invalid volume IDs, etc.)
+- Idempotency (calling same method twice)
+- Capability validation
+
+**Gap detection:**
+- If test fails → implementation doesn't conform to CSI spec
+- If test passes → method works according to spec
+- Reports: Pass/fail with specific gRPC error codes
+
+### Tool 3: Manual CSI Capability Matrix (NEW - CREATE)
+**Purpose:** Document what CSI features are implemented vs. optional
+**Format:** Markdown table in `docs/CSI-CAPABILITIES.md`
+
+Example:
+| CSI Method | Status | Tested | Notes |
+|------------|--------|--------|-------|
+| CreateVolume | IMPLEMENTED | ✅ Sanity + Unit | Supports block and mount volumes |
+| VolumeContentSource | NOT IMPLEMENTED | N/A | Cloning not supported (RDS limitation) |
+| ControllerPublishVolume | NOT IMPLEMENTED | N/A | Not needed (NVMe/TCP is node-local) |
+
+**Gap detection:** Visual audit of unimplemented methods
+
+### Tool 4: Coverage Diff (RECOMMENDED ADDITION)
+**Purpose:** Prevent coverage regressions
+**Implementation:**
+```bash
+# In CI
+go test -coverprofile=new.out ./pkg/...
+go tool cover -func=new.out | grep total > new-coverage.txt
+# Compare with baseline (e.g., 65%)
+# Fail if coverage drops below threshold
+```
+
+**Gap detection:** Alerts when new code isn't tested
+
+### Tool 5: Test Coverage by Scenario (MANUAL)
+**Purpose:** Identify missing error scenarios
+**Method:** Code review checklist per CSI method
+
+Example for `NodeStageVolume`:
+- [ ] Happy path (mount volume)
+- [ ] Happy path (block volume)
+- [ ] Volume already staged (idempotency)
+- [ ] Invalid volume ID
+- [ ] NVMe connect fails
+- [ ] Filesystem format fails
+- [ ] Mount fails
+- [x] Staging path doesn't exist (COVERED)
+
+**Gap detection:** Unchecked boxes = missing tests
+
+## Integration with Existing Infrastructure
+
+### Makefile Targets (EXTEND)
+
+Current targets to keep:
+```makefile
+test                 # Go unit tests with testify
+test-coverage        # Coverage report (keep)
+test-integration     # Integration tests with mock RDS (keep)
+lint                 # golangci-lint (keep)
+verify               # fmt + vet + lint + test (keep)
+```
+
+New targets to add:
+```makefile
+test-sanity          # Run csi-sanity (auto-detect mock vs real RDS)
+test-sanity-mock     # Force mock RDS
+test-sanity-real     # Force real RDS (requires RDS_ADDRESS env var)
+test-e2e             # End-to-end tests with fake Kubernetes
+test-all             # Run all tests (unit + integration + sanity + e2e)
+coverage-check       # Fail if coverage < 70%
+```
+
+### Go Module Changes
+
+Add to `go.mod`:
+```go
+require (
+    github.com/kubernetes-csi/csi-test/v5 v5.4.0
+    github.com/onsi/ginkgo/v2 v2.28.1
+    github.com/onsi/gomega v1.36.2
+)
+```
+
+No removals needed; testify and existing dependencies remain.
+
+### Test Directory Structure (AFTER v0.9.0)
+
+```
+test/
+├── integration/          # Existing; mock RDS + real driver
+│   ├── controller_integration_test.go
+│   └── hardware_integration_test.go
+├── mock/                 # Existing; mock RDS server
+│   └── rds_server.go     # Enhance for v0.9.0
+├── sanity/               # NEW: CSI sanity wrapper
+│   ├── sanity_test.go    # Ginkgo test suite
+│   └── sanity.sh         # Helper script (optional)
+├── e2e/                  # NEW: End-to-end tests
+│   ├── e2e_suite_test.go # Ginkgo suite setup
+│   └── volume_lifecycle_test.go
+└── docker/               # Existing; Docker Compose environment
+    └── docker-compose.yml
+```
+
+### CI Integration (GITHUB ACTIONS EXAMPLE)
+
+```yaml
+# .github/workflows/test.yml
+jobs:
+  unit-tests:
+    steps:
+      - run: make test
+      - run: make coverage-check
+
+  integration-tests:
+    steps:
+      - run: make test-integration
+
+  sanity-tests:
+    steps:
+      - run: make test-sanity-mock  # Uses mock RDS
+
+  lint:
+    steps:
+      - run: make lint
+```
 
 ## Sources
 
-**Primary (HIGH confidence):**
-- [Live Migration - KubeVirt user guide](https://kubevirt.io/user-guide/compute/live_migration/)
-- [Raw Block Volume - Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/raw-block.html)
-- [CSI Specification - container-storage-interface/spec](https://github.com/container-storage-interface/spec/blob/master/csi.proto)
-- [Portworx - Kubernetes Native Virtualization Meets Enterprise Storage](https://portworx.com/blog/kubernetes-native-virtualization-meets-enterprise-storage/)
+**HIGH Confidence:**
+- [kubernetes-csi/csi-test](https://github.com/kubernetes-csi/csi-test) — Official CSI testing framework; v5.4.0 release notes verified
+- [csi-test/pkg/sanity README](https://github.com/kubernetes-csi/csi-test/blob/master/pkg/sanity/README.md) — Sanity test usage and requirements
+- [Ginkgo v2.28.1 pkg.go.dev](https://pkg.go.dev/github.com/onsi/ginkgo/v2) — Version and Go compatibility verified (Jan 30, 2026 release)
+- [Gomega pkg.go.dev](https://pkg.go.dev/github.com/onsi/gomega) — Matcher library documentation
+- [testify v1.11.1 pkg.go.dev](https://pkg.go.dev/github.com/stretchr/testify) — Existing dependency; version confirmed
+- [golang.org/x/crypto/ssh/test](https://pkg.go.dev/golang.org/x/crypto/ssh/test) — Mock SSH server package (Jan 12, 2026 update)
+- [Kubernetes CSI Developer Docs - Functional Testing](https://kubernetes-csi.github.io/docs/functional-testing.html) — E2E testing approaches and TestDriver interface
+- [csi-driver-host-path](https://github.com/kubernetes-csi/csi-driver-host-path) — Reference CSI driver; testing patterns studied
+- [csi-driver-nfs](https://github.com/kubernetes-csi/csi-driver-nfs) — Production CSI driver; E2E test examples
 
-**Supporting (MEDIUM confidence):**
-- [KubeVirt - Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/)
-- [Portworx RWX Block Volumes](https://docs.portworx.com/portworx-csi/operations/raw-block-for-live-migration)
-- [Allow block live migration of PVCs that do not support ReadWriteMany - Issue #10642](https://github.com/kubevirt/kubevirt/issues/10642)
-- [OpenEBS - KubeVirt VM Live Migration with Replicated PV](https://openebs.io/docs/Solutioning/read-write-many/kubevirt)
-- [Red Hat - Storage considerations for OpenShift Virtualization](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization)
+**MEDIUM Confidence:**
+- [Kubernetes Blog: Testing of CSI drivers](https://kubernetes.io/blog/2020/01/08/testing-of-csi-drivers/) — General patterns (2020 article; frameworks updated since)
+- [SSH Testing in Go (Medium)](https://medium.com/@metarsit/ssh-is-fun-till-you-need-to-unit-test-it-in-go-f3b3303974ab) — Community patterns for SSH mocking
+- [Go Testing Libraries Overview](https://softwarepatternslexicon.com/go/tools-and-libraries-for-go-design-patterns/testing-libraries/) — Testify, GoMock, Ginkgo comparison
+
+**Project Context (HIGH Confidence):**
+- `/Users/whiskey/code/rds-csi/.planning/codebase/TESTING.md` — Existing test patterns; 65% coverage baseline; testify usage confirmed
+- `/Users/whiskey/code/rds-csi/go.mod` — Current dependencies verified (Go 1.24, testify v1.11.1, crypto v0.41.0)
+- `/Users/whiskey/code/rds-csi/test/mock/rds_server.go` — Existing mock RDS implementation using golang.org/x/crypto/ssh
+
+---
+*Stack research for: Kubernetes CSI Driver Testing (v0.9.0 milestone)*
+*Researched: 2026-02-04*

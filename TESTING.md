@@ -180,6 +180,28 @@ make test-docker-integration
 | Manual E2E | ✅ Yes | ~5-10m | End-to-end scenarios |
 | Docker Compose | ❌ No | ~2m | Containerized validation |
 
+## Running Specific Test Suites
+
+```bash
+# Unit tests only
+make test
+
+# Unit tests with coverage
+make test-coverage
+
+# E2E tests (mock environment)
+make e2e-test
+
+# CSI sanity tests
+go test -v -timeout 15m ./test/sanity/...
+
+# Stress tests
+go test -v -race -timeout 5m ./test/mock/... -run TestConcurrent
+
+# Flaky test detection
+go test -count=10 -race ./pkg/...
+```
+
 ## Running All Tests
 
 ### Quick Validation (No Hardware)
@@ -216,19 +238,28 @@ make test-docker-sanity    # Containerized CSI sanity tests
 
 ## Test Coverage Goals
 
-### Current Status (Milestone 2)
+### Current Status (v0.9.0)
 
-- **Unit Tests**: 23 tests across all packages
-- **Integration Tests**: 10 scenarios covering controller lifecycle
-- **CSI Sanity**: Identity + Controller services
-- **Line Coverage**: ~85% for implemented packages
+- **Overall Coverage**: ~68.6% (target 70%)
+- **CI Threshold**: 65% minimum
+- **Package Thresholds**:
+  - pkg/rds: 67.7% (critical path)
+  - pkg/mount: 70.3% (system interaction)
+  - pkg/nvme: 54.5% (hardware-dependent)
+  - pkg/utils: 88.0% (pure utility)
+  - pkg/attachment: 83.5% (state management)
+  - pkg/driver: 59.8% (CSI implementation)
+  - pkg/security: 91.9% (validation)
+  - pkg/circuitbreaker: 90.2% (reliability)
+  - pkg/observability: 75.0% (monitoring)
+  - pkg/reconciler: 66.4% (state management)
 
-### Target (v0.1.0)
+### Target (v1.0.0)
 
-- **Unit Tests**: >90% code coverage
-- **Integration Tests**: All controller scenarios + node scenarios
+- **Overall Coverage**: >70% code coverage
 - **CSI Sanity**: 100% of applicable tests passing
 - **E2E Tests**: Full volume lifecycle validated on real hardware
+- **Stress Tests**: Concurrent operations validated
 
 ## Writing Tests
 
@@ -395,6 +426,32 @@ ls -l /tmp/csi-sanity.sock
 go test -v -timeout 20m ./test/integration/...
 ```
 
+## Flaky Tests
+
+### Detected Flaky Tests
+
+| Test | Package | Failure Rate | Cause | Status |
+|------|---------|--------------|-------|--------|
+| (none currently) | - | - | - | - |
+
+### Detection Methodology
+
+Flaky tests are detected using:
+```bash
+go test -count=10 -race ./pkg/...
+```
+
+A test is considered flaky if it fails intermittently across multiple runs.
+
+### Skipped Tests
+
+| Test | Package | Reason | Tracking Issue |
+|------|---------|--------|----------------|
+| (none currently) | - | - | - |
+
+If a flaky test cannot be fixed immediately, it is skipped with `t.Skip("reason")`
+and tracked for future resolution.
+
 ## Next Steps
 
 After Milestone 2 testing is complete:
@@ -423,6 +480,6 @@ After Milestone 2 testing is complete:
 
 ---
 
-**Last Updated**: 2025-11-05
-**Milestone**: 2 (Controller Service)
-**Test Status**: ✅ All Milestone 1 & 2 tests passing
+**Last Updated**: 2026-02-05
+**Milestone**: v0.9.0 Production Readiness
+**Test Status**: ✅ All tests passing (68.6% coverage)

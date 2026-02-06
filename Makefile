@@ -60,6 +60,8 @@ help:
 	@echo "  make test                - Run unit tests"
 	@echo "  make test-coverage       - Run tests with coverage report"
 	@echo "  make test-integration    - Run integration tests with mock RDS"
+	@echo "  make e2e-test            - Run E2E tests"
+	@echo "  make e2e-test-verbose    - Run E2E tests with verbose Ginkgo output"
 	@echo "  make test-sanity         - Run CSI sanity tests (requires RDS or uses mock)"
 	@echo "  make test-sanity-mock    - Run CSI sanity tests with mock RDS"
 	@echo "  make test-sanity-real    - Run CSI sanity tests with real RDS (requires env vars)"
@@ -224,6 +226,20 @@ test-integration:
 	@echo "Running integration tests with mock RDS..."
 	go test -v -race -timeout 10m ./test/integration/...
 
+# E2E tests with Ginkgo
+.PHONY: e2e-test
+e2e-test:
+	@echo "Running E2E tests..."
+	go test -v ./test/e2e/... -count=1 -timeout 10m
+	@echo "E2E tests completed"
+
+# E2E tests with verbose Ginkgo output
+.PHONY: e2e-test-verbose
+e2e-test-verbose:
+	@echo "Running E2E tests (verbose)..."
+	go test -v ./test/e2e/... -ginkgo.v -count=1 -timeout 10m
+	@echo "E2E tests completed"
+
 # CSI Sanity Tests
 .PHONY: test-sanity
 test-sanity:
@@ -234,9 +250,9 @@ test-sanity:
 	@test/sanity/run-sanity-tests.sh
 
 .PHONY: test-sanity-mock
-test-sanity-mock: build-local
+test-sanity-mock:
 	@echo "Running CSI sanity tests with mock RDS..."
-	@RDS_ADDRESS="" test/sanity/run-sanity-tests.sh
+	go test -v -race -timeout 10m ./test/sanity/...
 
 .PHONY: test-sanity-real
 test-sanity-real: build-local
@@ -279,8 +295,12 @@ sanity: test-sanity-mock
 lint:
 	@echo "Running linters..."
 	@if ! command -v golangci-lint &> /dev/null; then \
-		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		echo "Installing golangci-lint v2.1.5..."; \
+		curl -sSfL https://github.com/golangci/golangci-lint/releases/download/v2.1.5/golangci-lint-2.1.5-linux-amd64.tar.gz | \
+		tar -xz -C /tmp && \
+		mkdir -p $(shell go env GOPATH)/bin && \
+		mv /tmp/golangci-lint-2.1.5-linux-amd64/golangci-lint $(shell go env GOPATH)/bin/golangci-lint && \
+		rm -rf /tmp/golangci-lint-2.1.5-linux-amd64; \
 	fi
 	golangci-lint run --timeout 5m
 

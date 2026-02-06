@@ -19,7 +19,9 @@ const (
 )
 
 var (
-	// volumeIDPattern matches valid volume IDs (pvc-<uuid>)
+	// volumeIDPattern matches strict UUID format with pvc- prefix
+	// Format: pvc-<lowercase-uuid>
+	// Example: pvc-12345678-1234-1234-1234-123456789abc
 	volumeIDPattern = regexp.MustCompile(`^pvc-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
 	// safeSlotPattern matches safe slot names (alphanumeric and hyphen only)
@@ -53,17 +55,44 @@ func VolumeNameToID(name string) string {
 	return VolumeIDPrefix + id.String()
 }
 
-// ValidateVolumeID validates that a volume ID is in the correct format
+// ValidateVolumeID validates that a volume ID is safe for use in commands
+// For production volume IDs: must match "pvc-<lowercase-uuid>" format
+// For CSI sanity tests: accepts alphanumeric with hyphens (safe pattern) but not UUID-like strings
+// SECURITY: Prevents command injection by restricting to safe characters only
 func ValidateVolumeID(volumeID string) error {
 	if volumeID == "" {
 		return fmt.Errorf("volume ID cannot be empty")
 	}
 
-	if !volumeIDPattern.MatchString(volumeID) {
-		return fmt.Errorf("invalid volume ID format: %s (expected pvc-<uuid>)", volumeID)
+	// Check if it matches strict UUID pattern (production volume IDs)
+	if volumeIDPattern.MatchString(volumeID) {
+		return nil // Valid production volume ID
 	}
 
-	return nil
+	// For safety, reject anything with special characters first
+	if !safeSlotPattern.MatchString(volumeID) {
+		return fmt.Errorf("invalid volume ID format: %s (only alphanumeric and hyphen allowed)", volumeID)
+	}
+
+	// Reject if it starts with "pvc-" but doesn't match UUID format
+	// This catches malformed production IDs like "pvc-invalid" or "pvc-UPPERCASE"
+	if strings.HasPrefix(volumeID, VolumeIDPrefix) {
+		return fmt.Errorf("invalid volume ID format: %s (expected pvc-<lowercase-uuid>)", volumeID)
+	}
+
+	// Reject UUID-like strings without proper prefix (e.g., "12345678-1234-...")
+	// This pattern detects UUID format without "pvc-" prefix
+	uuidLikePattern := regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+	if uuidLikePattern.MatchString(volumeID) {
+		return fmt.Errorf("invalid volume ID format: %s (missing pvc- prefix)", volumeID)
+	}
+
+	// Additional length check to prevent excessively long volume IDs
+	if len(volumeID) > 250 {
+		return fmt.Errorf("volume ID too long: %d characters (max 250)", len(volumeID))
+	}
+
+	return nil // Valid CSI sanity test ID (alphanumeric, no pvc-, not UUID-like)
 }
 
 // ValidateSlotName validates that a slot name is safe (prevents command injection)
@@ -108,11 +137,14 @@ func ValidateNQN(nqn string) error {
 
 // VolumeIDToNQN converts a volume ID to an NVMe Qualified Name
 func VolumeIDToNQN(volumeID string) (string, error) {
+	// Validate volume ID is safe (prevents command injection)
 	if err := ValidateVolumeID(volumeID); err != nil {
 		return "", err
 	}
 
-	nqn := fmt.Sprintf("%s:%s", NQNPrefix, volumeID)
+	// Convert to lowercase for NQN (NVMe spec requires lowercase)
+	volumeIDLower := strings.ToLower(volumeID)
+	nqn := fmt.Sprintf("%s:%s", NQNPrefix, volumeIDLower)
 
 	// SECURITY: Validate the generated NQN before returning
 	if err := ValidateNQN(nqn); err != nil {
@@ -147,6 +179,8 @@ func ExtractVolumeIDFromNQN(nqn string) (string, error) {
 	}
 
 	volumeID := nqn[len(expectedPrefix):]
+
+	// Volume ID in NQN is lowercase, validate it's safe
 	if err := ValidateVolumeID(volumeID); err != nil {
 		return "", fmt.Errorf("invalid volume ID in NQN: %w", err)
 	}

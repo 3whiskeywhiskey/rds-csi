@@ -70,3 +70,59 @@ func TestNewDriver_NodeModeSkipsAttachmentManager(t *testing.T) {
 // 2. This test: SetMetrics method works correctly
 // 3. prometheus_test.go: RecordMigration* methods work correctly
 // 4. Manual testing: Full integration test with real driver
+
+// TestNewDriver_NodeWatcherNilWhenControllerDisabled verifies that node watcher
+// is not created when controller mode is disabled (node-only mode).
+func TestNewDriver_NodeWatcherNilWhenControllerDisabled(t *testing.T) {
+	config := DriverConfig{
+		DriverName:            "rds.csi.srvlab.io",
+		NodeID:                "test-node",
+		EnableController:      false, // Node mode only
+		EnableNode:            true,
+		K8sClient:             fake.NewSimpleClientset(),
+		Metrics:               observability.NewMetrics(),
+		ManagedNQNPrefix:      "nqn.2000-02.com.example:csi",
+		RDSAddress:            "10.0.0.1",
+		RDSPort:               4420,
+		RDSInsecureSkipVerify: true,
+	}
+
+	driver, err := NewDriver(config)
+	if err != nil {
+		t.Fatalf("NewDriver failed: %v", err)
+	}
+
+	if driver.nodeWatcher != nil {
+		t.Error("NodeWatcher should not be created in node-only mode")
+	}
+
+	if driver.connectionManager != nil {
+		t.Error("ConnectionManager should not be created in node-only mode")
+	}
+}
+
+// TestNewDriver_ConnectionManagerNilWhenNoRDSClient verifies that connection manager
+// is not created when RDS client is nil (should not happen in practice, but safety check).
+func TestNewDriver_ConnectionManagerNilWhenNoRDSClient(t *testing.T) {
+	config := DriverConfig{
+		DriverName:            "rds.csi.srvlab.io",
+		NodeID:                "test-node",
+		EnableController:      false, // No controller = no RDS client
+		EnableNode:            true,
+		K8sClient:             fake.NewSimpleClientset(),
+		Metrics:               observability.NewMetrics(),
+		ManagedNQNPrefix:      "nqn.2000-02.com.example:csi",
+		RDSAddress:            "10.0.0.1",
+		RDSPort:               4420,
+		RDSInsecureSkipVerify: true,
+	}
+
+	driver, err := NewDriver(config)
+	if err != nil {
+		t.Fatalf("NewDriver failed: %v", err)
+	}
+
+	if driver.connectionManager != nil {
+		t.Error("ConnectionManager should be nil when RDS client is not initialized")
+	}
+}

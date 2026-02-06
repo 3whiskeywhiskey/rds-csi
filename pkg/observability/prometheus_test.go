@@ -641,3 +641,131 @@ func TestMigrationDurationHistogram(t *testing.T) {
 		t.Error("expected histogram count to be 2")
 	}
 }
+
+func TestRecordConnectionState_Connected(t *testing.T) {
+	m := NewMetrics()
+
+	// Record connected state
+	m.RecordConnectionState("10.42.68.1", true)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check gauge set to 1.0 for connected
+	if !strings.Contains(body, `rds_csi_rds_connection_state{address="10.42.68.1"} 1`) {
+		t.Errorf("expected connection_state to be 1 for connected, got:\n%s", body)
+	}
+}
+
+func TestRecordConnectionState_Disconnected(t *testing.T) {
+	m := NewMetrics()
+
+	// Record disconnected state
+	m.RecordConnectionState("10.42.68.1", false)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check gauge set to 0.0 for disconnected
+	if !strings.Contains(body, `rds_csi_rds_connection_state{address="10.42.68.1"} 0`) {
+		t.Errorf("expected connection_state to be 0 for disconnected, got:\n%s", body)
+	}
+}
+
+func TestRecordConnectionState_MultipleAddresses(t *testing.T) {
+	m := NewMetrics()
+
+	// Record state for multiple addresses
+	m.RecordConnectionState("10.42.68.1", true)
+	m.RecordConnectionState("10.42.68.2", false)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check both addresses recorded
+	if !strings.Contains(body, `rds_csi_rds_connection_state{address="10.42.68.1"} 1`) {
+		t.Error("expected connection_state for 10.42.68.1 to be 1")
+	}
+	if !strings.Contains(body, `rds_csi_rds_connection_state{address="10.42.68.2"} 0`) {
+		t.Error("expected connection_state for 10.42.68.2 to be 0")
+	}
+}
+
+func TestRecordReconnectAttempt_Success(t *testing.T) {
+	m := NewMetrics()
+
+	// Record successful reconnect
+	m.RecordReconnectAttempt("success", 2*time.Second)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check counter incremented
+	if !strings.Contains(body, `rds_csi_rds_reconnect_total{status="success"} 1`) {
+		t.Error("expected reconnect_total with status=success to be 1")
+	}
+
+	// Check histogram observed the duration
+	if !strings.Contains(body, "rds_csi_rds_reconnect_duration_seconds_bucket") {
+		t.Error("expected reconnect_duration_seconds histogram bucket")
+	}
+}
+
+func TestRecordReconnectAttempt_Failure(t *testing.T) {
+	m := NewMetrics()
+
+	// Record failed reconnect
+	m.RecordReconnectAttempt("failure", 0)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check counter incremented
+	if !strings.Contains(body, `rds_csi_rds_reconnect_total{status="failure"} 1`) {
+		t.Error("expected reconnect_total with status=failure to be 1")
+	}
+}
+
+func TestRecordReconnectAttempt_MultipleAttempts(t *testing.T) {
+	m := NewMetrics()
+
+	// Record multiple attempts
+	m.RecordReconnectAttempt("failure", 0)
+	m.RecordReconnectAttempt("failure", 0)
+	m.RecordReconnectAttempt("success", 3*time.Second)
+
+	handler := m.Handler()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Check counters
+	if !strings.Contains(body, `rds_csi_rds_reconnect_total{status="failure"} 2`) {
+		t.Error("expected reconnect_total with status=failure to be 2")
+	}
+	if !strings.Contains(body, `rds_csi_rds_reconnect_total{status="success"} 1`) {
+		t.Error("expected reconnect_total with status=success to be 1")
+	}
+}

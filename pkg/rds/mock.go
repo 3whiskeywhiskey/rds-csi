@@ -7,16 +7,20 @@ import (
 
 // MockClient is a mock implementation of RDSClient for testing
 type MockClient struct {
-	mu      sync.RWMutex
-	volumes map[string]*VolumeInfo
-	address string
+	mu            sync.RWMutex
+	volumes       map[string]*VolumeInfo
+	address       string
+	connected     bool  // Connection state (for testing connection manager)
+	nextError     error // Error to return on next operation
+	persistentErr error // Error to return on all operations until cleared
 }
 
 // NewMockClient creates a new MockClient for testing
 func NewMockClient() *MockClient {
 	return &MockClient{
-		volumes: make(map[string]*VolumeInfo),
-		address: "mock-rds-server",
+		volumes:   make(map[string]*VolumeInfo),
+		address:   "mock-rds-server",
+		connected: true, // Default to connected
 	}
 }
 
@@ -41,19 +45,78 @@ func (m *MockClient) SetAddress(addr string) {
 	m.address = addr
 }
 
+// SetError sets an error to be returned on the next operation (test helper)
+func (m *MockClient) SetError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextError = err
+}
+
+// SetPersistentError sets an error to be returned on ALL operations until cleared (test helper)
+func (m *MockClient) SetPersistentError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistentErr = err
+}
+
+// ClearError clears any pending error (test helper)
+func (m *MockClient) ClearError() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextError = nil
+	m.persistentErr = nil
+}
+
+// SetConnected sets the connection state (test helper)
+func (m *MockClient) SetConnected(connected bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = connected
+}
+
+// checkError checks for and clears pending error
+func (m *MockClient) checkError() error {
+	// Check persistent error first
+	if m.persistentErr != nil {
+		return m.persistentErr
+	}
+	// Then check one-time error
+	if m.nextError != nil {
+		err := m.nextError
+		m.nextError = nil
+		return err
+	}
+	return nil
+}
+
 // Connect implements RDSClient
 func (m *MockClient) Connect() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for persistent error (simulates connection failure)
+	if m.persistentErr != nil {
+		return m.persistentErr
+	}
+
+	// Mark as connected on successful connect
+	m.connected = true
 	return nil
 }
 
 // Close implements RDSClient
 func (m *MockClient) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connected = false
 	return nil
 }
 
 // IsConnected implements RDSClient
 func (m *MockClient) IsConnected() bool {
-	return true
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.connected
 }
 
 // GetAddress implements RDSClient
@@ -67,6 +130,11 @@ func (m *MockClient) GetAddress() string {
 func (m *MockClient) CreateVolume(opts CreateVolumeOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return err
+	}
 
 	if _, exists := m.volumes[opts.Slot]; exists {
 		return fmt.Errorf("volume %s already exists", opts.Slot)
@@ -90,6 +158,11 @@ func (m *MockClient) DeleteVolume(slot string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return err
+	}
+
 	if _, exists := m.volumes[slot]; !exists {
 		// Idempotent - not an error if doesn't exist
 		return nil
@@ -104,6 +177,11 @@ func (m *MockClient) ResizeVolume(slot string, newSizeBytes int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return err
+	}
+
 	vol, exists := m.volumes[slot]
 	if !exists {
 		return &VolumeNotFoundError{Slot: slot}
@@ -115,8 +193,13 @@ func (m *MockClient) ResizeVolume(slot string, newSizeBytes int64) error {
 
 // GetVolume implements RDSClient
 func (m *MockClient) GetVolume(slot string) (*VolumeInfo, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for pending error
+	if err := m.checkError(); err != nil {
+		return nil, err
+	}
 
 	vol, exists := m.volumes[slot]
 	if !exists {

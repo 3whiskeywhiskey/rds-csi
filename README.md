@@ -1,9 +1,9 @@
 # RDS CSI Driver
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/whiskey/rds-csi-driver)](https://goreportcard.com/report/github.com/whiskey/rds-csi-driver)
-[![Dev Build](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/dev.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/dev.yml)
-[![Main Build](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/main.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi-driver/actions/workflows/main.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/3whiskeywhiskey/rds-csi)](https://goreportcard.com/report/github.com/3whiskeywhiskey/rds-csi)
+[![Dev Build](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/dev.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/dev.yml)
+[![Main Build](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/main.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/main.yml)
 
 Kubernetes CSI (Container Storage Interface) driver for **MikroTik ROSE Data Server (RDS)** NVMe/TCP storage.
 
@@ -17,9 +17,13 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 - **NVMe/TCP Protocol**: Low-latency, high-throughput block storage access
 - **File-backed Volumes**: Efficient storage allocation using file-backed disk images on Btrfs RAID
 - **SSH-based Management**: Secure remote administration using RouterOS CLI
-- **Orphan Volume Reconciliation**: Automatic detection and cleanup of orphaned volumes (optional) ✨ **New**
+- **Volume Expansion**: Dynamically resize volumes (ControllerExpandVolume, NodeExpandVolume)
+- **Block Volume Support**: CSI block volumes for KubeVirt VMs without filesystem formatting
+- **KubeVirt Live Migration**: VM migration validated with ~15s migration window
+- **NVMe-oF Reconnection Resilience**: Volumes remain accessible after network hiccups and RDS restarts
+- **Attachment Reconciliation**: Automatic recovery from stale VolumeAttachment state after infrastructure failures
+- **Orphan Volume Reconciliation**: Automatic detection and cleanup of orphaned volumes (optional)
 - **Enhanced Error Handling**: Comprehensive retry logic, idempotent operations, and audit logging
-- **Volume Expansion**: Resize volumes dynamically (planned)
 - **Snapshots**: Btrfs-based volume snapshots (planned)
 - **Volume Cloning**: Fast volume duplication for rapid VM provisioning (planned)
 
@@ -71,20 +75,30 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 
 ## Status
 
-**Current Phase**: 🚧 **Alpha / In Development**
+**Current Version**: v0.8.0 (v0.9.0 in progress)
 
+**Completed:**
 - [x] Project setup and documentation
 - [x] CSI Identity service
-- [x] Controller service (CreateVolume, DeleteVolume)
-- [x] Node service (mount/unmount operations)
-- [x] Kubernetes deployment manifests
+- [x] Controller service (CreateVolume, DeleteVolume, ValidateVolumeCapabilities, GetCapacity)
+- [x] Node service (NodeStageVolume, NodePublishVolume, NodeUnstageVolume, NodeUnpublishVolume)
+- [x] Kubernetes deployment manifests and RBAC
 - [x] E2E testing in production cluster
-- [ ] Helm chart
-- [ ] Production hardening and monitoring
+- [x] Volume expansion support
+- [x] Block volume support for KubeVirt
+- [x] KubeVirt live migration validation
+- [x] Orphan reconciliation
+- [x] NVMe-oF reconnection resilience
+- [x] Attachment reconciliation
+- [ ] Helm chart (planned)
+- [x] Prometheus metrics endpoint
+- [x] Comprehensive test coverage (65%+)
 
-**Latest**: ✅ v0.1.6 - Successfully deployed and tested in production cluster with working volume lifecycle
+**In Progress (v0.9.0):**
+- [ ] Volume snapshots (Phase 26)
+- [ ] Documentation & hardware validation (Phase 27)
 
-See [ROADMAP.md](ROADMAP.md) for detailed implementation plan.
+See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress.
 
 ## Prerequisites
 
@@ -98,7 +112,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed implementation plan.
 - **Kubernetes Version**: 1.26+
 - **CSI Spec**: v1.5.0+ support
 - **Kernel**: Linux 5.0+ with NVMe-TCP kernel module (`nvme-tcp`)
-- **nvme-cli**: Installed on all worker nodes
+- **nvme-cli**: Installed on all worker nodes (for NVMe/TCP operations)
 
 ### Network
 - Worker nodes must have network connectivity to RDS on storage VLAN
@@ -108,27 +122,6 @@ See [ROADMAP.md](ROADMAP.md) for detailed implementation plan.
 ## Quick Start
 
 ### Installation
-
-#### Via Helm (Recommended)
-
-```bash
-# Add repository
-helm repo add rds-csi https://git.srvlab.io/whiskey/rds-csi-driver/helm
-
-# Create SSH key secret
-kubectl create secret generic rds-ssh-key \
-  --from-file=id_rsa=/path/to/rds-ssh-key \
-  --namespace kube-system
-
-# Install driver
-helm install rds-csi rds-csi/rds-csi-driver \
-  --namespace kube-system \
-  --set rds.address=10.42.68.1 \
-  --set rds.sshUser=admin \
-  --set rds.nvmePort=4420
-```
-
-#### Via kubectl
 
 ```bash
 # Apply manifests
@@ -228,7 +221,7 @@ See [docs/configuration.md](docs/configuration.md) for comprehensive configurati
 
 ### Prerequisites
 
-- Kubernetes v1.20+ with CSI support
+- Kubernetes v1.26+ with CSI support
 - Linux nodes with kernel 5.0+ (`nvme-tcp` module)
 - `nvme-cli` installed on all nodes
 - Network connectivity from nodes to RDS
@@ -293,8 +286,8 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for more details.
 
 ```bash
 # Clone repository
-git clone ssh://git@git.srvlab.io:2222/whiskey/rds-csi-driver.git
-cd rds-csi-driver
+git clone https://github.com/3whiskeywhiskey/rds-csi.git
+cd rds-csi
 
 # Build binary
 make build
@@ -319,9 +312,9 @@ See [docs/development.md](docs/development.md) for development environment setup
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for detailed implementation phases and timeline.
+See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress.
 
-**Current Focus**: Milestone 1 - Foundation (Weeks 1-3)
+**Current Focus**: v0.9.0 - Production Readiness & Test Maturity
 
 ## License
 
@@ -336,7 +329,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Support
 
-- **Issues**: [git.srvlab.io/whiskey/rds-csi-driver/issues](https://git.srvlab.io/whiskey/rds-csi-driver/issues)
+- **Issues**: [github.com/3whiskeywhiskey/rds-csi/issues](https://github.com/3whiskeywhiskey/rds-csi/issues)
 - **Discussions**: Use issue tracker for questions and feature requests
 
 ## Acknowledgments

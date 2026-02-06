@@ -1,204 +1,61 @@
-# RDS CSI Driver - Helper Scripts
+# Scripts
 
-This directory contains helper scripts for development, deployment, and testing.
+Utility scripts for development and CI/CD workflows.
 
-## Scripts
+## gitea-actions
 
-### deploy-dev.sh
+A CLI tool for monitoring Gitea Actions workflows (similar to `gh` for GitHub Actions).
 
-Deploys the RDS CSI driver with the `:dev` container image tag.
-
-**Usage:**
-```bash
-# Deploy and continue
-./scripts/deploy-dev.sh
-
-# Deploy and wait for rollout to complete
-./scripts/deploy-dev.sh --wait
-```
-
-**What it does:**
-1. Updates the controller deployment image to `ghcr.io/3whiskeywhiskey/rds-csi:dev`
-2. Updates the node daemonset image to `ghcr.io/3whiskeywhiskey/rds-csi:dev`
-3. Shows current pod status
-4. Optionally waits for rollout completion
-
-**When to use:**
-- After merging a security fix to the dev branch
-- After CI/CD builds and pushes a new `:dev` image
-- Testing development builds in your cluster
-
----
-
-### test-security-fix.sh
-
-Comprehensive testing suite for security fixes.
-
-**Usage:**
-```bash
-# Full test suite for fix #1
-./scripts/test-security-fix.sh 1
-
-# Skip PVC lifecycle test
-./scripts/test-security-fix.sh 2 --skip-lifecycle
-
-# Skip integration tests
-./scripts/test-security-fix.sh 3 --skip-integration
-```
-
-**What it tests:**
-1. **Deployment Health** - Verifies controller and node pods are ready
-2. **PVC Lifecycle** - Creates test PVC, writes data, verifies, cleans up
-3. **Integration Tests** - Runs `make test-integration`
-4. **Log Inspection** - Checks controller and node logs for errors
-5. **Security Validation** - Fix-specific security checks
-
-**Test PVC naming:**
-- Test PVCs are named `test-security-fix-<number>`
-- They are automatically cleaned up after testing
-- Your existing PVCs (pvc-0d4aa0d9-*, etc.) are never touched
-
-**Security Fix Numbers:**
-- 1 - SSH host key verification
-- 2 - File path validation
-- 3 - NQN validation
-- 4 - Container privileges
-- 5 - Mount options validation
-- 6 - Volume context validation
-- 7 - Rate limiting
-- 8 - Error sanitization
-- 9 - NVMe timeouts
-- 10 - ReDoS prevention
-- 11 - RBAC + Image signing
-
----
-
-## Workflow: Merging Security Fixes
-
-Follow this workflow for each security fix:
-
-### Step 1: Merge the fix to dev
-```bash
-# Merge security fix #1
-git checkout dev
-git merge github/claude/security-fix-1-ssh-host-key-011CUsQLcQ6A5UvW4camcWt1
-git push github dev
-```
-
-### Step 2: Wait for CI/CD
-GitHub Actions will automatically:
-- Run `make verify` (format, vet, lint, test)
-- Run `make test-integration`
-- Build multi-arch image (amd64/arm64)
-- Push to `ghcr.io/3whiskeywhiskey/rds-csi:dev`
-
-Monitor the build: https://github.com/3whiskeywhiskey/rds-csi-driver/actions
-
-### Step 3: Deploy to cluster
-```bash
-# Deploy the new :dev image
-./scripts/deploy-dev.sh --wait
-```
-
-### Step 4: Test thoroughly
-```bash
-# Run comprehensive test suite
-./scripts/test-security-fix.sh 1
-```
-
-### Step 5: Verify and continue
-If tests pass:
-- Review logs for warnings
-- Check existing PVCs are healthy
-- Proceed to next security fix (repeat from Step 1)
-
-If tests fail:
-- Investigate the issue
-- Fix the problem
-- Rebuild and redeploy
-- Test again
-
----
-
-## Environment Requirements
-
-**kubectl:**
-- Must be configured to access your cluster
-- Must have permissions to update deployments/daemonsets
-
-**Container Registry:**
-- GitHub Container Registry (ghcr.io)
-- Images pushed by GitHub Actions with `:dev` tag
-
-**Kubernetes Resources:**
-- Namespace: `kube-system` (for driver)
-- StorageClass: `rds-csi` (for test PVCs)
-- Test namespace: `default` (for test pods)
-
----
-
-## Troubleshooting
-
-### Deploy fails: "cannot connect to cluster"
-```bash
-# Check kubectl configuration
-kubectl cluster-info
-
-# Verify you can access the cluster
-kubectl get nodes
-```
-
-### Test fails: PVC stuck in Pending
-```bash
-# Check StorageClass exists
-kubectl get storageclass rds-csi
-
-# Check controller logs
-kubectl logs -n kube-system deployment/rds-csi-controller
-
-# Check events
-kubectl describe pvc test-security-fix-<number>
-```
-
-### Test cleanup fails
-```bash
-# Manually clean up test resources
-kubectl delete pod test-pod-security-fix-<number> --force --grace-period=0
-kubectl delete pvc test-security-fix-<number> --force --grace-period=0
-```
-
-### CI/CD build fails
-- Check GitHub Actions logs
-- Verify `make verify` passes locally
-- Ensure all tests pass: `make test && make test-integration`
-
----
-
-## Development Workflow
-
-For local development without CI/CD:
+### Setup
 
 ```bash
-# Build locally
-make build-local
-
-# Build and push :dev image manually
-make docker-push IMAGE_TAG=dev
-
-# Deploy to cluster
-./scripts/deploy-dev.sh --wait
-
-# Test
-./scripts/test-security-fix.sh <fix-number>
+export GITEA_TOKEN="your-gitea-token"
+export GITEA_HOST="https://gitea.whiskey.works"  # optional, defaults to this
+export GITEA_REPO_OWNER="whiskey"  # optional
+export GITEA_REPO_NAME="rds-csi"   # optional
 ```
 
----
+### Usage
 
-## Safety Notes
+```bash
+# List recent workflow runs
+./scripts/gitea-actions run list
 
-- **Existing PVCs are safe**: Test scripts use separate PVC names
-- **Rolling updates**: Node daemonset updates pods one at a time
-- **Cleanup**: Test resources are automatically cleaned up
-- **Monitoring**: Scripts show pod status and provide monitoring commands
+# View details of run #3
+./scripts/gitea-actions run view 3
 
-For questions or issues, see the main project documentation.
+# Watch a running workflow (auto-refresh every 5s)
+./scripts/gitea-actions run watch 6
+
+# Get logs for completed run
+./scripts/gitea-actions run logs 3
+
+# List all workflows
+./scripts/gitea-actions workflow list
+```
+
+### Requirements
+
+- **Gitea 1.21+** with Actions API support (PR #35382)
+- **jq** - JSON processor (`brew install jq`)
+- **curl** - HTTP client (usually pre-installed)
+
+### Testing API Support
+
+Run the test script to check if your Gitea instance supports the Actions API:
+
+```bash
+./scripts/test-gitea-actions.sh
+```
+
+This will probe the API endpoints and report what's available.
+
+## Why tea doesn't have this
+
+The official `tea` CLI doesn't yet support Actions monitoring because:
+
+1. **Gitea Actions is relatively new** (added in Gitea 1.19, March 2023)
+2. **Actions API is newer** (workflow management endpoints added in PR #35382)
+3. **tea development hasn't caught up yet** - it still focuses on repos, issues, PRs, releases
+
+This script fills that gap until tea adds native support!

@@ -145,7 +145,7 @@ func TestVolumeIDToNQN(t *testing.T) {
 		},
 		{
 			name:      "invalid volume ID",
-			volumeID:  "invalid",
+			volumeID:  "invalid; rm -rf /",
 			expectErr: true,
 		},
 		{
@@ -198,7 +198,7 @@ func TestVolumeIDToFilePath(t *testing.T) {
 		},
 		{
 			name:      "invalid volume ID",
-			volumeID:  "invalid",
+			volumeID:  "invalid; rm -rf /",
 			basePath:  "/storage-pool/test",
 			expectErr: true,
 		},
@@ -248,7 +248,7 @@ func TestExtractVolumeIDFromNQN(t *testing.T) {
 		},
 		{
 			name:      "invalid volume ID in NQN",
-			nqn:       "nqn.2000-02.com.mikrotik:invalid",
+			nqn:       "nqn.2000-02.com.mikrotik:invalid; rm -rf /",
 			expectErr: true,
 		},
 		{

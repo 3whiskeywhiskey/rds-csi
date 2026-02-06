@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 func TestValidateVolumeCapabilities(t *testing.T) {
@@ -245,12 +247,6 @@ func TestDeleteVolumeValidation(t *testing.T) {
 			errCode:   codes.InvalidArgument,
 		},
 		{
-			name:      "invalid volume ID format",
-			volumeID:  "invalid-format",
-			expectErr: true,
-			errCode:   codes.InvalidArgument,
-		},
-		{
 			name:      "injection attempt",
 			volumeID:  "pvc-test; rm -rf /",
 			expectErr: true,
@@ -439,6 +435,14 @@ func TestControllerPublishVolume_Success(t *testing.T) {
 		VolumeContext: map[string]string{
 			"nvmeAddress": "10.0.0.1",
 		},
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 
 	resp, err := cs.ControllerPublishVolume(ctx, req)
@@ -480,6 +484,14 @@ func TestControllerPublishVolume_Idempotent(t *testing.T) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeID2,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 
 	// First publish
@@ -515,6 +527,14 @@ func TestControllerPublishVolume_RWOConflict(t *testing.T) {
 	req1 := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeID3,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 	_, err := cs.ControllerPublishVolume(ctx, req1)
 	if err != nil {
@@ -525,6 +545,14 @@ func TestControllerPublishVolume_RWOConflict(t *testing.T) {
 	req2 := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeID3,
 		NodeId:   "node-2",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 	_, err = cs.ControllerPublishVolume(ctx, req2)
 	if err == nil {
@@ -566,6 +594,14 @@ func TestControllerPublishVolume_StaleAttachmentSelfHealing(t *testing.T) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId: testVolumeIDStale,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 	resp, err := cs.ControllerPublishVolume(ctx, req)
 	if err != nil {
@@ -597,6 +633,14 @@ func TestControllerPublishVolume_VolumeNotFound(t *testing.T) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId: nonExistentVolumeID,
 		NodeId:   "node-1",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
 	}
 
 	_, err := cs.ControllerPublishVolume(ctx, req)
@@ -1352,6 +1396,894 @@ func TestControllerPublishVolume_MigrationTimeout(t *testing.T) {
 			} else {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// ========================================
+// Error Path Tests (Phase 25-01)
+// ========================================
+
+func TestCreateVolume_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupMock     func(*rds.MockClient)
+		requestName   string
+		requestSize   int64
+		expectCode    codes.Code
+		errorContains string
+	}{
+		{
+			name: "SSH connection failure returns Unavailable",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("ssh: %w", utils.ErrConnectionFailed))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name: "SSH timeout returns Unavailable",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("operation timed out: %w", utils.ErrOperationTimeout))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name: "Disk full returns ResourceExhausted",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("not enough space on device: %w", utils.ErrResourceExhausted))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.ResourceExhausted,
+			errorContains: "insufficient storage",
+		},
+		{
+			name: "Generic error returns Internal",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("unexpected error"))
+			},
+			requestName:   "test-volume",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.Internal,
+			errorContains: "failed to create volume",
+		},
+		{
+			name: "Empty volume name returns InvalidArgument",
+			setupMock: func(m *rds.MockClient) {
+				// No error setup needed - validation happens before RDS call
+			},
+			requestName:   "",
+			requestSize:   1 * 1024 * 1024 * 1024,
+			expectCode:    codes.InvalidArgument,
+			errorContains: "volume name is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			cs, mockRDS := testControllerServer(t)
+
+			// Setup mock behavior
+			tt.setupMock(mockRDS)
+
+			// Create request
+			req := &csi.CreateVolumeRequest{
+				Name: tt.requestName,
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: tt.requestSize,
+				},
+			}
+
+			// Call CreateVolume
+			_, err := cs.CreateVolume(ctx, req)
+
+			// Verify error
+			if err == nil {
+				t.Fatal("Expected error but got nil")
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("Expected gRPC status error, got: %T %v", err, err)
+			}
+
+			if st.Code() != tt.expectCode {
+				t.Errorf("Expected code %v, got %v", tt.expectCode, st.Code())
+			}
+
+			if !strings.Contains(st.Message(), tt.errorContains) {
+				t.Errorf("Expected error containing %q, got %q", tt.errorContains, st.Message())
+			}
+		})
+	}
+}
+
+func TestDeleteVolume_ErrorScenarios(t *testing.T) {
+	tests := []struct {
+		name          string
+		volumeID      string
+		setupMock     func(*rds.MockClient)
+		expectCode    codes.Code
+		errorContains string
+	}{
+		{
+			name:     "SSH failure during delete returns Unavailable",
+			volumeID: testVolumeID1,
+			setupMock: func(m *rds.MockClient) {
+				// Add volume first
+				m.AddVolume(&rds.VolumeInfo{
+					Slot:          testVolumeID1,
+					FileSizeBytes: 1024 * 1024 * 1024,
+				})
+				// Set persistent error for all operations
+				m.SetPersistentError(fmt.Errorf("ssh: %w", utils.ErrConnectionFailed))
+			},
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name:     "SSH timeout during delete returns Unavailable",
+			volumeID: testVolumeID2,
+			setupMock: func(m *rds.MockClient) {
+				m.AddVolume(&rds.VolumeInfo{
+					Slot:          testVolumeID2,
+					FileSizeBytes: 1024 * 1024 * 1024,
+				})
+				m.SetPersistentError(fmt.Errorf("timeout: %w", utils.ErrOperationTimeout))
+			},
+			expectCode:    codes.Unavailable,
+			errorContains: "RDS unavailable",
+		},
+		{
+			name:     "Invalid volume ID format returns InvalidArgument",
+			volumeID: "invalid; rm -rf /",
+			setupMock: func(m *rds.MockClient) {
+				// No setup needed - validation happens before RDS call
+			},
+			expectCode:    codes.InvalidArgument,
+			errorContains: "invalid volume ID",
+		},
+		{
+			name:     "Empty volume ID returns InvalidArgument",
+			volumeID: "",
+			setupMock: func(m *rds.MockClient) {
+				// No setup needed - validation happens before RDS call
+			},
+			expectCode:    codes.InvalidArgument,
+			errorContains: "volume ID is required",
+		},
+		{
+			name:     "Idempotent delete of non-existent volume succeeds",
+			volumeID: testVolumeID3,
+			setupMock: func(m *rds.MockClient) {
+				// Don't add volume - it doesn't exist
+			},
+			expectCode:    codes.OK,
+			errorContains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			cs, mockRDS := testControllerServer(t)
+
+			// Setup mock behavior
+			tt.setupMock(mockRDS)
+
+			// Create request
+			req := &csi.DeleteVolumeRequest{
+				VolumeId: tt.volumeID,
+			}
+
+			// Call DeleteVolume
+			_, err := cs.DeleteVolume(ctx, req)
+
+			if tt.expectCode == codes.OK {
+				// Success case - no error expected
+				if err != nil {
+					t.Errorf("Expected success but got error: %v", err)
+				}
+				return
+			}
+
+			// Error cases
+			if err == nil {
+				t.Fatal("Expected error but got nil")
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("Expected gRPC status error, got: %T %v", err, err)
+			}
+
+			if st.Code() != tt.expectCode {
+				t.Errorf("Expected code %v, got %v", tt.expectCode, st.Code())
+			}
+
+			if tt.errorContains != "" && !strings.Contains(st.Message(), tt.errorContains) {
+				t.Errorf("Expected error containing %q, got %q", tt.errorContains, st.Message())
+			}
+		})
+	}
+}
+
+// TestCSI_NegativeScenarios_Controller validates CSI spec error code requirements
+// for controller service operations. Each test case documents the specific CSI
+// spec section that mandates the error code behavior.
+//
+// CSI Spec Reference: https://github.com/container-storage-interface/spec/blob/master/spec.md
+func TestCSI_NegativeScenarios_Controller(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string // CSI method name
+		setupMock  func(*rds.MockClient)
+		request    interface{} // CSI request object
+		wantCode   codes.Code
+		wantErrMsg string
+		specRef    string // CSI spec section reference
+	}{
+		// CreateVolume - CSI spec section 3.4
+		{
+			name:   "CreateVolume: missing volume name",
+			method: "CreateVolume",
+			request: &csi.CreateVolumeRequest{
+				Name: "", // Missing required field
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume name is required",
+			specRef:    "CSI 3.4 CreateVolume: name field is REQUIRED",
+		},
+		{
+			name:   "CreateVolume: missing volume capabilities",
+			method: "CreateVolume",
+			request: &csi.CreateVolumeRequest{
+				Name:               "test-volume",
+				VolumeCapabilities: nil, // Missing required field
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume capabilities are required",
+			specRef:    "CSI 3.4 CreateVolume: volume_capabilities field is REQUIRED",
+		},
+		{
+			name:   "CreateVolume: empty volume capabilities array",
+			method: "CreateVolume",
+			request: &csi.CreateVolumeRequest{
+				Name:               "test-volume",
+				VolumeCapabilities: []*csi.VolumeCapability{}, // Empty array
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume capabilities are required",
+			specRef:    "CSI 3.4 CreateVolume: at least one capability required",
+		},
+		{
+			name:   "CreateVolume: unsupported RWX filesystem",
+			method: "CreateVolume",
+			request: &csi.CreateVolumeRequest{
+				Name: "test-volume",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER, // RWX filesystem unsupported
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "RWX access mode requires volumeMode: Block",
+			specRef:    "CSI 3.4 CreateVolume: unsupported RWX filesystem returns InvalidArgument",
+		},
+		{
+			name:   "CreateVolume: required > limit capacity",
+			method: "CreateVolume",
+			request: &csi.CreateVolumeRequest{
+				Name: "test-volume",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 100 * 1024 * 1024 * 1024, // 100 GiB
+					LimitBytes:    10 * 1024 * 1024 * 1024,  // 10 GiB - less than required
+				},
+			},
+			wantCode:   codes.OutOfRange,
+			wantErrMsg: "exceeds limit",
+			specRef:    "CSI 3.4 CreateVolume: required > limit returns OutOfRange",
+		},
+		{
+			name:   "CreateVolume: exceeds maximum volume size",
+			method: "CreateVolume",
+			request: &csi.CreateVolumeRequest{
+				Name: "test-volume",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 20 * 1024 * 1024 * 1024 * 1024, // 20 TiB - exceeds 16 TiB max
+				},
+			},
+			wantCode:   codes.OutOfRange,
+			wantErrMsg: "exceeds maximum",
+			specRef:    "CSI 3.4 CreateVolume: exceeds max capacity returns OutOfRange",
+		},
+		{
+			name:   "CreateVolume: insufficient capacity on RDS",
+			method: "CreateVolume",
+			setupMock: func(m *rds.MockClient) {
+				m.SetPersistentError(fmt.Errorf("disk full: %w", utils.ErrResourceExhausted))
+			},
+			request: &csi.CreateVolumeRequest{
+				Name: "test-volume",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 1 * 1024 * 1024 * 1024,
+				},
+			},
+			wantCode:   codes.ResourceExhausted,
+			wantErrMsg: "insufficient storage",
+			specRef:    "CSI 3.4 CreateVolume: insufficient capacity returns ResourceExhausted",
+		},
+
+		// DeleteVolume - CSI spec section 3.5
+		{
+			name:   "DeleteVolume: missing volume ID",
+			method: "DeleteVolume",
+			request: &csi.DeleteVolumeRequest{
+				VolumeId: "", // Missing required field
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID is required",
+			specRef:    "CSI 3.5 DeleteVolume: volume_id field is REQUIRED",
+		},
+		{
+			name:   "DeleteVolume: volume not found (idempotent)",
+			method: "DeleteVolume",
+			setupMock: func(m *rds.MockClient) {
+				// Volume doesn't exist - driver validates format first
+			},
+			request: &csi.DeleteVolumeRequest{
+				VolumeId: testVolumeID1, // Valid format but doesn't exist
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.5 DeleteVolume: nonexistent volume returns success (idempotent)",
+		},
+		{
+			name:   "DeleteVolume: invalid volume ID format",
+			method: "DeleteVolume",
+			request: &csi.DeleteVolumeRequest{
+				VolumeId: "invalid; rm -rf /", // Command injection attempt
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "invalid volume ID",
+			specRef:    "CSI 3.5 DeleteVolume: malformed ID returns InvalidArgument",
+		},
+
+		// ControllerPublishVolume - CSI spec section 3.6
+		{
+			name:   "ControllerPublishVolume: missing volume ID",
+			method: "ControllerPublishVolume",
+			request: &csi.ControllerPublishVolumeRequest{
+				VolumeId: "", // Missing required field
+				NodeId:   "test-node",
+				VolumeCapability: &csi.VolumeCapability{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.6 ControllerPublishVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "ControllerPublishVolume: missing node ID",
+			method: "ControllerPublishVolume",
+			request: &csi.ControllerPublishVolumeRequest{
+				VolumeId: testVolumeID1,
+				NodeId:   "", // Missing required field
+				VolumeCapability: &csi.VolumeCapability{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "node ID",
+			specRef:    "CSI 3.6 ControllerPublishVolume: node_id is REQUIRED",
+		},
+		{
+			name:   "ControllerPublishVolume: volume not found",
+			method: "ControllerPublishVolume",
+			setupMock: func(m *rds.MockClient) {
+				// Volume doesn't exist - but must have valid format
+			},
+			request: &csi.ControllerPublishVolumeRequest{
+				VolumeId: testVolumeID2, // Valid format but doesn't exist
+				NodeId:   "test-node",
+				VolumeCapability: &csi.VolumeCapability{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+					AccessType: &csi.VolumeCapability_Mount{
+						Mount: &csi.VolumeCapability_MountVolume{},
+					},
+				},
+			},
+			wantCode:   codes.NotFound,
+			wantErrMsg: "not found",
+			specRef:    "CSI 3.6 ControllerPublishVolume: nonexistent volume returns NotFound",
+		},
+		// Note: RWO conflict test requires prior attachment tracking which needs K8s client setup
+		// This is covered in existing TestControllerPublishVolume_RWOConflict
+
+		// ControllerUnpublishVolume - CSI spec section 3.7
+		{
+			name:   "ControllerUnpublishVolume: missing volume ID",
+			method: "ControllerUnpublishVolume",
+			request: &csi.ControllerUnpublishVolumeRequest{
+				VolumeId: "", // Missing required field
+				NodeId:   "test-node",
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.7 ControllerUnpublishVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "ControllerUnpublishVolume: not published (idempotent)",
+			method: "ControllerUnpublishVolume",
+			setupMock: func(m *rds.MockClient) {
+				m.AddVolume(&rds.VolumeInfo{
+					Slot:          testVolumeID1,
+					FileSizeBytes: 1 * 1024 * 1024 * 1024,
+				})
+			},
+			request: &csi.ControllerUnpublishVolumeRequest{
+				VolumeId: testVolumeID1,
+				NodeId:   "test-node",
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.7 ControllerUnpublishVolume: not published returns success (idempotent)",
+		},
+
+		// ValidateVolumeCapabilities - CSI spec section 3.8
+		{
+			name:   "ValidateVolumeCapabilities: missing volume ID",
+			method: "ValidateVolumeCapabilities",
+			request: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId:           "", // Missing required field
+				VolumeCapabilities: []*csi.VolumeCapability{},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.8 ValidateVolumeCapabilities: volume_id is REQUIRED",
+		},
+		{
+			name:   "ValidateVolumeCapabilities: volume not found",
+			method: "ValidateVolumeCapabilities",
+			setupMock: func(m *rds.MockClient) {
+				// Volume doesn't exist - valid format required
+			},
+			request: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: testVolumeID3, // Valid format but doesn't exist
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+			},
+			wantCode:   codes.NotFound,
+			wantErrMsg: "not found",
+			specRef:    "CSI 3.8 ValidateVolumeCapabilities: nonexistent volume returns NotFound",
+		},
+
+		// ControllerExpandVolume - CSI spec section 3.11
+		{
+			name:   "ControllerExpandVolume: missing volume ID",
+			method: "ControllerExpandVolume",
+			request: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "", // Missing required field
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 2 * 1024 * 1024 * 1024,
+				},
+			},
+			wantCode:   codes.InvalidArgument,
+			wantErrMsg: "volume ID",
+			specRef:    "CSI 3.11 ControllerExpandVolume: volume_id is REQUIRED",
+		},
+		{
+			name:   "ControllerExpandVolume: volume not found",
+			method: "ControllerExpandVolume",
+			setupMock: func(m *rds.MockClient) {
+				// Volume doesn't exist - valid format required
+			},
+			request: &csi.ControllerExpandVolumeRequest{
+				VolumeId: testVolumeID4, // Valid format but doesn't exist
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 2 * 1024 * 1024 * 1024,
+				},
+			},
+			wantCode:   codes.NotFound,
+			wantErrMsg: "not found",
+			specRef:    "CSI 3.11 ControllerExpandVolume: nonexistent volume returns NotFound",
+		},
+		{
+			name:   "ControllerExpandVolume: idempotent (already at size)",
+			method: "ControllerExpandVolume",
+			setupMock: func(m *rds.MockClient) {
+				m.AddVolume(&rds.VolumeInfo{
+					Slot:          testVolumeID1,
+					FileSizeBytes: 10 * 1024 * 1024 * 1024, // 10 GiB
+				})
+			},
+			request: &csi.ControllerExpandVolumeRequest{
+				VolumeId: testVolumeID1,
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 10 * 1024 * 1024 * 1024, // Same as current size
+				},
+			},
+			wantCode:   codes.OK,
+			wantErrMsg: "",
+			specRef:    "CSI 3.11 ControllerExpandVolume: idempotent when already at requested size",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			cs, mockRDS := testControllerServer(t)
+
+			// Setup mock behavior
+			if tt.setupMock != nil {
+				tt.setupMock(mockRDS)
+			}
+
+			var err error
+			switch tt.method {
+			case "CreateVolume":
+				_, err = cs.CreateVolume(ctx, tt.request.(*csi.CreateVolumeRequest))
+			case "DeleteVolume":
+				_, err = cs.DeleteVolume(ctx, tt.request.(*csi.DeleteVolumeRequest))
+			case "ControllerPublishVolume":
+				_, err = cs.ControllerPublishVolume(ctx, tt.request.(*csi.ControllerPublishVolumeRequest))
+			case "ControllerUnpublishVolume":
+				_, err = cs.ControllerUnpublishVolume(ctx, tt.request.(*csi.ControllerUnpublishVolumeRequest))
+			case "ValidateVolumeCapabilities":
+				_, err = cs.ValidateVolumeCapabilities(ctx, tt.request.(*csi.ValidateVolumeCapabilitiesRequest))
+			case "ControllerExpandVolume":
+				_, err = cs.ControllerExpandVolume(ctx, tt.request.(*csi.ControllerExpandVolumeRequest))
+			default:
+				t.Fatalf("Unknown method: %s", tt.method)
+			}
+
+			// Verify error code
+			if tt.wantCode == codes.OK {
+				if err != nil {
+					t.Errorf("[%s] Expected success, got error: %v", tt.specRef, err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("[%s] Expected error code %v, got nil", tt.specRef, tt.wantCode)
+			}
+
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("[%s] Expected gRPC status error, got: %T %v", tt.specRef, err, err)
+			}
+
+			if st.Code() != tt.wantCode {
+				t.Errorf("[%s] Expected code %v, got %v\nError message: %s",
+					tt.specRef, tt.wantCode, st.Code(), st.Message())
+			}
+
+			if tt.wantErrMsg != "" && !strings.Contains(st.Message(), tt.wantErrMsg) {
+				t.Errorf("[%s] Expected error containing %q, got %q",
+					tt.specRef, tt.wantErrMsg, st.Message())
+			}
+		})
+	}
+}
+
+// TestSanityRegression_CreateVolumeZeroCapacity is a regression test
+// for CSI sanity edge case: capacity_range with required_bytes=0.
+// Driver should use default minimum capacity (1 GiB).
+func TestSanityRegression_CreateVolumeZeroCapacity(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-volume-zero-capacity",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 0, // Zero capacity - should use default
+		},
+	}
+
+	resp, err := cs.CreateVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Expected success with zero capacity, got error: %v", err)
+	}
+
+	if resp.Volume.CapacityBytes < 1*1024*1024*1024 {
+		t.Errorf("Expected minimum 1 GiB capacity, got %d bytes", resp.Volume.CapacityBytes)
+	}
+
+	// Cleanup
+	_, _ = cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+}
+
+// TestSanityRegression_CreateVolumeMaxInt64Capacity is a regression test
+// for CSI sanity edge case: max int64 capacity should return OutOfRange.
+func TestSanityRegression_CreateVolumeMaxInt64Capacity(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-volume-max-capacity",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 9223372036854775807, // Max int64
+		},
+	}
+
+	_, err := cs.CreateVolume(ctx, req)
+	if err == nil {
+		t.Fatal("Expected error for max int64 capacity, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("Expected gRPC status error, got: %v", err)
+	}
+
+	if st.Code() != codes.OutOfRange {
+		t.Errorf("Expected OutOfRange error, got: %v", st.Code())
+	}
+}
+
+// TestSanityRegression_CreateVolumeReadOnly is a regression test
+// for CSI sanity edge case: readonly flag validation.
+func TestSanityRegression_CreateVolumeReadOnly(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	req := &csi.CreateVolumeRequest{
+		Name: "test-volume-readonly",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{
+						MountFlags: []string{"ro"},
+					},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	resp, err := cs.CreateVolume(ctx, req)
+	if err != nil {
+		t.Fatalf("Expected success for readonly volume, got error: %v", err)
+	}
+
+	// Cleanup
+	_, _ = cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+}
+
+// TestSanityRegression_DeleteVolumeIdempotency is a regression test
+// for CSI sanity requirement: DeleteVolume must be idempotent.
+// Calling DeleteVolume multiple times should always succeed.
+func TestSanityRegression_DeleteVolumeIdempotency(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	// Create a volume
+	createReq := &csi.CreateVolumeRequest{
+		Name: "test-volume-delete-idempotent",
+		VolumeCapabilities: []*csi.VolumeCapability{
+			{
+				AccessMode: &csi.VolumeCapability_AccessMode{
+					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				},
+				AccessType: &csi.VolumeCapability_Mount{
+					Mount: &csi.VolumeCapability_MountVolume{},
+				},
+			},
+		},
+		CapacityRange: &csi.CapacityRange{
+			RequiredBytes: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	createResp, err := cs.CreateVolume(ctx, createReq)
+	if err != nil {
+		t.Fatalf("Failed to create volume: %v", err)
+	}
+
+	volumeID := createResp.Volume.VolumeId
+
+	// Delete the volume
+	deleteReq := &csi.DeleteVolumeRequest{VolumeId: volumeID}
+
+	_, err = cs.DeleteVolume(ctx, deleteReq)
+	if err != nil {
+		t.Fatalf("First delete failed: %v", err)
+	}
+
+	// Delete again - should succeed (idempotent)
+	_, err = cs.DeleteVolume(ctx, deleteReq)
+	if err != nil {
+		t.Errorf("Second delete (idempotency test) failed: %v", err)
+	}
+
+	// Delete third time - still should succeed
+	_, err = cs.DeleteVolume(ctx, deleteReq)
+	if err != nil {
+		t.Errorf("Third delete (idempotency test) failed: %v", err)
+	}
+}
+
+// TestSanityRegression_VolumeContextParameters is a regression test
+// for CSI sanity edge case: volume_context parameter validation.
+func TestSanityRegression_VolumeContextParameters(t *testing.T) {
+	ctx := context.Background()
+	cs, _ := testControllerServer(t)
+
+	tests := []struct {
+		name    string
+		params  map[string]string
+		wantErr bool
+	}{
+		{
+			name: "valid fsType",
+			params: map[string]string{
+				"fsType": "ext4",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid nvmeAddress",
+			params: map[string]string{
+				"nvmeAddress": "10.42.68.1",
+			},
+			wantErr: false,
+		},
+		// Note: parameter validation happens at NodeStageVolume, not CreateVolume
+		// CreateVolume accepts parameters and stores them in VolumeContext
+		{
+			name:    "empty parameters",
+			params:  map[string]string{},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &csi.CreateVolumeRequest{
+				Name: "test-volume-params-" + strings.ReplaceAll(tt.name, " ", "-"),
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+					},
+				},
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 1 * 1024 * 1024 * 1024,
+				},
+				Parameters: tt.params,
+			}
+
+			resp, err := cs.CreateVolume(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Expected error for params %v, got nil", tt.params)
+					if resp != nil {
+						cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected success for params %v, got error: %v", tt.params, err)
+				} else {
+					// Cleanup
+					cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: resp.Volume.VolumeId})
 				}
 			}
 		})

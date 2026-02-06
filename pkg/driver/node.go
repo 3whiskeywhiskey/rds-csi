@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -59,16 +60,33 @@ func NewNodeServer(driver *Driver, nodeID string, k8sClient kubernetes.Interface
 		eventPoster = NewEventPoster(k8sClient)
 	}
 
-	m := mount.NewMounter()
-	connector := nvme.NewConnector()
+	// Use injected mounter if available (for testing), otherwise create new one
+	var m mount.Mounter
+	if driver.mounter != nil {
+		m = driver.mounter
+	} else {
+		m = mount.NewMounter()
+	}
 
-	// Pass Prometheus metrics to connector if available
-	if driver.metrics != nil {
-		connector.SetPromMetrics(driver.metrics)
+	// Use injected connector if available (for testing), otherwise create new one
+	var connector nvme.Connector
+	if driver.nvmeConnector != nil {
+		connector = driver.nvmeConnector
+	} else {
+		connector = nvme.NewConnector()
+		// Pass Prometheus metrics to connector if available
+		if driver.metrics != nil {
+			connector.SetPromMetrics(driver.metrics)
+		}
 	}
 
 	// Create stale mount checker using connector's resolver
 	staleChecker := mount.NewStaleMountChecker(connector.GetResolver())
+
+	// Inject custom getMountDev function if provided (for testing)
+	if driver.getMountDevFunc != nil {
+		staleChecker.SetMountDeviceFunc(driver.getMountDevFunc)
+	}
 
 	// Create recovery with default config
 	recoverer := mount.NewMountRecoverer(
@@ -755,6 +773,13 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		return nil, status.Error(codes.InvalidArgument, "volume path is required")
 	}
 
+	// Check if volume path exists and is a mount point
+	// Per CSI spec, should return NotFound if volume doesn't exist
+	isMounted, err := ns.mounter.IsLikelyMountPoint(volumePath)
+	if err != nil || !isMounted {
+		return nil, status.Errorf(codes.NotFound, "volume path %s not found or not mounted", volumePath)
+	}
+
 	// Track volume condition - always set before returning
 	var volumeCondition *csi.VolumeCondition
 
@@ -805,6 +830,13 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	// Get device statistics
 	stats, err := ns.mounter.GetDeviceStats(volumePath)
 	if err != nil {
+		// Check if path doesn't exist or isn't mounted
+		// Return NotFound per CSI spec for non-existent volumes
+		if strings.Contains(err.Error(), "No such file or directory") ||
+			strings.Contains(err.Error(), "not mounted") ||
+			strings.Contains(err.Error(), "not a mountpoint") {
+			return nil, status.Errorf(codes.NotFound, "volume path %s not found or not mounted", volumePath)
+		}
 		return nil, status.Errorf(codes.Internal, "failed to get volume stats: %v", err)
 	}
 
@@ -844,6 +876,13 @@ func (ns *NodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 		NodeId: ns.nodeID,
 		// MaxVolumesPerNode: 0 means unlimited
 		MaxVolumesPerNode: 0,
+		// AccessibleTopology provides topology information for scheduling
+		// Using simple default topology - can be extended for zone/region awareness
+		AccessibleTopology: &csi.Topology{
+			Segments: map[string]string{
+				"topology.rds.csi.srvlab.io/zone": "default",
+			},
+		},
 	}, nil
 }
 
@@ -900,12 +939,10 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 	}
 
 	// Check if volume path is mounted
+	// Per CSI spec, should return NotFound if volume doesn't exist
 	mounted, err := ns.mounter.IsLikelyMountPoint(volumePath)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to check if volume is mounted: %v", err)
-	}
-	if !mounted {
-		return nil, status.Errorf(codes.FailedPrecondition, "volume path %s is not mounted", volumePath)
+	if err != nil || !mounted {
+		return nil, status.Errorf(codes.NotFound, "volume path %s not found or not mounted", volumePath)
 	}
 
 	// Derive NQN from volume ID to get device path
@@ -943,6 +980,11 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 // Returns nil if mount is healthy or recovery succeeded
 // Returns error if mount is stale and recovery failed
 func (ns *NodeServer) checkAndRecoverMount(ctx context.Context, stagingPath, nqn, fsType string, mountOptions []string, pvcNamespace, pvcName, volumeID string) error {
+	// Skip stale mount check if staleChecker is not initialized (e.g., in tests)
+	if ns.staleChecker == nil {
+		return nil
+	}
+
 	// Check for stale mount with detailed info for event posting
 	staleInfo, err := ns.staleChecker.GetStaleInfo(stagingPath, nqn)
 	if err != nil {

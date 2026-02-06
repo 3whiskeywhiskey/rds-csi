@@ -37,9 +37,10 @@ type AttachmentReconciler struct {
 	eventPoster EventPoster // Optional, may be nil
 
 	// Control channels
-	stopCh chan struct{}
-	doneCh chan struct{}
-	mu     sync.Mutex
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+	triggerCh chan struct{} // Buffered channel for event-driven reconciliation triggers
+	mu        sync.Mutex
 }
 
 // ReconcilerConfig holds configuration for the AttachmentReconciler.
@@ -84,6 +85,7 @@ func NewAttachmentReconciler(config ReconcilerConfig) (*AttachmentReconciler, er
 		gracePeriod: config.GracePeriod,
 		metrics:     config.Metrics,
 		eventPoster: config.EventPoster,
+		triggerCh:   make(chan struct{}, 1), // Buffered size 1 for deduplication
 	}, nil
 }
 
@@ -120,6 +122,7 @@ func (r *AttachmentReconciler) Stop() {
 	// Clear channels so subsequent Stop() calls are no-op
 	r.stopCh = nil
 	r.doneCh = nil
+	r.triggerCh = nil // Prevent TriggerReconcile from using closed reconciler
 	r.mu.Unlock()
 
 	// Wait for run() to exit
@@ -128,12 +131,36 @@ func (r *AttachmentReconciler) Stop() {
 	klog.Info("Attachment reconciler stopped")
 }
 
+// TriggerReconcile triggers an immediate reconciliation pass.
+// If a reconciliation trigger is already pending, this is a no-op (deduplication).
+// This method is safe to call from multiple goroutines and safe to call when reconciler is not running.
+func (r *AttachmentReconciler) TriggerReconcile() {
+	r.mu.Lock()
+	triggerCh := r.triggerCh
+	r.mu.Unlock()
+
+	if triggerCh == nil {
+		// Reconciler not initialized yet or already stopped - safe no-op
+		klog.V(2).Info("TriggerReconcile called but reconciler not running (no-op)")
+		return
+	}
+
+	// Non-blocking send - if channel is full, a trigger is already pending
+	select {
+	case triggerCh <- struct{}{}:
+		klog.V(2).Info("Attachment reconciliation triggered by event")
+	default:
+		klog.V(4).Info("Attachment reconciliation trigger already pending (deduplicated)")
+	}
+}
+
 // run is the main reconciliation loop.
 func (r *AttachmentReconciler) run(ctx context.Context) {
 	// Capture channels as local variables to avoid race with Stop()
 	r.mu.Lock()
 	stopCh := r.stopCh
 	doneCh := r.doneCh
+	triggerCh := r.triggerCh
 	r.mu.Unlock()
 
 	defer close(doneCh)
@@ -145,8 +172,24 @@ func (r *AttachmentReconciler) run(ctx context.Context) {
 	r.reconcile(ctx)
 
 	for {
+		// Priority check: stop signals take precedence over work
+		select {
+		case <-stopCh:
+			klog.V(2).Info("Attachment reconciler shutting down")
+			return
+		case <-ctx.Done():
+			klog.V(2).Info("Attachment reconciler context cancelled")
+			return
+		default:
+		}
+
+		// Wait for work or stop signal
 		select {
 		case <-ticker.C:
+			klog.V(2).Info("Attachment reconciliation triggered by periodic timer")
+			r.reconcile(ctx)
+		case <-triggerCh:
+			klog.V(2).Info("Attachment reconciliation triggered by node event")
 			r.reconcile(ctx)
 		case <-stopCh:
 			klog.V(2).Info("Attachment reconciler shutting down")

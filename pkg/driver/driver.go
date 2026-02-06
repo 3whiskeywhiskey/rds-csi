@@ -11,6 +11,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/attachment"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/mount"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/nvme"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/observability"
 	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
@@ -47,6 +48,15 @@ type Driver struct {
 	// RDS client (interface allows different implementations: SSH, API, mock)
 	rdsClient rds.RDSClient
 
+	// NVMe connector (interface allows different implementations: real, mock)
+	nvmeConnector nvme.Connector
+
+	// Mounter (interface allows different implementations: real, mock)
+	mounter mount.Mounter
+
+	// Custom getMountDev function for testing (optional)
+	getMountDevFunc func(path string) (string, error)
+
 	// Kubernetes client (for events and reconciler)
 	k8sClient kubernetes.Interface
 
@@ -64,6 +74,12 @@ type Driver struct {
 
 	// Attachment reconciler (for controller only)
 	attachmentReconciler *attachment.AttachmentReconciler
+
+	// Node watcher for event-driven attachment reconciliation
+	nodeWatcher *attachment.NodeWatcher
+
+	// Connection manager for RDS connection resilience
+	connectionManager *rds.ConnectionManager
 
 	// Grace period for attachment handoff during live migration
 	attachmentGracePeriod time.Duration
@@ -414,6 +430,17 @@ func (d *Driver) Run(endpoint string) error {
 			}
 		}
 		klog.Info("Informer caches synced successfully")
+
+		// Register node watcher on informer (after caches are synced)
+		if d.attachmentReconciler != nil {
+			d.nodeWatcher = attachment.NewNodeWatcher(d.attachmentReconciler, d.metrics)
+			nodeInformer := d.informerFactory.Core().V1().Nodes().Informer()
+			if _, err := nodeInformer.AddEventHandler(d.nodeWatcher.GetEventHandlers()); err != nil {
+				klog.Errorf("Failed to register node watcher: %v", err)
+			} else {
+				klog.Info("Node watcher registered for attachment reconciliation triggers")
+			}
+		}
 	}
 
 	// Initialize attachment manager state
@@ -437,6 +464,32 @@ func (d *Driver) Run(endpoint string) error {
 			return fmt.Errorf("failed to start attachment reconciler: %w", err)
 		}
 		klog.Info("Attachment reconciler started (using cached informers, no API throttling)")
+
+		// Start connection manager (after RDS client is connected)
+		if d.rdsClient != nil {
+			cmConfig := rds.ConnectionManagerConfig{
+				Client:  d.rdsClient,
+				Metrics: d.metrics,
+			}
+			// Set OnReconnect callback to trigger attachment reconciliation
+			cmConfig.OnReconnect = func() {
+				klog.Info("RDS reconnected, triggering attachment reconciliation")
+				d.attachmentReconciler.TriggerReconcile()
+			}
+			connectionManager, err := rds.NewConnectionManager(cmConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create connection manager: %w", err)
+			}
+			d.connectionManager = connectionManager
+			ctx := context.Background()
+			d.connectionManager.StartMonitor(ctx)
+			klog.Info("RDS connection manager started with automatic reconnection")
+		}
+
+		// Perform startup reconciliation (after informers synced AND attachment manager initialized)
+		klog.Info("Performing startup attachment reconciliation...")
+		d.attachmentReconciler.TriggerReconcile()
+		klog.Info("Startup reconciliation triggered")
 	}
 
 	// Start orphan reconciler if configured
@@ -468,6 +521,12 @@ func (d *Driver) Stop() {
 	if d.attachmentReconciler != nil {
 		d.attachmentReconciler.Stop()
 		klog.Info("Attachment reconciler stopped")
+	}
+
+	// Stop connection manager if running
+	if d.connectionManager != nil {
+		d.connectionManager.Stop()
+		klog.Info("RDS connection manager stopped")
 	}
 
 	// Stop orphan reconciler if running
@@ -509,6 +568,21 @@ func (d *Driver) ShutdownWithContext(ctx context.Context) error {
 // SetRDSClient sets the RDS client (for testing)
 func (d *Driver) SetRDSClient(client rds.RDSClient) {
 	d.rdsClient = client
+}
+
+// SetNVMEConnector sets the NVMe connector (for testing)
+func (d *Driver) SetNVMEConnector(connector nvme.Connector) {
+	d.nvmeConnector = connector
+}
+
+// SetMounter sets the mounter (for testing)
+func (d *Driver) SetMounter(mounter mount.Mounter) {
+	d.mounter = mounter
+}
+
+// SetGetMountDevFunc sets a custom getMountDev function for stale mount checking (for testing)
+func (d *Driver) SetGetMountDevFunc(fn func(path string) (string, error)) {
+	d.getMountDevFunc = fn
 }
 
 // AddVolumeCapabilities adds volume capabilities (exported for testing)

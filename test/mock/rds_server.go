@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"k8s.io/klog/v2"
@@ -17,14 +18,26 @@ import (
 
 // MockRDSServer simulates a MikroTik RDS server for testing
 type MockRDSServer struct {
-	address  string
-	port     int
-	listener net.Listener
-	config   *ssh.ServerConfig
-	volumes  map[string]*MockVolume // Disk objects indexed by slot
-	files    map[string]*MockFile   // Files indexed by path
-	mu       sync.RWMutex
-	shutdown chan struct{}
+	address        string
+	port           int
+	listener       net.Listener
+	sshConfig      *ssh.ServerConfig
+	config         MockRDSConfig
+	timing         *TimingSimulator
+	errorInjector  *ErrorInjector
+	volumes        map[string]*MockVolume // Disk objects indexed by slot
+	files          map[string]*MockFile   // Files indexed by path
+	commandHistory []CommandLog           // Command execution history for debugging
+	mu             sync.RWMutex
+	shutdown       chan struct{}
+}
+
+// CommandLog represents a single command execution record
+type CommandLog struct {
+	Timestamp time.Time
+	Command   string
+	Response  string
+	ExitCode  int
 }
 
 // MockVolume represents a simulated volume on the mock RDS
@@ -47,8 +60,11 @@ type MockFile struct {
 
 // NewMockRDSServer creates a new mock RDS server for testing
 func NewMockRDSServer(port int) (*MockRDSServer, error) {
+	// Load configuration from environment
+	config := LoadConfigFromEnv()
+
 	// Create SSH server config
-	config := &ssh.ServerConfig{
+	sshConfig := &ssh.ServerConfig{
 		NoClientAuth: true, // Simplified for testing
 	}
 
@@ -57,15 +73,19 @@ func NewMockRDSServer(port int) (*MockRDSServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate host key: %w", err)
 	}
-	config.AddHostKey(hostKey)
+	sshConfig.AddHostKey(hostKey)
 
 	server := &MockRDSServer{
-		address:  "localhost",
-		port:     port,
-		config:   config,
-		volumes:  make(map[string]*MockVolume),
-		files:    make(map[string]*MockFile),
-		shutdown: make(chan struct{}),
+		address:        "localhost",
+		port:           port,
+		sshConfig:      sshConfig,
+		config:         config,
+		timing:         NewTimingSimulator(config),
+		errorInjector:  NewErrorInjector(config),
+		volumes:        make(map[string]*MockVolume),
+		files:          make(map[string]*MockFile),
+		commandHistory: make([]CommandLog, 0),
+		shutdown:       make(chan struct{}),
 	}
 
 	return server, nil
@@ -80,7 +100,15 @@ func (s *MockRDSServer) Start() error {
 	}
 
 	s.listener = listener
-	klog.Infof("Mock RDS server listening on %s", addr)
+
+	// Update port if it was 0 (random port assignment)
+	if s.port == 0 {
+		if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
+			s.port = tcpAddr.Port
+		}
+	}
+
+	klog.Infof("Mock RDS server listening on %s:%d", s.address, s.port)
 
 	go s.acceptConnections()
 
@@ -178,6 +206,32 @@ func (s *MockRDSServer) DeleteFile(path string) {
 	delete(s.files, path)
 }
 
+// GetCommandHistory returns a copy of the command execution history
+// Thread-safe for concurrent access during test debugging
+func (s *MockRDSServer) GetCommandHistory() []CommandLog {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Return a copy to prevent external modification
+	history := make([]CommandLog, len(s.commandHistory))
+	copy(history, s.commandHistory)
+	return history
+}
+
+// ClearCommandHistory clears the command execution history
+// Useful for resetting state between test cases
+func (s *MockRDSServer) ClearCommandHistory() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commandHistory = make([]CommandLog, 0)
+}
+
+// ResetErrorInjector resets the error injector's operation counter
+// Useful for test isolation between test cases
+func (s *MockRDSServer) ResetErrorInjector() {
+	s.errorInjector.Reset()
+}
+
 func (s *MockRDSServer) acceptConnections() {
 	for {
 		select {
@@ -204,7 +258,7 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	// Perform SSH handshake
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.config)
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
 	if err != nil {
 		klog.Errorf("Failed to handshake: %v", err)
 		return
@@ -235,6 +289,9 @@ func (s *MockRDSServer) handleConnection(conn net.Conn) {
 
 func (s *MockRDSServer) handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
+
+	// Simulate SSH latency at session start
+	s.timing.SimulateSSHLatency()
 
 	for req := range requests {
 		klog.V(4).Infof("Mock RDS received request type: %s, payload len: %d", req.Type, len(req.Payload))
@@ -285,46 +342,74 @@ func (s *MockRDSServer) executeCommand(command string) (string, int) {
 	command = strings.TrimSpace(command)
 	klog.V(3).Infof("Mock RDS executing command: %s", command)
 
+	var output string
+	var exitCode int
+
 	// Parse /disk add command
 	if strings.HasPrefix(command, "/disk add") {
-		output, code := s.handleDiskAdd(command)
-		klog.V(3).Infof("Mock RDS /disk add returned code %d, output: %s", code, output)
-		return output, code
+		output, exitCode = s.handleDiskAdd(command)
+		klog.V(3).Infof("Mock RDS /disk add returned code %d, output: %s", exitCode, output)
+	} else if strings.HasPrefix(command, "/disk set") {
+		// Parse /disk set command (for resize)
+		output, exitCode = s.handleDiskSet(command)
+		klog.V(3).Infof("Mock RDS /disk set returned code %d", exitCode)
+	} else if strings.HasPrefix(command, "/disk remove") {
+		// Parse /disk remove command
+		output, exitCode = s.handleDiskRemove(command)
+		klog.V(3).Infof("Mock RDS /disk remove returned code %d", exitCode)
+	} else if strings.HasPrefix(command, "/disk print detail") {
+		// Parse /disk print detail command
+		output, exitCode = s.handleDiskPrintDetail(command)
+		klog.V(3).Infof("Mock RDS /disk print detail returned code %d", exitCode)
+	} else if strings.HasPrefix(command, "/file print detail") {
+		// Parse /file print detail command
+		output, exitCode = s.handleFilePrintDetail(command)
+		klog.V(3).Infof("Mock RDS /file print detail returned code %d", exitCode)
+	} else if strings.HasPrefix(command, "/file remove") {
+		// Parse /file remove command
+		output, exitCode = s.handleFileRemove(command)
+		klog.V(3).Infof("Mock RDS /file remove returned code %d", exitCode)
+	} else {
+		klog.Warningf("Mock RDS: Unrecognized command: %s", command)
+		output = fmt.Sprintf("bad command name %s\n", command)
+		exitCode = 1
 	}
 
-	// Parse /disk remove command
-	if strings.HasPrefix(command, "/disk remove") {
-		output, code := s.handleDiskRemove(command)
-		klog.V(3).Infof("Mock RDS /disk remove returned code %d", code)
-		return output, code
+	// Record command in history for debugging
+	s.recordCommand(command, output, exitCode)
+
+	return output, exitCode
+}
+
+// recordCommand adds a command execution to the history log
+func (s *MockRDSServer) recordCommand(command, response string, exitCode int) {
+	if !s.config.EnableHistory {
+		return
 	}
 
-	// Parse /disk print detail command
-	if strings.HasPrefix(command, "/disk print detail") {
-		output, code := s.handleDiskPrintDetail(command)
-		klog.V(3).Infof("Mock RDS /disk print detail returned code %d", code)
-		return output, code
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Trim history if over depth limit
+	if len(s.commandHistory) >= s.config.HistoryDepth {
+		s.commandHistory = s.commandHistory[1:]
 	}
 
-	// Parse /file print detail command
-	if strings.HasPrefix(command, "/file print detail") {
-		output, code := s.handleFilePrintDetail(command)
-		klog.V(3).Infof("Mock RDS /file print detail returned code %d", code)
-		return output, code
-	}
-
-	// Parse /file remove command
-	if strings.HasPrefix(command, "/file remove") {
-		output, code := s.handleFileRemove(command)
-		klog.V(3).Infof("Mock RDS /file remove returned code %d", code)
-		return output, code
-	}
-
-	klog.Warningf("Mock RDS: Unrecognized command: %s", command)
-	return fmt.Sprintf("bad command name %s\n", command), 1
+	s.commandHistory = append(s.commandHistory, CommandLog{
+		Timestamp: time.Now(),
+		Command:   command,
+		Response:  response,
+		ExitCode:  exitCode,
+	})
 }
 
 func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
+	// Check error injection BEFORE normal processing
+	if shouldFail, errMsg := s.errorInjector.ShouldFailDiskAdd(); shouldFail {
+		klog.V(2).Infof("MOCK ERROR INJECTION: Disk add failed - %s", strings.TrimSpace(errMsg))
+		return errMsg, 1
+	}
+
 	// Parse parameters from command
 	// Example: /disk add type=file file-path=/storage/vol.img file-size=1G slot=pvc-123 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn=nqn.2025-01.io.srvlab.rds:pvc-123
 
@@ -350,6 +435,9 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 	} else {
 		nvmePort = 4420 // default
 	}
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("add")
 
 	// Check if volume already exists
 	s.mu.Lock()
@@ -381,7 +469,61 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 	return "", 0
 }
 
+func (s *MockRDSServer) handleDiskSet(command string) (string, int) {
+	// Parse: /disk set [find slot=pvc-123] file-size=10G
+	re := regexp.MustCompile(`slot=([^\s\]]+)`)
+	matches := re.FindStringSubmatch(command)
+
+	if len(matches) < 2 {
+		return "failure: invalid command format\n", 1
+	}
+
+	slot := matches[1]
+	fileSizeStr := extractParam(command, "file-size")
+
+	if fileSizeStr == "" {
+		return "failure: file-size parameter required\n", 1
+	}
+
+	// Parse new file size
+	newSize, err := parseSize(fileSizeStr)
+	if err != nil {
+		return fmt.Sprintf("failure: invalid file size %s: %v\n", fileSizeStr, err), 1
+	}
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("set")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	vol, exists := s.volumes[slot]
+	if !exists {
+		return "failure: no such item\n", 1
+	}
+
+	// Update volume size
+	oldSize := vol.FileSizeBytes
+	vol.FileSizeBytes = newSize
+
+	// Also update backing file size if it exists
+	if vol.FilePath != "" {
+		if file, fileExists := s.files[vol.FilePath]; fileExists {
+			file.SizeBytes = newSize
+		}
+	}
+
+	klog.V(2).Infof("Mock RDS: Resized volume %s from %d to %d bytes", slot, oldSize, newSize)
+	return "", 0
+}
+
 func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
+	// Check error injection BEFORE normal processing
+	if shouldFail, errMsg := s.errorInjector.ShouldFailDiskRemove(); shouldFail {
+		klog.V(2).Infof("MOCK ERROR INJECTION: Disk remove failed - %s", strings.TrimSpace(errMsg))
+		return errMsg, 1
+	}
+
 	// Parse: /disk remove [find slot=pvc-123]
 	re := regexp.MustCompile(`slot=([^\s\]]+)`)
 	matches := re.FindStringSubmatch(command)
@@ -391,6 +533,9 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 	}
 
 	slot := matches[1]
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("remove")
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

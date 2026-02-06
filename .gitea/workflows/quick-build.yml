@@ -1,0 +1,59 @@
+name: Quick Build
+
+# Fast build on push to main branches - NO TESTS, NO GITHUB ACTIONS
+# Goal: <2 minutes for rapid feedback
+# Uses direct commands instead of GitHub actions to avoid slow cloning
+
+on:
+  push:
+    branches: [dev, main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.planning/**'
+      - '.github/**'
+
+env:
+  REGISTRY: git.whiskey.works
+  IMAGE_NAME: whiskey/rds-csi
+
+jobs:
+  quick-build:
+    name: Build Binary Only (Fast)
+    runs-on: golang  # golang:1.24-bookworm or custom image with Go 1.24
+    steps:
+      - name: Install Node.js for actions
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y -qq nodejs make
+          node --version
+          echo "✅ Node.js installed for GitHub actions"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify build environment
+        run: |
+          go version
+          make --version
+          echo "✅ Build environment ready"
+
+      - name: Build binary (includes dependency download)
+        run: make build-local
+
+      - name: Verify binary
+        run: |
+          ls -lh bin/
+          ./bin/rds-csi-plugin-* --version || true
+          echo "✅ Binary built successfully"
+
+      - name: Build summary
+        run: |
+          echo "✅ Quick build complete!"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo ""
+          echo "Built binary:"
+          ls -lh bin/ | grep rds-csi-plugin

@@ -1,784 +1,517 @@
-# Domain Pitfalls: KubeVirt Live Migration with Block Storage CSI
+# Pitfalls Research: CSI Driver Testing Infrastructure
 
-**Domain:** KubeVirt VM live migration with ReadWriteOnce block storage
-**Researched:** 2026-02-03
-**Context:** RDS CSI Driver using NVMe/TCP, no storage-level locking/reservations
-**Target:** v0.5.0 - KubeVirt Live Migration Support
+**Domain:** Kubernetes CSI Driver Testing and Validation
+**Researched:** 2026-02-04
+**Confidence:** MEDIUM-HIGH
 
 ## Executive Summary
 
-Adding live migration support to a CSI driver that currently enforces strict RWO semantics is **fraught with data corruption risks**. The core challenge: allowing temporary dual-attachment during migration without creating filesystem corruption from simultaneous writes. NVMe/TCP provides no storage-level fencing, so all safety must come from careful orchestration and timing.
-
-**Critical insight:** This is NOT just about relaxing attachment validation. Data corruption happens at the filesystem layer when two nodes mount the same block device simultaneously. The CSI driver must coordinate the handoff window precisely.
-
-**Key requirement clarification:** KubeVirt requires **ReadWriteMany (RWX) access mode** for standard live migration. RWO block volumes cannot be live migrated without storage-level block migration (copying data from source to destination). The challenge is implementing RWX-like behavior on NVMe/TCP storage that natively supports multi-initiator access but lacks filesystem-level coordination.
+Adding production testing to CSI drivers reveals pitfalls clustered around four themes: **idempotency misunderstandings** (most critical), **mock-reality divergence** (most insidious), **test isolation failures** (most frustrating), and **hardware-specific timing** (most environment-dependent). The RDS CSI driver faces specific risks around NVMe/TCP disconnect cleanup, SSH-based control plane testing, and production hardware validation without breaking existing volumes.
 
 ## Critical Pitfalls
 
-These mistakes cause data corruption, VM crashes, or require complete rewrites.
+### Pitfall 1: Idempotency Violations Under Real Conditions
 
-### Pitfall 1: Filesystem Mounted on Two Nodes Simultaneously
+**What goes wrong:**
+CSI sanity tests pass locally but fail when kubelet retries operations on production nodes. NodeStageVolume called twice causes "already mounted" errors, NodeUnstageVolume races with new NodeStageVolume calls, device path comparisons fail due to symlink vs canonical path mismatches.
 
-**What goes wrong:** The filesystem (ext4, xfs) inside the VM disk image gets corrupted when mounted read-write on two nodes at the same time. Both kernels cache metadata, make conflicting writes, and neither knows about the other's changes.
+**Why it happens:**
+- Kubelet >= 1.20 assumes CSI driver implementations are idempotent and retries aggressively
+- On AWS Nitro instances: `findDevicePath()` returns `/dev/xvdcf` (symlink) while `GetDeviceNameFromMount()` returns `/dev/nvme1n1` (canonical), breaking idempotency checks
+- NodeStageVolume can be issued while NodeUnstageVolume is still in progress, violating spec assumptions
+- Tests often use fresh state, missing edge cases like "volume already staged from previous call"
 
-**Why it happens:** Developer assumes that because the migration is "temporary," brief dual-mounting is safe. It is not. Filesystems are explicitly designed for single-writer semantics.
+**How to avoid:**
+1. **Test with kubelet retries**: Simulate kubelet restarting mid-operation, calling same method twice
+2. **Canonical path normalization**: Always resolve symlinks before path comparisons (`filepath.EvalSymlinks()`)
+3. **State checking first**: Check if operation already complete before starting (e.g., already mounted, already disconnected)
+4. **Lock-free idempotency**: Don't rely on locks; make operations naturally idempotent
+5. **Test race conditions**: Call NodeStageVolume while NodeUnstageVolume still running
 
-**Consequences:**
-- Filesystem corruption requiring fsck or complete data loss
-- VM crashes with I/O errors during or after migration
-- Silent corruption that appears later (worst case)
+**Warning signs:**
+- Sanity tests pass but production pods fail to mount with "device busy" or "already exists"
+- Kubelet logs show "operation already in progress" despite driver claiming success
+- Device paths differ in logs vs actual mount table (`/dev/nvmeX` vs `/dev/disk/by-id/...`)
+- Intermittent failures that don't reproduce in tests
 
-**Prevention:**
-```
-KubeVirt live migration with block volumes works DIFFERENTLY than filesystem mounts:
+**Phase to address:**
+- **v0.9.0 Milestone 1 (CSI Sanity Tests)**: Add idempotency test cases, retry simulation
+- **v0.9.0 Milestone 3 (E2E Testing)**: Include kubelet restart tests
 
-For KubeVirt VMs:
-- QEMU accesses the block device directly (no filesystem mount by Linux)
-- QEMU can coordinate I/O pause during migration handoff
-- The VM's INTERNAL filesystem is protected by QEMU, not Linux
-
-The CSI driver must:
-1. Allow RWX block volume mode (volumeMode: Block)
-2. NOT mount a filesystem on the block device
-3. Trust KubeVirt/QEMU to coordinate I/O during migration
-
-For filesystem volumes (non-KubeVirt):
-- NEVER allow dual filesystem mounts
-- Timeline enforcement still required if used outside KubeVirt
-```
-
-**Detection:**
-- Monitor for mount count on same volume (should be 0 for block mode, 1 for filesystem)
-- Check for filesystem errors in kernel logs on both nodes
-- VM shows I/O errors or read-only filesystem remount
-
-**Warning signs during implementation:**
-- Code path allows NodePublishVolume with mount while RWX is enabled
-- No distinction between block mode and filesystem mode volumes
-
-**Phase to address:** Implementation - Volume capability validation
-
-**Sources:**
-- [Red Hat: Storage considerations for OpenShift Virtualization](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization)
-- [Longhorn Issue #3597: Corruption using XFS after node restart](https://github.com/longhorn/longhorn/issues/3597)
+**RDS-specific considerations:**
+- NVMe-oF devices may appear as `/dev/nvme1n1` vs `/dev/disk/by-id/nvme-...` depending on udev timing
+- SSH operations are slow (~200ms), increasing window for race conditions
+- Multiple pods on same node could trigger concurrent CreateVolume calls
 
 ---
 
-### Pitfall 2: Advertising RWX Capability Without Proper Multi-Initiator Support
+### Pitfall 2: Mock Storage Backend Diverges From Real Hardware
 
-**What goes wrong:** CSI driver advertises `MULTI_NODE_MULTI_WRITER` capability to enable RWX volumes, but the underlying storage or driver doesn't actually handle concurrent access safely.
+**What goes wrong:**
+Tests pass against mock RDS server but fail against real RDS. Mock returns instant responses, real SSH has 200ms latency exposing timeout bugs. Mock always succeeds disk creation, real RDS returns "not enough space" or RouterOS version incompatibilities.
 
-**Why it happens:** Developer focuses on the Kubernetes/CSI layer and forgets the storage layer. NVMe/TCP supports multi-initiator, but the driver's attachment tracking and namespace management may not.
+**Why it happens:**
+- Mock maintainers don't use real hardware regularly, divergence accumulates
+- Edge cases (disk full, concurrent operations, version differences) not in mock
+- Mock doesn't simulate RouterOS CLI output variations (e.g., field order changes between RouterOS versions)
+- Performance characteristics wildly different (mock: 1ms, real: 200ms SSH + 3s disk allocation)
 
-**Consequences:**
-- KubeVirt allows migration (sees RWX support)
-- Both nodes connect to NVMe target simultaneously
-- Without QEMU coordination, concurrent writes corrupt data
-- With QEMU coordination, migration may still fail due to CSI-level rejections
+**How to avoid:**
+1. **Record real RDS interactions**: Use "record & replay" for mock development (save actual SSH command/response pairs)
+2. **Fuzz mock responses**: Randomly inject delays, errors, field reordering to match real variability
+3. **Test against real hardware weekly**: CI job that runs subset of tests against actual RDS instance
+4. **Mock compatibility matrix**: Document which RouterOS versions mock represents
+5. **Fail-fast on unknown responses**: Mock should error on unexpected commands, not silently succeed
 
-**Prevention:**
+**Warning signs:**
+- Tests run 10x faster in CI than production (mock too fast)
+- "Works in dev, breaks in staging" pattern
+- Mock never returns certain error codes that real hardware does
+- Test coverage metrics high but production has basic failures
+
+**Phase to address:**
+- **v0.9.0 Milestone 2 (Mock RDS)**: Design mock from recorded real interactions
+- **v0.9.0 Milestone 5 (Hardware Testing)**: Weekly real RDS test run
+
+**RDS-specific considerations:**
+- RouterOS CLI output format varies by version (7.1 vs 7.16+)
+- NVMe-TCP export behavior differs between RouterOS builds
+- Btrfs filesystem timing (real disk allocation takes 1-3 seconds, mock should simulate this)
+- SSH key authentication edge cases (password prompt, key format issues)
+
+---
+
+### Pitfall 3: Test Cleanup Failures Create Cascading Issues
+
+**What goes wrong:**
+Test suite crashes or times out, leaving orphaned volumes on RDS. Next test run fails because volume IDs collide or RDS runs out of space. Manual cleanup required between test runs. Tests become flaky because previous test's volume still mounted.
+
+**Why it happens:**
+- Tests killed mid-operation (timeout, crash, Ctrl-C) skip cleanup hooks
+- Cleanup assumes success path; on failure, resources leak
+- No global cleanup reconciliation between test runs
+- Tests don't check for stale resources before starting
+- VMs/pods killed during tests leave NVMe connections active
+
+**How to avoid:**
+1. **Dedicated test namespace**: Use unique volume ID prefix per test run (e.g., `test-<timestamp>-pvc-<uuid>`)
+2. **Cleanup job before tests**: Pre-test reconciliation that removes all test-prefixed volumes
+3. **Deferred cleanup in Go**: Use `defer` for cleanup even on panic
+4. **Post-test orphan scan**: CI step that lists orphaned volumes and fails if found (but cleans them anyway)
+5. **Test isolation**: Each test uses unique volume IDs, never reuses names
+
+**Warning signs:**
+- Test failures mention "volume already exists" or "name in use"
+- RDS `/disk print` shows dozens of old test volumes
+- CI flakiness increases over time (state accumulation)
+- Tests fail after manual intervention but pass on fresh cluster
+
+**Phase to address:**
+- **v0.9.0 Milestone 1 (CSI Sanity Tests)**: Implement cleanup hooks, unique IDs per test
+- **v0.9.0 Milestone 3 (E2E Testing)**: Pre/post-test reconciliation jobs
+
+**RDS-specific considerations:**
+- Orphan reconciler exists but needs dry-run testing in CI
+- NVMe connections may persist after pod deletion if cleanup fails
+- Btrfs file deletion is async; test may pass but file still exists briefly
+- SSH connection pool must be drained before test cleanup
+
+---
+
+### Pitfall 4: Hardware-Specific Device Timing Not Captured in Tests
+
+**What goes wrong:**
+NVMe device appears instantly in tests but takes 2-30 seconds on real hardware. Test uses 1-second timeout, production needs 30 seconds. Device path format differs (`nvmeXnY` vs `nvmeXcYnZ` for NVMe-oF). Tests assume `/dev/nvme1n1`, production has `/dev/nvme27n1` after many disconnects.
+
+**Why it happens:**
+- Mock instantly returns device path, real kernel takes time to enumerate
+- Test environment uses loopback devices or RAM disks (instant)
+- Production uses NVMe-oF with network latency and target discovery time
+- Device numbering is sequential; tests assume low numbers, production recycles
+
+**How to avoid:**
+1. **Adaptive timeouts**: Start with 5s, double on retry up to 60s max
+2. **Device discovery by NQN, not path**: Match `/sys/class/nvme/*/subsysnqn` against expected NQN
+3. **Test with real NVMe-oF target**: Even if mock backend, use actual `nvme connect` to real NVMe-TCP target
+4. **Device number range testing**: Test with high device numbers (e.g., create/destroy 50 volumes first to get nvme50n1)
+5. **Glob patterns, not hardcoded paths**: Use `/dev/nvme*n*` glob, iterate to find matching NQN
+
+**Warning signs:**
+- Timeouts only in production, never in CI
+- "Device not found" errors despite successful `nvme connect`
+- Tests break when run on nodes with existing NVMe devices
+- Different behavior between first volume (nvme1n1) and tenth volume (nvme10n1)
+
+**Phase to address:**
+- **v0.9.0 Milestone 1 (CSI Sanity Tests)**: Device discovery by NQN, not path
+- **v0.9.0 Milestone 5 (Hardware Testing)**: Real NVMe-TCP target tests with timing validation
+
+**RDS-specific considerations:**
+- Current implementation already uses NQN-based discovery (good!)
+- 30-second timeout may still be too short for degraded networks
+- NVMe-oF device naming varies by kernel version (5.0 vs 5.10+)
+- RDS exports on port 4420; ensure no firewall delays
+
+---
+
+### Pitfall 5: CSI Sanity Tests Skip Critical Negative Cases
+
+**What goes wrong:**
+CSI sanity tests pass but production fails on error paths. Tests don't validate "volume already exists with different size" idempotency, "delete non-existent volume" behavior, "stage volume that's already staged elsewhere" concurrency.
+
+**Why it happens:**
+- `csi-sanity` focuses on happy path compliance, not edge cases
+- Negative tests require manual implementation beyond sanity suite
+- Snapshot tests often skipped (design limitations in sanity framework)
+- Tests don't validate error message quality (just error presence)
+
+**How to avoid:**
+1. **Supplement csi-sanity**: Add custom negative test suite (e.g., `test/negative/`)
+2. **Error code validation**: Verify gRPC error codes match spec (ResourceExhausted vs Unavailable)
+3. **Concurrency tests**: Multiple goroutines calling same CSI method simultaneously
+4. **Snapshot testing despite limitations**: Even if sanity skips it, manually test
+5. **Capability validation**: Test that driver rejects unsupported operations (e.g., multi-attach for ReadWriteOnce)
+
+**Warning signs:**
+- "All tests pass" but production has errors
+- Driver returns wrong gRPC error codes (generic Unavailable instead of specific codes)
+- No tests for CreateVolume with existing volume ID
+- No tests for concurrent operations
+
+**Phase to address:**
+- **v0.9.0 Milestone 1 (CSI Sanity Tests)**: Run full sanity suite including capability validation
+- **v0.9.0 Milestone 4 (Gap Analysis)**: Identify missing negative tests, add to custom suite
+
+**RDS-specific considerations:**
+- RouterOS error messages vary; ensure parsing handles variations
+- SSH timeout should return Unavailable, not Internal
+- Volume name length limits (DNS-1123 label validation)
+
+---
+
+### Pitfall 6: Volume Naming Constraints Break Sanity Tests
+
+**What goes wrong:**
+CSI sanity generates volume names like `test-volume-with-very-long-name-12345678901234567890` that violate DNS-1123 label limits (63 chars) or Longhorn's volume naming requirements. Test fails with cryptic validation errors.
+
+**Why it happens:**
+- Sanity test doesn't know backend storage naming constraints
+- CSI spec allows arbitrary volume IDs, but implementations have limits
+- Driver doesn't validate volume ID format before SSH command injection
+
+**How to avoid:**
+1. **Volume ID transformation**: Hash long names to fixed-length IDs (e.g., `pvc-<uuid>`)
+2. **Validation in CreateVolume**: Return InvalidArgument if volume ID too long/invalid
+3. **Configure sanity test name prefix**: Use `-ginkgo.label-filter` to skip problematic tests or shorter prefix
+4. **Document naming constraints**: In CSIDriver object and docs
+
+**Warning signs:**
+- Sanity test fails with "invalid name" from backend storage
+- Volume IDs truncated, causing collisions
+- DNS-1123 validation errors in Kubernetes API
+
+**Phase to address:**
+- **v0.9.0 Milestone 1 (CSI Sanity Tests)**: Add volume ID validation, test with long names
+
+**RDS-specific considerations:**
+- RouterOS slot names limited to certain characters
+- Filesystem path length limits (Btrfs allows 255 bytes per component)
+
+---
+
+## Technical Debt Patterns
+
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+|----------|-------------------|----------------|-----------------|
+| Skip snapshot tests in sanity suite | Faster test runs (20% speedup) | No validation of snapshot idempotency, may break in production | Never for drivers claiming snapshot support; Acceptable for MVP without snapshots |
+| Use sleep instead of polling for device ready | Simple implementation (5 lines vs 20) | Race conditions, flaky tests, arbitrary timeouts | Never; always poll with timeout |
+| Mock SSH responses without recording real output | Faster mock development (1 day vs 3) | Mock diverges from reality, test blind spots | Acceptable for initial prototyping; Must record real sessions before v1.0 |
+| Single node E2E tests only | Cheaper CI (1 node vs 3) | Miss multi-node race conditions, volume movement edge cases | Acceptable for alpha; Must add multi-node by beta |
+| Disable orphan reconciler in tests | Simpler test setup (no RBAC) | Orphans accumulate, tests become flaky over time | Never; reconciler is critical for test hygiene |
+
+## Integration Gotchas
+
+| Integration | Common Mistake | Correct Approach |
+|-------------|----------------|------------------|
+| csi-sanity | Assume passing = spec compliant | Supplement with custom negative tests and concurrency tests |
+| NVMe-CLI | Use device path for disconnect (`nvme disconnect -d /dev/nvme1n1`) | Use NQN for disconnect (`nvme disconnect -n <nqn>`) or controller device (`/dev/nvme1`) |
+| Kubernetes E2E | Import k8s.io/kubernetes/test/e2e (vendor hell) | Use standalone test framework, call kubectl directly |
+| Mock SSH Server | Return success for all commands | Parse commands, validate parameters, return realistic errors |
+| CSI Sidecar Versions | Use latest sidecars with old CSI spec | Pin sidecar versions compatible with driver's CSI spec version (v1.5.0 → specific sidecar versions) |
+
+## Performance Traps
+
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| Sequential test execution | Test suite takes 30+ minutes | Parallel test execution with unique volume IDs | >50 tests |
+| No SSH connection pooling | CreateVolume takes 500ms (200ms SSH handshake) | Reuse SSH connections across operations | >10 volumes/min |
+| Synchronous sanity tests | CI timeout (2hr default) | Run sanity with `-ginkgo.p` (parallel) and `-ginkgo.timeout 4h` | >100 test cases |
+| Small-scale testing only | Performance looks good at 10 volumes | Load test with 100+ concurrent volume operations | Production with 50+ pods |
+| Mock responds instantly | Tests assume <1s operations | Mock should simulate real latency (SSH: 200ms, disk create: 3s) | Any production use |
+
+## Security Mistakes
+
+| Mistake | Risk | Prevention |
+|---------|------|------------|
+| SSH private key in test fixtures | Keys leaked in Git history | Generate ephemeral keys per test run, never commit |
+| Mock server accepts any command | Command injection testing blind spot | Mock should reject malicious inputs (shell metacharacters, path traversal) |
+| Test namespace has cluster-admin | Tests can't catch RBAC issues | Use realistic RBAC in test environment (separate controller/node permissions) |
+| No TLS for test clusters | Tests don't catch TLS issues | Use real certs even in dev (Let's Encrypt staging) |
+| Volume IDs not validated | Command injection via crafted volume names | Strict validation: `^pvc-[a-f0-9-]+$` regex |
+
+## Testing Anti-Patterns
+
+### Anti-Pattern 1: "Works on My Machine" Mock Testing
+
+**What it looks like:**
+All tests use mock RDS server, never tested against real hardware until production.
+
+**Why it's bad:**
+Mock diverges from reality. Real hardware has timing issues, error modes, and quirks that mocks don't capture. Tests give false confidence.
+
+**What to do instead:**
+- Weekly CI job against real RDS instance (even if slower)
+- "Record & replay" real RDS interactions to keep mock accurate
+- Fail-fast when mock sees unexpected behavior (don't silently succeed)
+
+---
+
+### Anti-Pattern 2: Test Cleanup in AfterEach Only
+
+**What it looks like:**
 ```go
-// Volume capability validation must differentiate:
-
-func validateVolumeCapabilities(caps []*csi.VolumeCapability) error {
-    for _, cap := range caps {
-        accessMode := cap.GetAccessMode().GetMode()
-
-        // RWX with Block = OK for KubeVirt live migration
-        if accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
-            if cap.GetBlock() == nil {
-                // RWX with Mount (filesystem) = NOT SAFE
-                return fmt.Errorf("MULTI_NODE_MULTI_WRITER only supported for block volumes")
-            }
-            // Block mode is OK - QEMU coordinates access
-        }
-    }
-    return nil
-}
-
-// Capability advertisement:
-d.vcaps = []*csi.VolumeCapability_AccessMode{
-    {Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
-    // Add RWX ONLY for block mode
-    {Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER},
-}
+AfterEach(func() {
+    deleteVolume(volumeID)  // Cleanup
+})
 ```
 
-**Detection:**
-- Test: Create RWX filesystem PVC, try to mount on two nodes - should fail
-- Test: Create RWX block PVC for KubeVirt VM - should allow dual attachment
+**Why it's bad:**
+If test panics, crashes, or times out, `AfterEach` doesn't run. Orphaned volumes accumulate.
 
-**Warning signs during implementation:**
-- Adding MULTI_NODE_MULTI_WRITER to vcaps without access type validation
-- No test cases for filesystem vs block mode with RWX
-
-**Phase to address:** Research/Planning - Must decide capability scope before implementation
-
-**Sources:**
-- [Portworx: Raw Block for Live Migration](https://docs.portworx.com/portworx-csi/operations/raw-block-for-live-migration)
-- [GitHub Issue: Azure Disk MULTI_NODE_MULTI_WRITER not supported](https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/827)
-
----
-
-### Pitfall 3: Race Between Attachment Validation and Actual Device Access
-
-**What goes wrong:** ControllerPublishVolume checks attachment state, returns OK for dual-attachment, but by the time NodeStageVolume runs, the device access conflicts with source node.
-
-**Why it happens:** There's a time gap between CSI calls. The attachment manager tracks "intent," but NVMe connections are the "reality." Developer assumes attachment state equals connection state.
-
-**Consequences:**
-- Both nodes have active NVMe connections
-- NVMe namespace may show different controller IDs
-- Depending on RDS implementation, one connection may fail or data corruption
-
-**Prevention:**
-```
-The attachment manager must track:
-1. Attachment INTENT (what ControllerPublishVolume approved)
-2. Connection STATE (what NodeStageVolume achieved)
-3. Mount STATE (what NodePublishVolume completed)
-
-For live migration:
-- Source: ATTACHED, CONNECTED, MOUNTED (block device to QEMU)
-- Destination: ATTACHED (approved), CONNECTING...
-- Source: UNMOUNTING (QEMU pauses I/O)
-- Source: DISCONNECTING
-- Destination: CONNECTED, MOUNTING
-
-The CSI driver cannot enforce this ordering - KubeVirt does.
-But the driver CAN:
-- Track all states for observability
-- Refuse connection if attachment not approved
-- Refuse disconnect if still marked as primary
-```
-
-**Detection:**
-- Metrics show attachment count != connection count for same volume
-- Node logs show "NVMe already connected" errors
-- Multiple nvme subsystems connected to same NQN from different nodes
-
-**Warning signs during implementation:**
-- ControllerPublishVolume returns success without tracking
-- No mechanism to verify source actually released before destination acquires
-
-**Phase to address:** Implementation - Attachment manager enhancement
-
----
-
-### Pitfall 4: NVMe Disconnect Timing - Volume Still In Use
-
-**What goes wrong:** NodeUnstageVolume calls `nvme disconnect` while QEMU still has the block device open on the source node. Kernel panics, or I/O errors cause VM crash.
-
-**Why it happens:** Developer assumes NodeUnpublishVolume always runs first and QEMU closes the device. In failure scenarios or timing issues, QEMU may still have file descriptor open.
-
-**Consequences:**
-- Node kernel panic or filesystem errors
-- VM crash on source node
-- Data loss from in-flight writes
-- Stale NVMe subsystem state prevents reconnection
-
-**Prevention:**
-```bash
-# In NodeUnstageVolume, ALWAYS verify device not in use:
-
-# 1. Check if device has any open file descriptors
-device_path=$(get_device_by_nqn "$nqn")
-if lsof "$device_path" 2>/dev/null | grep -q .; then
-    return FAILED_PRECONDITION "device still in use, cannot unstage"
-fi
-
-# 2. Check if device is mounted (paranoid check for block mode)
-if findmnt --source "$device_path"; then
-    return FAILED_PRECONDITION "device mounted, cannot disconnect"
-fi
-
-# 3. Flush any pending I/O
-sync
-echo 1 > /proc/sys/vm/drop_caches  # Optional: clear page cache
-
-# 4. ONLY THEN disconnect
-nvme disconnect -n "$nqn"
-```
-
-**Detection:**
-- Kernel logs show "I/O error, dev nvmeXnY, sector ..." after disconnect
-- QEMU process crashes with block device errors
-- `dmesg` shows NVMe controller removal while in use
-
-**Warning signs during implementation:**
-- NodeUnstageVolume doesn't check for open file descriptors
-- No synchronization between QEMU unmount and NVMe disconnect
-
-**Phase to address:** Implementation - NodeUnstageVolume enhancement
-
-**Sources:**
-- [Dell CSI: When a Node Goes Down, Block Volumes Cannot be Attached to Another Node](https://www.dell.com/support/kbdoc/en-us/000200778/)
-
----
-
-### Pitfall 5: Grace Period Configuration Misuse
-
-**What goes wrong:** Migration takes longer than expected (network slow, large memory). Grace period expires, attachment reconciler forcibly detaches source, migration fails, VM crashes.
-
-**Alternative problem:** Grace period is applied universally, allowing genuine conflicts to proceed for grace period duration.
-
-**Why it happens:** Developer sets grace period based on "typical" migration time without accounting for variability. Or uses single grace period for both migration and conflict detection.
-
-**Consequences:**
-- Migration fails mid-stream
-- VM experiences I/O errors and crashes
-- OR: Legitimate conflicts allowed for grace period window
-
-**Prevention:**
-```
-TWO SEPARATE CONCERNS:
-
-1. Migration Handoff Window (should be long):
-   - Allow dual-attachment for configured duration
-   - Configurable per-StorageClass or globally
-   - Default: 5 minutes (allows for slow migrations)
-   - Must be renewable if migration still in progress
-
-2. Conflict Detection (should be immediate):
-   - Non-migration dual-attach attempts
-   - Should fail IMMEDIATELY with FailedPrecondition
-   - No grace period for conflicts
-
-How to distinguish:
-- Migration: ControllerPublishVolume from virt-launcher pod owner
-- Conflict: Any other dual-attach attempt
-
-Implementation:
-func ControllerPublishVolume(req) {
-    if existingAttachment.NodeID != req.NodeID {
-        if isKubeVirtMigration(req) {
-            // Apply migration grace period
-            return allowMigrationHandoff(req)
-        }
-        // Not migration - reject immediately
-        return FAILED_PRECONDITION
-    }
-}
-```
-
-**Detection:**
-- Metrics show `attachment_conflicts_total` during known migrations
-- Events on PVC: "Detached from node-A due to timeout" during active migration
-- OR: Metrics show conflicts allowed that should have been rejected
-
-**Warning signs during implementation:**
-- Single `gracePeriod` config for all attachment decisions
-- No way to identify migration requests vs conflict requests
-
-**Phase to address:** Planning - Architecture of attachment manager
-
----
-
-### Pitfall 6: Node Failure During Migration - Split-Brain Attachment
-
-**What goes wrong:** Source node crashes mid-migration. Kubernetes thinks it's down, but it's actually network-partitioned and still has NVMe connection active. Destination node connects to same volume. Both write simultaneously.
-
-**Why it happens:** Without storage-level fencing (NVMe/TCP has none via RDS), there's no way to guarantee source node released the volume.
-
-**Consequences:**
-- Silent data corruption (worst case scenario)
-- Both nodes write to volume simultaneously
-- No immediate error - corruption appears later
-- Most dangerous when network partition resolves
-
-**Prevention:**
-```
-This is the HARDEST problem for RWO block storage without fencing.
-
-Options (in order of safety):
-
-1. Require manual intervention:
-   - If source node status = NotReady, refuse migration
-   - Operator must verify node is truly down before force-detach
-   - Document: "Network partitions can cause corruption"
-
-2. Implement application-level fencing:
-   - Source node must actively confirm unmount before destination mounts
-   - Requires out-of-band communication channel (not CSI spec)
-   - Could use RDS SSH connection to verify state
-
-3. Use RDS-level protection (if available):
-   - MikroTik RDS might support namespace reservations
-   - Would need to research RouterOS capabilities
-   - Most robust but requires storage cooperation
-
-For RDS CSI (no fencing), recommend Option 1:
-- AttachmentReconciler detects NotReady nodes
-- Refuses migration if source node is NotReady
-- Requires confirmed node deletion or manual override
-- Logs aggressive warnings
-```
-
-**Detection:**
-- Both nodes show NVMe connection to same NQN
-- Attachment manager shows volume attached to multiple nodes
-- Source node returns from partition with stale data
-
-**Warning signs during implementation:**
-- No check for source node status before allowing migration
-- No documentation of split-brain risks
-
-**Phase to address:** Research - Investigate RDS capabilities for fencing
-
-**Sources:**
-- [AIStore: Split-brain is Inevitable](https://aistore.nvidia.com/blog/2025/02/16/split-brain-blog)
-- [Kubernetes on SAN Storage: Fencing for Persistent Storage](https://datamattsson.tumblr.com/post/182297931146/highly-available-stateful-workloads-on-kubernetes)
-
----
-
-### Pitfall 7: Attachment State Persisted After Migration Failure
-
-**What goes wrong:** Migration starts, attachment manager marks volume as "migrating to node-B". Migration fails. State persists. Future legitimate attachments rejected because volume still marked as migrating.
-
-**Why it happens:** Developer adds migration state but forgets cleanup path for failure cases.
-
-**Consequences:**
-- Volume stuck in "migrating" state
-- Future pod scheduling fails with "volume unavailable"
-- Requires manual annotation cleanup or controller restart
-
-**Prevention:**
-```
-Attachment state machine must handle ALL transitions:
-
-States:
-- AVAILABLE: No attachment
-- ATTACHED(nodeA): Single attachment
-- MIGRATING(nodeA -> nodeB): Dual attachment for migration
-- DETACHING(nodeA): Cleanup in progress
-
-Transitions:
-1. AVAILABLE -> ATTACHED: Normal attach
-2. ATTACHED -> MIGRATING: Migration start (ControllerPublish to new node)
-3. MIGRATING -> ATTACHED: Migration complete (ControllerUnpublish from old node)
-4. MIGRATING -> ATTACHED(original): Migration failed (rollback)
-5. ATTACHED -> DETACHING: Normal detach start
-6. DETACHING -> AVAILABLE: Detach complete
-
-Failure recovery:
-- Reconciler detects stale MIGRATING state (timestamp > max_migration_time)
-- Checks actual NVMe connections on both nodes
-- Resolves to correct single-attachment state
-- Posts event explaining resolution
-```
-
-**Detection:**
-- PV annotation shows migration in progress but no migration running
-- Volume attach fails with "migration in progress" error
-- Reconciler logs show repeated "stale migration state detected"
-
-**Warning signs during implementation:**
-- State machine only handles happy path
-- No reconciler logic for stale migration cleanup
-
-**Phase to address:** Implementation - Attachment state machine
-
----
-
-## Moderate Pitfalls
-
-These cause delays, debugging sessions, or technical debt.
-
-### Pitfall 8: CSIDriver Object Configuration Mismatch
-
-**What goes wrong:** CSIDriver object in Kubernetes has incorrect `attachRequired` setting. If false, Kubernetes skips ControllerPublishVolume entirely, breaking attachment tracking.
-
-**Why it happens:** Developer changes driver behavior but forgets to update CSIDriver manifest.
-
-**Consequences:**
-- Attachment tracking bypassed
-- Grace period logic never invoked
-- Volumes appear to work but without proper fencing
-
-**Prevention:**
-```yaml
-# CSIDriver must have attachRequired: true for attachment tracking
-apiVersion: storage.k8s.io/v1
-kind: CSIDriver
-metadata:
-  name: rds.csi.srvlab.io
-spec:
-  attachRequired: true  # CRITICAL: Must be true for ControllerPublish/Unpublish
-  podInfoOnMount: true  # Recommended for VMI grouper
-  volumeLifecycleModes:
-    - Persistent
-```
-
-**Detection:**
-- ControllerPublishVolume never called (no logs)
-- Attachment metrics always zero
-- Migration "works" but attachment state is empty
-
-**Warning signs during implementation:**
-- Changing deployment manifests without testing attachment flow
-- Copy-pasting CSIDriver from driver that doesn't need attachment
-
-**Phase to address:** Deployment - Manifest validation
-
----
-
-### Pitfall 9: VolumeAttachment Object Cleanup Delay
-
-**What goes wrong:** Kubernetes takes 6 minutes to clean up VolumeAttachment after node failure. During this time, volume cannot be attached to new node. Migration appears stuck.
-
-**Why it happens:** This is Kubernetes default behavior (`maxWaitForUnmountDuration = 6m`). Not a driver bug, but impacts migration UX.
-
-**Prevention:**
-```
-Cannot change Kubernetes behavior, but can:
-
-1. Document expected delay in operator runbooks
-2. Provide kubectl command for force cleanup:
-   kubectl delete volumeattachment csi-<volume-id>
-3. Add health check endpoint that detects this state
-4. Post events explaining the wait period
-5. Consider implementing force-detach with warnings
-```
-
-**Detection:**
-- Migration stuck at "Waiting for volume detachment"
-- VolumeAttachment object exists for deleted pod
-- 6-minute timer in progress
-
-**Warning signs during implementation:**
-- No documentation of this Kubernetes limitation
-- Tests don't account for cleanup delays
-
-**Phase to address:** Documentation - Operator runbook
-
-**Sources:**
-- [Medium: Demystifying the Multi-Attach Error for Volume](https://medium.com/@golusstyle/demystifying-the-multi-attach-error-for-volume-causes-and-solutions-595a19316a0c)
-
----
-
-### Pitfall 10: NVMe Multipath Interference
-
-**What goes wrong:** If NVMe multipath is enabled on nodes, kernel may try to combine connections from different nodes into a multipath device. This breaks the single-initiator model.
-
-**Why it happens:** Default kernel NVMe settings may enable multipath. Developer doesn't explicitly disable it.
-
-**Consequences:**
-- Unexpected device naming (/dev/nvmeXcYnZ vs /dev/nvmeXnY)
-- Device path resolution fails
-- Potential I/O routing issues
-
-**Prevention:**
-```
-For RDS CSI driver (single controller, no multipath):
-
-1. Deployment requirements:
-   - Kernel parameter: nvme_core.multipath=N
-   - OR modprobe.d: options nvme_core multipath=N
-
-2. Driver validation at startup:
-   - Check /sys/module/nvme_core/parameters/multipath
-   - Log warning if multipath=Y
-   - Consider failing startup with clear error
-
-3. Documentation:
-   - Add to deployment prerequisites
-   - Explain why multipath should be disabled
-```
-
-**Detection:**
-- Device appears as /dev/dm-* instead of /dev/nvmeXnY
-- Multiple nvme controllers shown for same subsystem
-- `/sys/class/nvme-subsystem/*/nvme*/` shows unexpected entries
-
-**Warning signs during implementation:**
-- No validation of multipath setting
-- Device path code assumes simple naming
-
-**Phase to address:** Deployment - Prerequisites documentation
-
----
-
-### Pitfall 11: VMI Serialization Unaware of Migration
-
-**What goes wrong:** Project has VMI serialization to prevent concurrent operations on same VMI. Migration adds second VMI (source + destination) operating on same volume. Serialization doesn't account for this.
-
-**Why it happens:** VMI grouper keys by single VMI name. During migration, two VMIs (source launcher + destination launcher) both operate on volume, bypassing serialization.
-
-**Prevention:**
-```
-Extend VMI grouper to handle migration:
-
-Option A: Track by volume, not VMI
-- Lock on volume ID for all operations
-- Works regardless of how many VMIs access volume
-- May be too coarse-grained for multi-volume VMIs
-
-Option B: Detect migration and lock both VMIs
-- Identify migration scenario from pod labels/ownership
-- Acquire locks on both source and destination VMI
-- More complex but more precise
-
-Option C: Separate migration coordination
-- Migration operations use different lock namespace
-- AttachmentManager handles migration coordination
-- VMI grouper continues to handle single-VMI case
-
-Recommended: Option C (cleanest separation of concerns)
-```
-
-**Detection:**
-- Metrics show concurrent ControllerPublishVolume for same volume during migration
-- VMI serialization locks don't prevent dual-attachment
-- Race conditions reappear despite serialization being enabled
-
-**Warning signs during implementation:**
-- No review of VMI grouper behavior during migration
-- Tests only cover single-VMI scenarios
-
-**Phase to address:** Implementation - Migration-aware locking
-
-**Related:** Current implementation at driver.go:203-211 only handles single VMI case.
-
----
-
-### Pitfall 12: CSI Idempotency Violations During Migration
-
-**What goes wrong:** During migration, kubelet retries CSI calls. Driver assumes it's a duplicate call for same operation, returns success, but parameters have changed (different target node).
-
-**Why it happens:** CSI spec requires idempotency, but "same operation" is ambiguous during migration.
-
-**Prevention:**
+**What to do instead:**
 ```go
-func ControllerPublishVolume(req) {
-    // Check for existing attachment
-    existing := getAttachment(req.VolumeId)
+BeforeEach(func() {
+    cleanupOrphanedTestVolumes()  // Pre-cleanup
+})
 
-    if existing != nil {
-        if existing.NodeID == req.NodeID {
-            // TRUE idempotency: same volume, same node
-            return existingResponse()
-        }
-
-        // Different node - NOT idempotent, this is new operation
-        // Must validate migration is allowed
-        if !isMigrationAllowed(existing, req) {
-            return FAILED_PRECONDITION
-        }
-        // Process as migration
-    }
-
-    // No existing attachment, process normally
-}
+It("test", func() {
+    defer cleanupVolume(volumeID)  // Always runs
+    // Test code
+})
 ```
-
-**Detection:**
-- Same request retried returns different results
-- Attachment state inconsistent after retries
-- Kubelet logs show unexpected responses
-
-**Warning signs during implementation:**
-- Idempotency check only looks at volume ID, not node ID
-- No test cases for retry during migration
-
-**Phase to address:** Implementation - ControllerPublishVolume
 
 ---
 
-## Minor Pitfalls
+### Anti-Pattern 3: Hardcoded Device Paths
 
-These cause annoyance or confusion but are easily fixable.
+**What it looks like:**
+```go
+devicePath := "/dev/nvme1n1"  // Assume first NVMe device
+```
 
-### Pitfall 13: Migration Events Not Posted
+**Why it's bad:**
+Device numbers are sequential and reused. After 10 disconnects, you get `/dev/nvme11n1`. Tests break in production with multiple volumes.
 
-**What goes wrong:** Migration starts, runs, completes, but no events posted to PVC. Operators have no visibility into what happened.
+**What to do instead:**
+```go
+devicePath := findDeviceByNQN(nqn)  // Search /sys/class/nvme/*/subsysnqn
+```
 
-**Why it happens:** Developer focuses on functionality, forgets observability.
+---
+
+## "Looks Done But Isn't" Checklist
+
+Things that appear complete but are missing critical pieces:
+
+- [ ] **CSI Sanity Tests**: Often missing negative tests (delete non-existent volume, create duplicate, concurrent operations)
+- [ ] **Mock RDS Server**: Often missing error injection (disk full, SSH timeout, concurrent command conflicts)
+- [ ] **E2E Tests**: Often missing cleanup validation (check no orphaned volumes after test suite)
+- [ ] **NodeUnstageVolume**: Often missing force-disconnect logic (what if NVMe disconnect hangs?)
+- [ ] **Device Discovery**: Often missing timeout and retry (assumes device appears instantly)
+- [ ] **Idempotency**: Often missing "operation already complete" checks (assumes fresh state)
+- [ ] **Volume ID Validation**: Often missing injection protection (allows shell metacharacters)
+- [ ] **Error Handling**: Often returns generic errors (should return specific gRPC codes per CSI spec)
+
+## Recovery Strategies
+
+| Pitfall | Recovery Cost | Recovery Steps |
+|---------|---------------|----------------|
+| Idempotency violations in production | MEDIUM | 1. Add state checks before operations 2. Resolve symlinks in path comparisons 3. Add kubelet retry tests 4. Backport fixes to production |
+| Mock diverged from real hardware | HIGH | 1. Record real RDS interactions 2. Update mock to match 3. Re-run all tests 4. Identify tests that were false-passing |
+| Orphaned volumes from test failures | LOW | 1. Enable orphan reconciler with short grace period (1h) 2. Manual cleanup script 3. Add pre-test cleanup job |
+| Device timing issues | LOW | 1. Increase timeouts (5s→30s) 2. Add retry logic 3. Use NQN-based discovery 4. Test with real hardware |
+| Missing negative tests | MEDIUM | 1. Identify gaps via gap analysis 2. Add custom test suite 3. Run against production to verify fixes |
+| Volume naming violations | LOW | 1. Add validation in CreateVolume 2. Transform long names to UUIDs 3. Update sanity test config |
+
+## Pitfall-to-Phase Mapping
+
+| Pitfall | Prevention Phase | Verification |
+|---------|------------------|--------------|
+| Idempotency violations | v0.9.0 Milestone 1 (Sanity Tests) | Kubelet restart test, retry simulation test pass |
+| Mock divergence | v0.9.0 Milestone 2 (Mock RDS) | Real RDS test suite has >90% pass rate with mock |
+| Test cleanup failures | v0.9.0 Milestone 1 (Sanity Tests) | Zero orphaned volumes after test suite completion |
+| Device timing issues | v0.9.0 Milestone 5 (Hardware Testing) | Tests pass on real hardware with high device numbers |
+| CSI sanity gaps | v0.9.0 Milestone 4 (Gap Analysis) | Gap analysis document lists all missing capabilities |
+| Volume naming constraints | v0.9.0 Milestone 1 (Sanity Tests) | Sanity tests pass with long volume names |
+
+## RDS CSI Driver Specific Pitfalls
+
+### SSH-Based Control Plane Testing
+
+**Pitfall:** Mock SSH server accepts all commands without validation, hiding command injection vulnerabilities and RouterOS syntax errors.
 
 **Prevention:**
-```
-Add migration-specific events:
+1. Mock must parse `/disk add` parameters and validate syntax
+2. Reject invalid volume IDs (anything not matching `^pvc-[a-f0-9-]+$`)
+3. Simulate RouterOS error messages for invalid commands
+4. Test with malicious inputs (shell metacharacters, path traversal)
 
-1. MigrationStarted - ControllerPublishVolume for second node
-2. SourceDetachInitiated - KubeVirt starts cleanup
-3. SourceDetachCompleted - ControllerUnpublishVolume for source
-4. MigrationCompleted - Successfully attached to destination only
-5. MigrationFailed - Migration rolled back or timed out
-
-Event posting (example):
-poster.PostEvent(ctx, pvc, corev1.EventTypeNormal, "MigrationStarted",
-    fmt.Sprintf("Volume %s migration started: %s -> %s", volumeID, sourceNode, destNode))
-```
-
-**Detection:**
-- No events on PVC during migration
-- Operators can't tell if migration is in progress
-
-**Warning signs during implementation:**
-- No event posting in migration code paths
-- Events only posted for errors
-
-**Phase to address:** Implementation - Observability
+**Phase to address:** v0.9.0 Milestone 2 (Mock RDS)
 
 ---
 
-### Pitfall 14: Metrics Don't Distinguish Migration
+### NVMe-oF Disconnect Cleanup
 
-**What goes wrong:** `attachment_conflicts_total` metric increases during migrations. Alerts fire. Operators think there's a problem when there isn't.
-
-**Why it happens:** Same metric used for conflicts and migrations.
+**Pitfall:** `nvme disconnect` fails silently when device is in use (mounted, open file handles). Volume appears to unmount but NVMe connection persists, causing "target busy" errors on next mount.
 
 **Prevention:**
-```
-Separate metrics for migration:
+1. Check device not mounted before disconnect (`cat /proc/mounts | grep <device>`)
+2. Use `fuser -m <mountpoint>` to check for processes using volume
+3. Force unmount with `umount -f` if regular unmount fails
+4. Retry disconnect with exponential backoff (device may be flushing buffers)
+5. Log persistent connections for later reconciliation
 
-# Conflicts (bad)
-rds_csi_attachment_conflicts_total{reason="rwo_violation"}
+**Warning signs:**
+- `nvme list` shows stale connections after pod deletion
+- "Address already in use" on `nvme connect`
+- `/sys/class/nvme/` has entries after NodeUnstageVolume
 
-# Migrations (expected)
-rds_csi_migrations_total{status="started|completed|failed"}
-rds_csi_migration_duration_seconds{phase="attach|detach|total"}
-rds_csi_migration_grace_period_usage{used="true|false"}
-```
-
-**Detection:**
-- Alerts during known maintenance windows
-- Metrics dashboard shows "conflicts" during migrations
-
-**Warning signs during implementation:**
-- Reusing conflict metric for migration tracking
-- No migration-specific metrics
-
-**Phase to address:** Implementation - Metrics
+**Phase to address:** v0.9.0 Milestone 3 (E2E Testing)
 
 ---
 
-### Pitfall 15: Testing Only Fast Migrations
+### Dual-IP Architecture Testing
 
-**What goes wrong:** Tests pass with small VMs that migrate in seconds. Production has VMs with large memory that take minutes. Timing bugs only appear in production.
-
-**Why it happens:** Test VMs are minimal to speed up CI.
+**Pitfall:** Controller uses SSH address (10.42.241.3), nodes use NVMe address (10.42.68.1). Tests that use single IP miss cross-network validation. VolumeContext may have wrong IP for nodes.
 
 **Prevention:**
-```
-Migration test scenarios:
+1. E2E tests must use dual-IP configuration (matching production)
+2. Validate VolumeContext contains `nvmeAddress` field
+3. Test fallback behavior when `nvmeAddress` not set
+4. Network partition tests (SSH reachable, NVMe unreachable)
 
-1. Fast migration (baseline): Small VM, completes in <10s
-2. Slow migration: Throttle network to 10MB/s, 2GB VM = 200s
-3. Very slow migration: Throttle to 1MB/s, exceeds grace period
-4. Failed migration: Inject error mid-migration
-5. Node failure during migration: Kill source node process
-6. Network partition during migration: iptables DROP
-
-Test validation:
-- Checksum VM disk before and after migration
-- Verify no I/O errors in VM during migration
-- Verify attachment state correct after all scenarios
-```
-
-**Detection:**
-- Tests pass, production fails
-- Timing-related bugs only in logs, not test failures
-
-**Warning signs during implementation:**
-- All test VMs are 256MB memory
-- No network throttling in tests
-- No fault injection testing
-
-**Phase to address:** Testing - E2E test scenarios
+**Phase to address:** v0.9.0 Milestone 3 (E2E Testing)
 
 ---
 
-## Phase-Specific Warnings
+### RouterOS Version Compatibility
 
-| Phase | Topic | Likely Pitfall | Mitigation |
-|-------|-------|----------------|------------|
-| Research | Live migration requirements | Assuming RWX filesystem is only option | Verify KubeVirt supports RWX block mode migration |
-| Research | Storage capabilities | Not investigating RDS multi-initiator support | SSH to RDS, test concurrent nvme connect from 2 nodes |
-| Planning | Capability advertisement | Adding RWX for both block and filesystem | Only advertise MULTI_NODE_MULTI_WRITER for block volumes |
-| Planning | State machine | Missing failure transitions | Design ALL state transitions including failures |
-| Implementation | Dual-attachment | Using single grace period for migration + conflict | Separate grace period logic from conflict detection |
-| Implementation | VMI serialization | Not handling two-VMI migration scenario | Extend or bypass VMI grouper for migration |
-| Implementation | NodeUnstageVolume | Not checking for open file descriptors | Verify device not in use before nvme disconnect |
-| Testing | Migration timing | Testing only fast migrations | Test slow, failed, and fault-injected migrations |
-| Testing | Corruption detection | Assuming corruption is obvious | Add checksum verification, fsck after migration |
-| Deployment | CSIDriver manifest | Wrong attachRequired setting | Validate CSIDriver has attachRequired: true |
-| Deployment | NVMe multipath | Not disabling multipath | Document and validate kernel parameter |
-| Production | Monitoring | Only monitoring CSI metrics | Monitor actual NVMe connection state on nodes |
+**Pitfall:** CLI output format varies between RouterOS 7.1, 7.10, 7.16. Parser breaks on unexpected field order or missing fields.
+
+**Prevention:**
+1. Test against multiple RouterOS versions (7.1, 7.10, 7.16+)
+2. Regex parsers should be order-independent
+3. Handle missing fields gracefully (use defaults)
+4. Log unparsed CLI output for debugging
+
+**Phase to address:** v0.9.0 Milestone 2 (Mock RDS) - record multiple versions
 
 ---
 
-## Common Mistakes Summary
+### Orphan Reconciler Testing Without Breaking Production
 
-1. **Allowing dual filesystem mounts** - Always fatal for mounted filesystems; block mode is different
-2. **Advertising RWX without proper validation** - Must restrict to block volumes only
-3. **Trusting attachment state without connection verification** - Race conditions between CSI calls
-4. **Disconnecting NVMe while in use** - Node crashes or I/O errors
-5. **Single grace period for migration + conflict** - Conflicts should fail immediately
-6. **No split-brain protection** - Network partitions cause silent corruption
-7. **State machine missing failure paths** - Volume stuck in migration state
-8. **Idempotency violations during migration** - Same volume, different node is NOT idempotent
-9. **VMI serialization unaware of migration** - Concurrent operations bypass locks
-10. **Poor observability** - Can't debug migration failures
+**Pitfall:** Orphan reconciler tests could delete real volumes if test uses production RDS. Reconciler needs comprehensive dry-run validation before enabling in production.
 
----
+**Prevention:**
+1. **Always test with dry-run first**: Verify reconciler identifies correct volumes
+2. **Use test volume prefix**: Only reconcile volumes matching `test-*` prefix in tests
+3. **Separate test RDS**: Never run reconciler tests against production RDS
+4. **Grace period validation**: Test that grace period is honored (create volume, wait <grace-period, verify not deleted)
+5. **Kubernetes integration test**: Verify reconciler correctly lists PVs (not just volumes on RDS)
 
-## Success Criteria for Avoiding These Pitfalls
-
-- [ ] **RWX only for block volumes** - Capability validation enforces this
-- [ ] **Zero dual filesystem mounts** - Verified via monitoring on both nodes
-- [ ] **Grace period separation** - Migration handoff (5m) separate from conflict detection (immediate)
-- [ ] **Device-in-use check** - NodeUnstageVolume verifies no open FDs before disconnect
-- [ ] **Split-brain protection** - Manual intervention required for NotReady node migrations
-- [ ] **Complete state machine** - All transitions including failures documented and implemented
-- [ ] **Idempotency tests** - Retry scenarios during migration produce correct results
-- [ ] **Migration state cleanup** - Reconciler resolves stale migration markers
-- [ ] **Multipath disabled** - Kernel parameter documented and validated
-- [ ] **Migration-specific metrics** - Separate from conflict metrics
-- [ ] **Slow migration tests** - E2E tests with network throttling
-- [ ] **Checksum verification** - Test suite validates data integrity post-migration
+**Phase to address:** v0.9.0 Milestone 3 (E2E Testing)
 
 ---
 
-## References
+## Known CSI Ecosystem Issues to Watch
 
-### Data Corruption & Filesystem Safety
-- [Red Hat: Mounting Ext2/3/4 or XFS Filesystem from Multiple Systems Causes Corruption](https://access.redhat.com/solutions/353833)
-- [Longhorn Issue #3597: XFS Corruption After Node Restart](https://github.com/longhorn/longhorn/issues/3597)
+### Kubelet Volume Reconstruction After Reboot
 
-### KubeVirt Live Migration
-- [KubeVirt User Guide: Live Migration](https://kubevirt.io/user-guide/compute/live_migration/)
-- [KubeVirt Issue #10642: Allow block live migration of PVCs without RWX](https://github.com/kubevirt/kubevirt/issues/10642)
-- [KubeVirt: Volume Migration](https://kubevirt.io/user-guide/storage/volume_migration/)
-- [Red Hat: Storage considerations for OpenShift Virtualization](https://developers.redhat.com/articles/2025/07/10/storage-considerations-openshift-virtualization)
+**Issue:** After node reboot, kubelet tries to reconstruct volume state. If CSI driver not registered yet, unmount fails and volumes leak.
 
-### CSI Driver Implementation
-- [Kubernetes CSI: Developing a CSI Driver](https://kubernetes-csi.github.io/docs/developing.html)
-- [Kubernetes CSI: CSIDriver Object](https://kubernetes-csi.github.io/docs/csi-driver-object.html)
-- [CSI Spec: MULTI_NODE_MULTI_WRITER](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+**Mitigation:**
+- Ensure node plugin starts before kubelet finishes reconstruction
+- Make NodeUnstageVolume idempotent (returns success if already unstaged)
+- Add startup probe with adequate initialDelaySeconds
 
-### Multi-Attach Error and Recovery
-- [Medium: Demystifying the Multi-Attach Error for Volume](https://medium.com/@golusstyle/demystifying-the-multi-attach-error-for-volume-causes-and-solutions-595a19316a0c)
-- [Dell CSI: Block Volumes Cannot be Attached After Node Goes Down](https://www.dell.com/support/kbdoc/en-us/000200778/)
-- [Portworx: Volume Already Exclusively Attached](https://portworx.com/knowledge-hub/volume-is-already-exclusively-attached-to-one-node-and-cant-be-attached-to-another/)
-
-### Block Storage for KubeVirt
-- [Portworx: Raw Block for Live Migration](https://docs.portworx.com/portworx-csi/operations/raw-block-for-live-migration)
-- [HPE CSI: KubeVirt Integration](https://scod.hpedev.io/csi_driver/using.html)
-- [OpenEBS: KubeVirt VM Live Migration](https://openebs.io/docs/Solutioning/read-write-many/kubevirt)
-
-### Split-Brain and Fencing
-- [AIStore: Split-brain is Inevitable](https://aistore.nvidia.com/blog/2025/02/16/split-brain-blog)
-- [Kubernetes on SAN Storage: Highly-Available Stateful Workloads](https://datamattsson.tumblr.com/post/182297931146/highly-available-stateful-workloads-on-kubernetes)
-
-### NVMe/TCP
-- [SUSE: NVMe-oF Storage Administration](https://documentation.suse.com/sles/15-SP7/html/SLES-all/cha-nvmeof.html)
-- [Linux Kernel: NVMe Multipath](https://docs.kernel.org/admin-guide/nvme-multipath.html)
+**Source:** [Kubernetes Issue #72500](https://github.com/kubernetes/kubernetes/issues/72500)
 
 ---
 
-**Confidence Level:** HIGH for critical pitfalls (verified via official documentation and real-world issues), MEDIUM for moderate pitfalls (implementation details based on CSI spec), LOW for minor pitfalls (based on general CSI development experience).
+### Graceful Node Shutdown Doesn't Wait for Volume Teardown
 
-**Research gaps:**
-- Exact RDS multi-initiator behavior needs testing (can two nodes connect to same NQN simultaneously?)
-- KubeVirt virt-launcher pod lifecycle timing during migration (source code review needed)
-- Whether RDS supports any form of namespace reservation for fencing
+**Issue:** Node shutdown doesn't wait for CSI driver to complete NodeUnstageVolume, causing Zombie LUNs or corruption.
+
+**Mitigation:**
+- Increase sidecar timeout values (default 15s → 60s)
+- Monitor for missed NodeUnstageVolume calls (reconciler should detect)
+- Document that ungraceful shutdown may leave orphans
+
+**Source:** [Kubernetes Issue #115148](https://github.com/kubernetes/kubernetes/issues/115148)
+
+---
+
+### CSI Driver Restart Loses Volume Manager State
+
+**Issue:** When CSI Node plugin restarts, driver registration removed from CSINode. Volume manager can't dispatch NodeUnstageVolume.
+
+**Mitigation:**
+- Use StatefulSet or DaemonSet with proper lifecycle hooks
+- Persist state to filesystem (e.g., NVMe connection tracking in /var/lib/rds-csi/)
+- Reconcile on startup (scan /proc/mounts for orphaned mounts)
+
+**Source:** [Kubernetes Issue #120268](https://github.com/kubernetes/kubernetes/issues/120268)
+
+---
+
+## Sources
+
+### CSI Testing Framework
+- [Kubernetes CSI Testing Guide](https://kubernetes.io/blog/2020/01/08/testing-of-csi-drivers/)
+- [csi-test GitHub Repository](https://github.com/kubernetes-csi/csi-test)
+- [CSI Sanity Test README](https://github.com/kubernetes-csi/csi-test/blob/master/pkg/sanity/README.md)
+- [Kubernetes CSI Functional Testing Documentation](https://kubernetes-csi.github.io/docs/functional-testing.html)
+
+### Real-World Driver Issues
+- [AWS EBS CSI Driver Issues](https://github.com/kubernetes-sigs/aws-ebs-csi-driver)
+- [NodeStage Idempotency Issue on Nitro Instances](https://github.com/kubernetes-sigs/aws-ebs-csi-driver/issues/1076)
+- [Longhorn CSI Sanity Test Failures](https://github.com/longhorn/longhorn/issues/2076)
+- [Volume Name Limitation Breaking Sanity Tests](https://github.com/longhorn/longhorn/issues/2270)
+- [Democratic CSI GitHub Repository](https://github.com/democratic-csi/democratic-csi)
+
+### CSI Spec and Compliance
+- [Container Storage Interface Specification](https://github.com/container-storage-interface/spec/blob/master/spec.md)
+- [Kubernetes CSI Developer Documentation](https://kubernetes-csi.github.io/docs/)
+
+### Kubernetes Volume Management Issues
+- [NodeUnstageVolume Missing During Driver Restart](https://github.com/kubernetes/kubernetes/issues/120268)
+- [NodeStageVolume Called Before NodeUnstageVolume Completes](https://github.com/kubernetes/kubernetes/issues/121357)
+- [Staging Directory Cleanup with Bind-Mounted Kubelet](https://github.com/kubernetes/kubernetes/issues/119752)
+- [CSI Plugin Registration After Kubelet Restart](https://github.com/kubernetes/kubernetes/issues/72500)
+- [Graceful Node Shutdown Volume Teardown](https://github.com/kubernetes/kubernetes/issues/115148)
+
+### NVMe-Specific Issues
+- [NVMe Disconnect Device Path Issue](https://github.com/linux-nvme/nvme-cli/issues/563)
+- [NVMe-CLI Disconnect Controller vs Device](https://github.com/linux-nvme/nvme-cli/issues/499)
+- [Rook Ceph CSI Common Issues](https://rook.io/docs/rook/v1.14/Troubleshooting/ceph-csi-common-issues/)
+
+### Test Isolation and Cleanup
+- [CSI Orphaned Volumes in VMware](https://github.com/kubernetes-sigs/vsphere-csi-driver/issues/251)
+- [Kubernetes Orphaned Pod Volumes Investigation](https://github.com/kubernetes/kubernetes/issues/72346)
+- [csi-test Mount Cleanup Failure](https://github.com/kubernetes-csi/csi-test/issues/196)
+
+---
+
+*Pitfalls research for: RDS CSI Driver v0.9.0 Testing Infrastructure*
+*Researched: 2026-02-04*
+*Confidence: MEDIUM-HIGH (based on official CSI documentation, real-world driver issues, and ecosystem discussions; some RDS-specific items are LOW confidence pending real hardware validation)*

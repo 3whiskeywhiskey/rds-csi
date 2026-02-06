@@ -31,6 +31,9 @@ var (
 	// ErrOperationTimeout indicates an operation timed out
 	ErrOperationTimeout = errors.New("operation timeout")
 
+	// ErrConnectionFailed indicates a connection failure (SSH, API, etc.)
+	ErrConnectionFailed = errors.New("connection failed")
+
 	// ErrDeviceNotFound indicates NVMe device was not found
 	ErrDeviceNotFound = errors.New("device not found")
 

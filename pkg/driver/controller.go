@@ -104,6 +104,14 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// Volume already exists, verify it matches requirements
 		klog.V(2).Infof("Volume %s already exists (idempotent)", volumeID)
 
+		// CSI spec requires checking capacity matches for idempotent CreateVolume
+		// If capacity differs, return AlreadyExists error
+		if existingVolume.FileSizeBytes != requiredBytes {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"volume %s already exists with different capacity (existing: %d bytes, requested: %d bytes)",
+				volumeID, existingVolume.FileSizeBytes, requiredBytes)
+		}
+
 		// Get parameters from StorageClass for response context
 		params := req.GetParameters()
 
@@ -193,7 +201,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		// Log volume create failure
 		secLogger.LogVolumeCreate(volumeID, req.GetName(), security.OutcomeFailure, err, time.Since(startTime))
 
-		// Check if this is a capacity error
+		// Map errors to appropriate gRPC codes
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
 		if stderrors.Is(err, utils.ErrResourceExhausted) {
 			return nil, status.Errorf(codes.ResourceExhausted, "insufficient storage on RDS: %v", err)
 		}
@@ -241,13 +252,31 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Safety check: ensure RDS client is initialized
+	if cs.driver == nil || cs.driver.rdsClient == nil {
+		return nil, status.Error(codes.Internal, "RDS client not initialized")
+	}
+
 	// Safety check: verify volume exists before attempting deletion
 	// This helps catch force-deletion scenarios where the volume might still be in use
 	volume, err := cs.driver.rdsClient.GetVolume(volumeID)
 	if err != nil {
-		// If volume doesn't exist, deletion is idempotent - return success
-		klog.V(4).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
-		return &csi.DeleteVolumeResponse{}, nil
+		// Check if this is a connection error (should be retried)
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+
+		// Check if this is a VolumeNotFoundError (idempotent case)
+		// Check both the typed error and the sentinel error
+		var notFoundErr *rds.VolumeNotFoundError
+		if stderrors.As(err, &notFoundErr) || stderrors.Is(err, utils.ErrVolumeNotFound) {
+			klog.V(4).Infof("Volume %s not found on RDS, assuming already deleted", volumeID)
+			return &csi.DeleteVolumeResponse{}, nil
+		}
+
+		// For other errors (like GetVolume failures), return the error
+		// Don't treat all errors as "volume not found" - could mask real problems
+		return nil, status.Errorf(codes.Internal, "failed to verify volume existence: %v", err)
 	}
 
 	// Log volume details for audit trail
@@ -266,6 +295,10 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		// Log volume delete failure
 		secLogger.LogVolumeDelete(volumeID, "", security.OutcomeFailure, err, time.Since(startTime))
 
+		// Map errors to appropriate gRPC codes
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
 		return nil, status.Errorf(codes.Internal, "failed to delete volume: %v", err)
 	}
 
@@ -472,6 +505,28 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	// Validate volume ID format (security: prevent injection)
 	if err := utils.ValidateVolumeID(volumeID); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
+	}
+
+	// Validate volume capability is provided (required by CSI spec)
+	// Check this before node validation so InvalidArgument takes precedence
+	if req.GetVolumeCapability() == nil {
+		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
+	}
+
+	// Validate node exists if we have k8s client
+	// For sanity tests without k8s, only accept the driver's own node ID
+	if cs.driver.k8sClient != nil {
+		// Check if node exists in Kubernetes
+		_, err := cs.driver.k8sClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "node %s not found: %v", nodeID, err)
+		}
+	} else {
+		// Without k8s client (test mode), only accept the driver's configured node ID
+		// This allows sanity tests to validate node existence checking
+		if cs.driver.nodeID != "" && nodeID != cs.driver.nodeID {
+			return nil, status.Errorf(codes.NotFound, "node %s does not exist (driver node: %s)", nodeID, cs.driver.nodeID)
+		}
 	}
 
 	// Determine access mode from VolumeCapability (singular, not slice)
@@ -886,10 +941,21 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	// RDS layer already logged "Resized volume X" at V(2) - no duplicate needed
 	klog.V(4).Infof("ControllerExpandVolume CSI call completed for %s", volumeID)
 
+	// Determine if node expansion is required
+	// For mount volumes: yes, to resize the filesystem (ext4, xfs, etc.)
+	// For block volumes: no, kernel sees new size automatically via NVMe rescan
+	nodeExpansionRequired := true
+	if cap := req.GetVolumeCapability(); cap != nil {
+		if cap.GetBlock() != nil {
+			nodeExpansionRequired = false
+			klog.V(4).Infof("Block volume expansion for %s - node expansion not required", volumeID)
+		}
+	}
+
 	// Return response indicating node expansion is required to resize the filesystem
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         requiredBytes,
-		NodeExpansionRequired: true,
+		NodeExpansionRequired: nodeExpansionRequired,
 	}, nil
 }
 

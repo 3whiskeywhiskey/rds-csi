@@ -42,6 +42,11 @@ const (
 	EventReasonMigrationStarted   = "MigrationStarted"
 	EventReasonMigrationCompleted = "MigrationCompleted"
 	EventReasonMigrationFailed    = "MigrationFailed"
+
+	// RDS connection state events
+	EventReasonRDSDisconnected       = "RDSDisconnected"
+	EventReasonRDSReconnected        = "RDSReconnected"
+	EventReasonStartupReconciliation = "StartupReconciliation"
 )
 
 // EventPoster posts Kubernetes events for mount operations
