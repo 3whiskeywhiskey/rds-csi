@@ -218,6 +218,29 @@ spec:
               cpu: 100m
               memory: 128Mi
 
+        # CSI external-snapshotter sidecar (for snapshot operations)
+        - name: csi-snapshotter
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+            - "--timeout=300s"
+            - "--leader-election=true"
+            - "--leader-election-namespace=rds-csi"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
         # CSI livenessprobe sidecar
         - name: liveness-probe
           image: registry.k8s.io/sig-storage/livenessprobe:v2.12.0
