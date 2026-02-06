@@ -23,9 +23,9 @@ type Metrics struct {
 	volumeOpsDuration *prometheus.HistogramVec
 
 	// NVMe connection metrics
-	nvmeConnectsTotal     *prometheus.CounterVec
-	nvmeConnectDuration   prometheus.Histogram
-	attachmentCountFunc   func() int // Callback for active NVMe connections (GaugeFunc)
+	nvmeConnectsTotal   *prometheus.CounterVec
+	nvmeConnectDuration prometheus.Histogram
+	attachmentCountFunc func() int // Callback for active NVMe connections (GaugeFunc)
 
 	// Mount operation metrics
 	mountOpsTotal *prometheus.CounterVec

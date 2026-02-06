@@ -800,6 +800,7 @@ func TestNormalizeRouterOSOutputEdgeCases(t *testing.T) {
 		})
 	}
 }
+
 // Snapshot parsing tests
 
 func TestParseSnapshotInfo(t *testing.T) {
@@ -841,8 +842,8 @@ func TestParseSnapshotInfo(t *testing.T) {
 			expectError: false, // parseSnapshotInfo returns empty SnapshotInfo, not error
 		},
 		{
-			name: "partial output (missing optional fields)",
-			output: `name=snap-partial read-only=yes`,
+			name:       "partial output (missing optional fields)",
+			output:     `name=snap-partial read-only=yes`,
 			expectName: "snap-partial",
 			expectRO:   true,
 			expectFS:   "", // FS label missing
@@ -852,26 +853,26 @@ func TestParseSnapshotInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			snapshot, err := parseSnapshotInfo(tt.output)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
 				}
 				return
 			}
-			
+
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			
+
 			if snapshot.Name != tt.expectName {
 				t.Errorf("Expected name %q, got %q", tt.expectName, snapshot.Name)
 			}
-			
+
 			if snapshot.ReadOnly != tt.expectRO {
 				t.Errorf("Expected read-only %v, got %v", tt.expectRO, snapshot.ReadOnly)
 			}
-			
+
 			if snapshot.FSLabel != tt.expectFS {
 				t.Errorf("Expected fs %q, got %q", tt.expectFS, snapshot.FSLabel)
 			}
@@ -881,11 +882,11 @@ func TestParseSnapshotInfo(t *testing.T) {
 
 func TestParseSnapshotList(t *testing.T) {
 	tests := []struct {
-		name          string
-		output        string
-		expectCount   int
-		expectNames   []string
-		expectError   bool
+		name        string
+		output      string
+		expectCount int
+		expectNames []string
+		expectError bool
 	}{
 		{
 			name: "multiple snapshots",
@@ -928,22 +929,22 @@ func TestParseSnapshotList(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			snapshots, err := parseSnapshotList(tt.output)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
 				}
 				return
 			}
-			
+
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			
+
 			if len(snapshots) != tt.expectCount {
 				t.Errorf("Expected %d snapshots, got %d", tt.expectCount, len(snapshots))
 			}
-			
+
 			// Verify specific names if provided
 			if len(tt.expectNames) > 0 {
 				for i, expectedName := range tt.expectNames {
@@ -956,7 +957,7 @@ func TestParseSnapshotList(t *testing.T) {
 					}
 				}
 			}
-			
+
 			// Ensure empty list returns empty slice, not nil
 			if tt.expectCount == 0 && snapshots == nil {
 				t.Error("Expected empty slice, got nil")
@@ -969,7 +970,7 @@ func TestParseSnapshotList(t *testing.T) {
 
 func TestMockClientSnapshotOperations(t *testing.T) {
 	mock := NewMockClient()
-	
+
 	// Create a test volume first
 	volOpts := CreateVolumeOptions{
 		Slot:          "pvc-test-volume",
@@ -981,19 +982,19 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if err := mock.CreateVolume(volOpts); err != nil {
 		t.Fatalf("Failed to create test volume: %v", err)
 	}
-	
+
 	// Test 1: Create snapshot from volume
 	snapOpts := CreateSnapshotOptions{
 		Name:         "snap-test-123",
 		SourceVolume: "pvc-test-volume",
 		FSLabel:      "storage-pool",
 	}
-	
+
 	snapshot, err := mock.CreateSnapshot(snapOpts)
 	if err != nil {
 		t.Fatalf("CreateSnapshot failed: %v", err)
 	}
-	
+
 	if snapshot.Name != "snap-test-123" {
 		t.Errorf("Expected snapshot name snap-test-123, got %s", snapshot.Name)
 	}
@@ -1006,7 +1007,7 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if snapshot.FSLabel != "storage-pool" {
 		t.Errorf("Expected fs label storage-pool, got %s", snapshot.FSLabel)
 	}
-	
+
 	// Test 2: GetSnapshot returns correct snapshot
 	retrieved, err := mock.GetSnapshot("snap-test-123")
 	if err != nil {
@@ -1015,7 +1016,7 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if retrieved.Name != snapshot.Name {
 		t.Errorf("Retrieved snapshot name mismatch: expected %s, got %s", snapshot.Name, retrieved.Name)
 	}
-	
+
 	// Test 3: Create duplicate snapshot with same name and source (idempotent)
 	duplicate, err := mock.CreateSnapshot(snapOpts)
 	if err != nil {
@@ -1024,7 +1025,7 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if duplicate.Name != snapshot.Name {
 		t.Error("Expected idempotent CreateSnapshot to return existing snapshot")
 	}
-	
+
 	// Test 4: Create duplicate snapshot with same name but different source (error)
 	badOpts := CreateSnapshotOptions{
 		Name:         "snap-test-123",
@@ -1035,7 +1036,7 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when creating snapshot with same name but different source")
 	}
-	
+
 	// Test 5: ListSnapshots returns all snapshots
 	// Create another snapshot first
 	snapOpts2 := CreateSnapshotOptions{
@@ -1046,7 +1047,7 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if _, err := mock.CreateSnapshot(snapOpts2); err != nil {
 		t.Fatalf("Failed to create second snapshot: %v", err)
 	}
-	
+
 	snapshots, err := mock.ListSnapshots()
 	if err != nil {
 		t.Fatalf("ListSnapshots failed: %v", err)
@@ -1054,12 +1055,12 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if len(snapshots) != 2 {
 		t.Errorf("Expected 2 snapshots, got %d", len(snapshots))
 	}
-	
+
 	// Test 6: DeleteSnapshot removes snapshot
 	if err := mock.DeleteSnapshot("snap-test-123"); err != nil {
 		t.Fatalf("DeleteSnapshot failed: %v", err)
 	}
-	
+
 	// Verify snapshot is gone
 	_, err = mock.GetSnapshot("snap-test-123")
 	if err == nil {
@@ -1068,12 +1069,12 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if _, ok := err.(*SnapshotNotFoundError); !ok {
 		t.Errorf("Expected SnapshotNotFoundError, got %T: %v", err, err)
 	}
-	
+
 	// Test 7: Delete non-existent snapshot (idempotent)
 	if err := mock.DeleteSnapshot("snap-nonexistent"); err != nil {
 		t.Errorf("Expected DeleteSnapshot to be idempotent, got error: %v", err)
 	}
-	
+
 	// Test 8: GetSnapshot on non-existent snapshot returns error
 	_, err = mock.GetSnapshot("snap-nonexistent")
 	if err == nil {
@@ -1082,13 +1083,13 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if _, ok := err.(*SnapshotNotFoundError); !ok {
 		t.Errorf("Expected SnapshotNotFoundError, got %T: %v", err, err)
 	}
-	
+
 	// Test 9: ListSnapshots with no snapshots returns empty slice
 	// Delete remaining snapshot
 	if err := mock.DeleteSnapshot("snap-test-456"); err != nil {
 		t.Fatalf("Failed to delete second snapshot: %v", err)
 	}
-	
+
 	snapshots, err = mock.ListSnapshots()
 	if err != nil {
 		t.Fatalf("ListSnapshots failed: %v", err)
@@ -1169,11 +1170,11 @@ func TestValidateSnapshotID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := utils.ValidateSnapshotID(tt.snapshotID)
-			
+
 			if tt.expectError && err == nil {
 				t.Error("Expected validation error but got none")
 			}
-			
+
 			if !tt.expectError && err != nil {
 				t.Errorf("Unexpected validation error: %v", err)
 			}

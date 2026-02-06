@@ -61,12 +61,12 @@ type MockFile struct {
 
 // MockSnapshot represents a Btrfs snapshot on the mock RDS
 type MockSnapshot struct {
-	Name         string    // Snapshot name (e.g., snap-<uuid>)
-	Parent       string    // Parent volume slot or snapshot name (used by RouterOS)
-	SourceVolume string    // Original source volume (for CSI tracking, not returned by RouterOS)
-	FSLabel      string    // Btrfs filesystem label
-	ReadOnly     bool      // Read-only flag
-	SizeBytes    int64     // Snapshot size (copied from parent)
+	Name         string // Snapshot name (e.g., snap-<uuid>)
+	Parent       string // Parent volume slot or snapshot name (used by RouterOS)
+	SourceVolume string // Original source volume (for CSI tracking, not returned by RouterOS)
+	FSLabel      string // Btrfs filesystem label
+	ReadOnly     bool   // Read-only flag
+	SizeBytes    int64  // Snapshot size (copied from parent)
 	CreatedAt    time.Time
 }
 
