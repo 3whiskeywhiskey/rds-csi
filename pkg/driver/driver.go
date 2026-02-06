@@ -207,6 +207,17 @@ func NewDriver(config DriverConfig) (*Driver, error) {
 		driver.attachmentManager = attachment.NewAttachmentManager(config.K8sClient)
 		if config.Metrics != nil {
 			driver.attachmentManager.SetMetrics(config.Metrics)
+
+			// Wire AttachmentManager into Metrics for nvme_connections_active gauge.
+			// GaugeFunc callback queries current attachment count on each Prometheus scrape,
+			// surviving controller restarts (attachment state rebuilt from VolumeAttachments).
+			//
+			// NOTE: This counts volumes (len(attachments)), not per-node attachments.
+			// During live migration with dual-attach, a volume attached to 2 nodes temporarily
+			// is counted as 1, not 2. This matches the VolumeAttachment count in the cluster.
+			config.Metrics.SetAttachmentManager(func() int {
+				return len(driver.attachmentManager.ListAttachments())
+			})
 		}
 		klog.Info("Attachment manager created")
 	}

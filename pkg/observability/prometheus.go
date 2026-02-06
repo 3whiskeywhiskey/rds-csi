@@ -25,7 +25,7 @@ type Metrics struct {
 	// NVMe connection metrics
 	nvmeConnectsTotal     *prometheus.CounterVec
 	nvmeConnectDuration   prometheus.Histogram
-	nvmeConnectionsActive prometheus.Gauge
+	attachmentCountFunc   func() int // Callback for active NVMe connections (GaugeFunc)
 
 	// Mount operation metrics
 	mountOpsTotal *prometheus.CounterVec
@@ -101,12 +101,6 @@ func NewMetrics() *Metrics {
 			Name:      "nvme_connect_duration_seconds",
 			Help:      "Duration of NVMe connection establishment in seconds",
 			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
-		}),
-
-		nvmeConnectionsActive: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "nvme_connections_active",
-			Help:      "Number of currently active NVMe/TCP connections",
 		}),
 
 		mountOpsTotal: prometheus.NewCounterVec(
@@ -270,7 +264,6 @@ func NewMetrics() *Metrics {
 		m.volumeOpsDuration,
 		m.nvmeConnectsTotal,
 		m.nvmeConnectDuration,
-		m.nvmeConnectionsActive,
 		m.mountOpsTotal,
 		m.staleMountsDetectedTotal,
 		m.staleRecoveriesTotal,
@@ -302,6 +295,30 @@ func (m *Metrics) Handler() http.Handler {
 	})
 }
 
+// SetAttachmentManager registers a GaugeFunc that derives nvme_connections_active
+// from the attachment manager's current state. This must be called after the
+// AttachmentManager is created. If not called (e.g., node plugin), the metric
+// is not registered and won't appear in scrapes.
+func (m *Metrics) SetAttachmentManager(countFunc func() int) {
+	m.attachmentCountFunc = countFunc
+
+	nvmeConnectionsActive := prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "nvme_connections_active",
+			Help:      "Number of active volumes with NVMe/TCP connections (counts volumes, not per-node attachments during migration)",
+		},
+		func() float64 {
+			if m.attachmentCountFunc == nil {
+				return 0
+			}
+			return float64(m.attachmentCountFunc())
+		},
+	)
+
+	m.registry.MustRegister(nvmeConnectionsActive)
+}
+
 // RecordVolumeOp records a volume operation with timing.
 // operation should be one of: create, delete, stage, unstage, publish, unpublish.
 func (m *Metrics) RecordVolumeOp(operation string, err error, duration time.Duration) {
@@ -314,7 +331,7 @@ func (m *Metrics) RecordVolumeOp(operation string, err error, duration time.Dura
 }
 
 // RecordNVMeConnect records an NVMe connection attempt.
-// On success (err == nil), also records the duration and increments active connections.
+// On success (err == nil), also records the duration.
 func (m *Metrics) RecordNVMeConnect(err error, duration time.Duration) {
 	status := "success"
 	if err != nil {
@@ -323,14 +340,17 @@ func (m *Metrics) RecordNVMeConnect(err error, duration time.Duration) {
 	m.nvmeConnectsTotal.WithLabelValues(status).Inc()
 	if err == nil {
 		m.nvmeConnectDuration.Observe(duration.Seconds())
-		m.nvmeConnectionsActive.Inc()
+		// nvme_connections_active gauge is derived from AttachmentManager state via GaugeFunc,
+		// not incremented here. This survives controller restarts.
 	}
 }
 
-// RecordNVMeDisconnect records an NVMe disconnection.
-// Decrements the active connections gauge.
+// RecordNVMeDisconnect is retained for API compatibility.
+// The nvme_connections_active gauge is now derived from AttachmentManager state
+// via GaugeFunc, so no manual decrement is needed.
 func (m *Metrics) RecordNVMeDisconnect() {
-	m.nvmeConnectionsActive.Dec()
+	// nvme_connections_active gauge is derived from AttachmentManager state via GaugeFunc.
+	// No manual decrement needed -- the gauge queries current state on each scrape.
 }
 
 // RecordMountOp records a mount or unmount operation.
