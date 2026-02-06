@@ -9,19 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 
 ## Current Position
 
-Phase: 26 of 28 (Volume Snapshots)
-Plan: Not started
-Status: v0.9.0 milestone complete, v0.10.0 ready to plan
-Last activity: 2026-02-06 — v0.9.0 shipped (17 plans), v0.10.0 roadmap created (Phases 26-28)
+Phase: 27 of 28 (Documentation & Hardware Validation)
+Plan: 1 of 1 complete
+Status: Phase 27 in progress - Hardware validation guide created
+Last activity: 2026-02-06 — Completed 27-01-PLAN.md (hardware validation documentation)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [░░░░░░░░░░] 0% (0/TBD plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█░░░░░░░░░] 5.6% (1/18 plans estimated)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 96 (79 v0.1.0-v0.8.0 + 17 v0.9.0)
+- Total plans completed: 97 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 1 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- Average duration: ~7 min per plan (v0.9.0)
+- v0.10.0 plans completed: 1/18 (5.6%)
+- Average duration: ~7 min per plan (v0.9.0), ~4 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -30,12 +31,12 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 0/TBD | 📋 Planning |
+| v0.10.0 Feature Enhancements | 26-28 | 1/18 | 🚧 In Progress |
 
 **Recent Milestones:**
+- v0.10.0: 3 phases (26-28), 1/18 plans, in progress
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
-- v0.7.0: 2 phases (15-16), 5 plans, 1 day, shipped 2026-02-04
 
 *Updated: 2026-02-06*
 
@@ -46,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 27-01): Test case structure with objective, prerequisites, steps, cleanup, success criteria (consistent format across all tests)
+- v0.10.0 (Phase 27-01): Document expected operation timings (10-30s volume creation, 2-5s NVMe connect) for performance baselining
+- v0.10.0 (Phase 27-01): Cleanup procedures must be idempotent (work even if test fails mid-way to prevent storage exhaustion)
+- v0.10.0 (Phase 27-01): Use production IPs in examples (10.42.241.3 management, 10.42.68.1 storage) for copy-paste convenience
 - v0.9.0 (Phase 25.2-02): Complexity threshold 50 justified by CSI spec compliance (highest function: ControllerPublishVolume at 48)
 - v0.9.0 (Phase 25.2-02): Document top 5 complexity offenders for future refactoring (ControllerPublishVolume 48, RecordEvent 44, NodeStageVolume 36, NewDriver 33, main 31)
 - v0.9.0 (Phase 25.2-01): golangci-lint v2 requires string version field (version: "2" not 2)
@@ -100,10 +105,17 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 02:42
-Stopped at: v0.9.0 milestone complete and archived
+Last session: 2026-02-06 04:10
+Stopped at: Completed Phase 27 Plan 01 (hardware validation documentation)
 Resume file: None
-Next action: Ready to plan Phase 26 (Volume Snapshots) for v0.10.0 using `/gsd:plan-phase 26`
+Next action: Ready to plan Phase 28 (Additional Documentation) using `/gsd:plan-phase 28`
+
+**v0.10.0 Progress (1/18 plans):**
+- Phase 27-01: Hardware validation guide with 7 test cases (TC-01 through TC-07)
+- Created HARDWARE_VALIDATION.md (1565 lines) with executable test procedures
+- Performance baselines documented (timings, I/O benchmarks)
+- Troubleshooting decision trees for common failure modes
+- Updated README.md with documentation link
 
 **v0.9.0 Accomplishments:**
 - 6 phases completed (22-25.2, including 2 inserted decimal phases for production incidents)
@@ -119,4 +131,4 @@ Next action: Ready to plan Phase 26 (Volume Snapshots) for v0.10.0 using `/gsd:p
 - Quick 005 (2026-02-06): Fixed README.md inaccuracies (removed fake Helm section, updated URLs to GitHub)
 
 ---
-*Last updated: 2026-02-06 after v0.9.0 completion*
+*Last updated: 2026-02-06 after Phase 27-01 completion*
