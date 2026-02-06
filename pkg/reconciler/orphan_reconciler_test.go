@@ -84,6 +84,26 @@ func (m *mockRDSClient) IsConnected() bool {
 	return true
 }
 
+func (m *mockRDSClient) CreateSnapshot(opts rds.CreateSnapshotOptions) (*rds.SnapshotInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) DeleteSnapshot(snapshotID string) error {
+	return nil
+}
+
+func (m *mockRDSClient) GetSnapshot(snapshotID string) (*rds.SnapshotInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) ListSnapshots() ([]rds.SnapshotInfo, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) RestoreSnapshot(snapshotID string, newVolumeOpts rds.CreateVolumeOptions) error {
+	return nil
+}
+
 func TestNewOrphanReconciler(t *testing.T) {
 	tests := []struct {
 		name    string
