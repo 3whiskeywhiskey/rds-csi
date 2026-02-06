@@ -800,3 +800,383 @@ func TestNormalizeRouterOSOutputEdgeCases(t *testing.T) {
 		})
 	}
 }
+// Snapshot parsing tests
+
+func TestParseSnapshotInfo(t *testing.T) {
+	tests := []struct {
+		name        string
+		output      string
+		expectName  string
+		expectRO    bool
+		expectFS    string
+		expectError bool
+	}{
+		{
+			name: "valid snapshot with all fields",
+			output: `name=snap-12345678-1234-1234-1234-123456789abc read-only=yes fs=storage-pool
+                    parent=pvc-test-volume`,
+			expectName: "snap-12345678-1234-1234-1234-123456789abc",
+			expectRO:   true,
+			expectFS:   "storage-pool",
+		},
+		{
+			name: "snapshot with read-only=no (writable clone)",
+			output: `name=snap-test-123 read-only=no fs=storage-pool
+                    parent=snap-original`,
+			expectName: "snap-test-123",
+			expectRO:   false,
+			expectFS:   "storage-pool",
+		},
+		{
+			name: "snapshot with quoted name",
+			output: `name="snap-quoted-name" read-only=yes fs="storage-pool"
+                    parent="pvc-test"`,
+			expectName: "snap-quoted-name",
+			expectRO:   true,
+			expectFS:   "storage-pool",
+		},
+		{
+			name:        "empty output",
+			output:      "",
+			expectError: false, // parseSnapshotInfo returns empty SnapshotInfo, not error
+		},
+		{
+			name: "partial output (missing optional fields)",
+			output: `name=snap-partial read-only=yes`,
+			expectName: "snap-partial",
+			expectRO:   true,
+			expectFS:   "", // FS label missing
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot, err := parseSnapshotInfo(tt.output)
+			
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+				return
+			}
+			
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			
+			if snapshot.Name != tt.expectName {
+				t.Errorf("Expected name %q, got %q", tt.expectName, snapshot.Name)
+			}
+			
+			if snapshot.ReadOnly != tt.expectRO {
+				t.Errorf("Expected read-only %v, got %v", tt.expectRO, snapshot.ReadOnly)
+			}
+			
+			if snapshot.FSLabel != tt.expectFS {
+				t.Errorf("Expected fs %q, got %q", tt.expectFS, snapshot.FSLabel)
+			}
+		})
+	}
+}
+
+func TestParseSnapshotList(t *testing.T) {
+	tests := []struct {
+		name          string
+		output        string
+		expectCount   int
+		expectNames   []string
+		expectError   bool
+	}{
+		{
+			name: "multiple snapshots",
+			output: `0  name=snap-12345678-1234-1234-1234-123456789abc read-only=yes fs=storage-pool
+1  name=snap-abcdef12-3456-7890-abcd-ef1234567890 read-only=yes fs=storage-pool
+2  name=snap-test-sanity read-only=yes fs=storage-pool`,
+			expectCount: 3,
+			expectNames: []string{
+				"snap-12345678-1234-1234-1234-123456789abc",
+				"snap-abcdef12-3456-7890-abcd-ef1234567890",
+				"snap-test-sanity",
+			},
+		},
+		{
+			name:        "empty list",
+			output:      "",
+			expectCount: 0,
+			expectNames: []string{},
+		},
+		{
+			name: "mixed snap- and non-snap entries (should filter)",
+			output: `0  name=snap-12345678-1234-1234-1234-123456789abc read-only=yes fs=storage-pool
+1  name=backup-volume read-only=yes fs=storage-pool
+2  name=snap-test-123 read-only=yes fs=storage-pool`,
+			expectCount: 2, // Only snap-* entries
+			expectNames: []string{
+				"snap-12345678-1234-1234-1234-123456789abc",
+				"snap-test-123",
+			},
+		},
+		{
+			name: "no snap- prefix (all filtered out)",
+			output: `0  name=backup-volume read-only=yes fs=storage-pool
+1  name=clone-volume read-only=no fs=storage-pool`,
+			expectCount: 0,
+			expectNames: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshots, err := parseSnapshotList(tt.output)
+			
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+				return
+			}
+			
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			
+			if len(snapshots) != tt.expectCount {
+				t.Errorf("Expected %d snapshots, got %d", tt.expectCount, len(snapshots))
+			}
+			
+			// Verify specific names if provided
+			if len(tt.expectNames) > 0 {
+				for i, expectedName := range tt.expectNames {
+					if i >= len(snapshots) {
+						t.Errorf("Missing expected snapshot %q at index %d", expectedName, i)
+						continue
+					}
+					if snapshots[i].Name != expectedName {
+						t.Errorf("Snapshot %d: expected name %q, got %q", i, expectedName, snapshots[i].Name)
+					}
+				}
+			}
+			
+			// Ensure empty list returns empty slice, not nil
+			if tt.expectCount == 0 && snapshots == nil {
+				t.Error("Expected empty slice, got nil")
+			}
+		})
+	}
+}
+
+// MockClient snapshot operation tests
+
+func TestMockClientSnapshotOperations(t *testing.T) {
+	mock := NewMockClient()
+	
+	// Create a test volume first
+	volOpts := CreateVolumeOptions{
+		Slot:          "pvc-test-volume",
+		FilePath:      "/storage-pool/test-vol.img",
+		FileSizeBytes: 10 * 1024 * 1024 * 1024, // 10GB
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:pvc-test-volume",
+	}
+	if err := mock.CreateVolume(volOpts); err != nil {
+		t.Fatalf("Failed to create test volume: %v", err)
+	}
+	
+	// Test 1: Create snapshot from volume
+	snapOpts := CreateSnapshotOptions{
+		Name:         "snap-test-123",
+		SourceVolume: "pvc-test-volume",
+		FSLabel:      "storage-pool",
+	}
+	
+	snapshot, err := mock.CreateSnapshot(snapOpts)
+	if err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+	
+	if snapshot.Name != "snap-test-123" {
+		t.Errorf("Expected snapshot name snap-test-123, got %s", snapshot.Name)
+	}
+	if snapshot.SourceVolume != "pvc-test-volume" {
+		t.Errorf("Expected source volume pvc-test-volume, got %s", snapshot.SourceVolume)
+	}
+	if !snapshot.ReadOnly {
+		t.Error("Expected snapshot to be read-only")
+	}
+	if snapshot.FSLabel != "storage-pool" {
+		t.Errorf("Expected fs label storage-pool, got %s", snapshot.FSLabel)
+	}
+	
+	// Test 2: GetSnapshot returns correct snapshot
+	retrieved, err := mock.GetSnapshot("snap-test-123")
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if retrieved.Name != snapshot.Name {
+		t.Errorf("Retrieved snapshot name mismatch: expected %s, got %s", snapshot.Name, retrieved.Name)
+	}
+	
+	// Test 3: Create duplicate snapshot with same name and source (idempotent)
+	duplicate, err := mock.CreateSnapshot(snapOpts)
+	if err != nil {
+		t.Fatalf("CreateSnapshot (duplicate) failed: %v", err)
+	}
+	if duplicate.Name != snapshot.Name {
+		t.Error("Expected idempotent CreateSnapshot to return existing snapshot")
+	}
+	
+	// Test 4: Create duplicate snapshot with same name but different source (error)
+	badOpts := CreateSnapshotOptions{
+		Name:         "snap-test-123",
+		SourceVolume: "pvc-different-volume",
+		FSLabel:      "storage-pool",
+	}
+	_, err = mock.CreateSnapshot(badOpts)
+	if err == nil {
+		t.Error("Expected error when creating snapshot with same name but different source")
+	}
+	
+	// Test 5: ListSnapshots returns all snapshots
+	// Create another snapshot first
+	snapOpts2 := CreateSnapshotOptions{
+		Name:         "snap-test-456",
+		SourceVolume: "pvc-test-volume",
+		FSLabel:      "storage-pool",
+	}
+	if _, err := mock.CreateSnapshot(snapOpts2); err != nil {
+		t.Fatalf("Failed to create second snapshot: %v", err)
+	}
+	
+	snapshots, err := mock.ListSnapshots()
+	if err != nil {
+		t.Fatalf("ListSnapshots failed: %v", err)
+	}
+	if len(snapshots) != 2 {
+		t.Errorf("Expected 2 snapshots, got %d", len(snapshots))
+	}
+	
+	// Test 6: DeleteSnapshot removes snapshot
+	if err := mock.DeleteSnapshot("snap-test-123"); err != nil {
+		t.Fatalf("DeleteSnapshot failed: %v", err)
+	}
+	
+	// Verify snapshot is gone
+	_, err = mock.GetSnapshot("snap-test-123")
+	if err == nil {
+		t.Error("Expected SnapshotNotFoundError after deletion")
+	}
+	if _, ok := err.(*SnapshotNotFoundError); !ok {
+		t.Errorf("Expected SnapshotNotFoundError, got %T: %v", err, err)
+	}
+	
+	// Test 7: Delete non-existent snapshot (idempotent)
+	if err := mock.DeleteSnapshot("snap-nonexistent"); err != nil {
+		t.Errorf("Expected DeleteSnapshot to be idempotent, got error: %v", err)
+	}
+	
+	// Test 8: GetSnapshot on non-existent snapshot returns error
+	_, err = mock.GetSnapshot("snap-nonexistent")
+	if err == nil {
+		t.Error("Expected error when getting non-existent snapshot")
+	}
+	if _, ok := err.(*SnapshotNotFoundError); !ok {
+		t.Errorf("Expected SnapshotNotFoundError, got %T: %v", err, err)
+	}
+	
+	// Test 9: ListSnapshots with no snapshots returns empty slice
+	// Delete remaining snapshot
+	if err := mock.DeleteSnapshot("snap-test-456"); err != nil {
+		t.Fatalf("Failed to delete second snapshot: %v", err)
+	}
+	
+	snapshots, err = mock.ListSnapshots()
+	if err != nil {
+		t.Fatalf("ListSnapshots failed: %v", err)
+	}
+	if snapshots == nil {
+		t.Error("Expected empty slice, got nil")
+	}
+	if len(snapshots) != 0 {
+		t.Errorf("Expected 0 snapshots, got %d", len(snapshots))
+	}
+}
+
+// Snapshot ID validation tests (in utils package, but test here for completeness)
+
+func TestValidateSnapshotID(t *testing.T) {
+	tests := []struct {
+		name        string
+		snapshotID  string
+		expectError bool
+	}{
+		{
+			name:        "valid snap-<uuid> format",
+			snapshotID:  "snap-12345678-1234-1234-1234-123456789abc",
+			expectError: false,
+		},
+		{
+			name:        "valid alphanumeric (sanity test ID)",
+			snapshotID:  "test-snapshot-123",
+			expectError: false,
+		},
+		{
+			name:        "empty string",
+			snapshotID:  "",
+			expectError: true,
+		},
+		{
+			name:        "command injection: semicolon",
+			snapshotID:  "snap-test;rm -rf /",
+			expectError: true,
+		},
+		{
+			name:        "command injection: pipe",
+			snapshotID:  "snap-test|evil",
+			expectError: true,
+		},
+		{
+			name:        "command injection: dollar",
+			snapshotID:  "snap-test$var",
+			expectError: true,
+		},
+		{
+			name:        "command injection: backtick",
+			snapshotID:  "snap-test`cmd`",
+			expectError: true,
+		},
+		{
+			name:        "snap- prefix with invalid UUID",
+			snapshotID:  "snap-INVALID",
+			expectError: true,
+		},
+		{
+			name:        "snap- prefix with uppercase UUID",
+			snapshotID:  "snap-12345678-1234-1234-1234-123456789ABC",
+			expectError: true,
+		},
+		{
+			name:        "UUID without snap- prefix",
+			snapshotID:  "12345678-1234-1234-1234-123456789abc",
+			expectError: true,
+		},
+		{
+			name:        "too long (>250 chars)",
+			snapshotID:  "snap-" + strings.Repeat("a", 250),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := utils.ValidateSnapshotID(tt.snapshotID)
+			
+			if tt.expectError && err == nil {
+				t.Error("Expected validation error but got none")
+			}
+			
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected validation error: %v", err)
+			}
+		})
+	}
+}
