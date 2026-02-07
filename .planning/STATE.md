@@ -168,13 +168,9 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-2 todos pending (v0.10.0 tech debt cleanup):
+1 todo pending (v0.10.0 tech debt cleanup):
 
-1. **Add snapshot test case to HARDWARE_VALIDATION.md** (docs, 1-2 hours)
-   - Add TC-08 for snapshot create/restore/delete validation
-   - File: docs/HARDWARE_VALIDATION.md:80
-
-2. **Create E2E snapshot tests** (testing, 4-6 hours, nice-to-have)
+1. **Create E2E snapshot tests** (testing, 4-6 hours, nice-to-have)
    - test/e2e/snapshot_test.go for real RDS hardware validation
    - Deferred based on production feedback
 
