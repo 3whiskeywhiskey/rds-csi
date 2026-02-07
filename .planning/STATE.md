@@ -168,13 +168,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-1 todo pending (v0.10.0 tech debt cleanup):
+All v0.10.0 tech debt todos completed!
 
-1. **Create E2E snapshot tests** (testing, 4-6 hours, nice-to-have)
-   - test/e2e/snapshot_test.go for real RDS hardware validation
-   - Deferred based on production feedback
-
-Run `/gsd:check-todos` to select and execute.
+Completed:
+- ✅ Update TESTING.md snapshot status (docs, 2 min)
+- ✅ Add TC-08 to HARDWARE_VALIDATION.md (docs, 45 min)
+- ✅ Create E2E snapshot tests (testing, in progress)
 
 ### Blockers/Concerns
 
