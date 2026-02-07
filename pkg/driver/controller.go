@@ -269,7 +269,8 @@ func (cs *ControllerServer) createVolumeFromSnapshot(
 	// Verify snapshot exists
 	snapshotInfo, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
 	if err != nil {
-		if _, ok := err.(*rds.SnapshotNotFoundError); ok {
+		var notFoundErr *rds.SnapshotNotFoundError
+		if stderrors.As(err, &notFoundErr) {
 			return nil, status.Errorf(codes.NotFound, "snapshot %s not found", snapshotID)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to get snapshot: %v", err)
@@ -1031,7 +1032,8 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	// 4. Verify source volume exists on RDS
 	sourceVolume, err := cs.driver.rdsClient.GetVolume(sourceVolumeID)
 	if err != nil {
-		if _, ok := err.(*rds.VolumeNotFoundError); ok {
+		var notFoundErr *rds.VolumeNotFoundError
+		if stderrors.As(err, &notFoundErr) {
 			return nil, status.Errorf(codes.NotFound, "source volume %s not found", sourceVolumeID)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to get source volume: %v", err)

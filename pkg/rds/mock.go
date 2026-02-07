@@ -12,11 +12,11 @@ type MockClient struct {
 	volumes        map[string]*VolumeInfo
 	snapshots      map[string]*SnapshotInfo
 	address        string
-	connected      bool                    // Connection state (for testing connection manager)
-	nextError      error                   // Error to return on next operation
-	persistentErr  error                   // Error to return on all operations until cleared
-	diskMetrics    *DiskMetrics            // Configurable disk metrics response (test helper)
-	hardwareHealth *HardwareHealthMetrics  // Configurable hardware health response (test helper)
+	connected      bool                   // Connection state (for testing connection manager)
+	nextError      error                  // Error to return on next operation
+	persistentErr  error                  // Error to return on all operations until cleared
+	diskMetrics    *DiskMetrics           // Configurable disk metrics response (test helper)
+	hardwareHealth *HardwareHealthMetrics // Configurable hardware health response (test helper)
 }
 
 // NewMockClient creates a new MockClient for testing

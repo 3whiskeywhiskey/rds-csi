@@ -797,7 +797,8 @@ func (c *sshClient) DeleteSnapshot(snapshotID string) error {
 	// Check if snapshot exists (for idempotency)
 	_, err := c.GetSnapshot(snapshotID)
 	if err != nil {
-		if _, ok := err.(*SnapshotNotFoundError); ok {
+		var notFoundErr *SnapshotNotFoundError
+		if errors.As(err, &notFoundErr) {
 			klog.V(4).Infof("Snapshot %s already deleted", snapshotID)
 			return nil // Idempotent: not found = success
 		}

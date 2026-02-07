@@ -1,6 +1,7 @@
 package rds
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -1066,7 +1067,8 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if err == nil {
 		t.Error("Expected SnapshotNotFoundError after deletion")
 	}
-	if _, ok := err.(*SnapshotNotFoundError); !ok {
+	var notFoundErr1 *SnapshotNotFoundError
+	if !errors.As(err, &notFoundErr1) {
 		t.Errorf("Expected SnapshotNotFoundError, got %T: %v", err, err)
 	}
 
@@ -1080,7 +1082,8 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when getting non-existent snapshot")
 	}
-	if _, ok := err.(*SnapshotNotFoundError); !ok {
+	var notFoundErr2 *SnapshotNotFoundError
+	if !errors.As(err, &notFoundErr2) {
 		t.Errorf("Expected SnapshotNotFoundError, got %T: %v", err, err)
 	}
 

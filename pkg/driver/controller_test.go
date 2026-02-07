@@ -2299,9 +2299,10 @@ func TestSanityRegression_VolumeContextParameters(t *testing.T) {
 
 // Test snapshot IDs (snap-<uuid> format)
 const (
-	testSnapshotID1 = "snap-11111111-1111-1111-1111-111111111111"
-	testSnapshotID2 = "snap-22222222-2222-2222-2222-222222222222"
-	testSnapshotID3 = "snap-33333333-3333-3333-3333-333333333333"
+// Snapshot IDs for future test use
+// testSnapshotID1 = "snap-11111111-1111-1111-1111-111111111111"
+// testSnapshotID2 = "snap-22222222-2222-2222-2222-222222222222"
+// testSnapshotID3 = "snap-33333333-3333-3333-3333-333333333333"
 )
 
 func TestCreateSnapshot(t *testing.T) {

@@ -22,10 +22,11 @@ const (
 	// HOST-RESOURCES-MIB::hrStorageTable (1.3.6.1.2.1.25.2.3)
 	// These OIDs need to be walked to find the storage entry for the RAID6 pool
 	// For now, we'll use placeholder indices that need hardware validation
-	oidStorageIndex = "1.3.6.1.2.1.25.2.3.1.1" // hrStorageIndex
-	oidStorageSize  = "1.3.6.1.2.1.25.2.3.1.5" // hrStorageSize
-	oidStorageUsed  = "1.3.6.1.2.1.25.2.3.1.6" // hrStorageUsed
-	oidStorageUnits = "1.3.6.1.2.1.25.2.3.1.4" // hrStorageAllocationUnits
+	// Commented out until implemented in future phase
+	// oidStorageIndex = "1.3.6.1.2.1.25.2.3.1.1" // hrStorageIndex
+	// oidStorageSize  = "1.3.6.1.2.1.25.2.3.1.5" // hrStorageSize
+	// oidStorageUsed  = "1.3.6.1.2.1.25.2.3.1.6" // hrStorageUsed
+	// oidStorageUnits = "1.3.6.1.2.1.25.2.3.1.4" // hrStorageAllocationUnits
 )
 
 // GetHardwareHealth retrieves hardware health metrics via SNMP
@@ -46,7 +47,12 @@ func (c *sshClient) GetHardwareHealth(snmpHost string, snmpCommunity string) (*H
 	if err != nil {
 		return nil, fmt.Errorf("SNMP connect failed: %w", err)
 	}
-	defer snmpClient.Conn.Close()
+	defer func() {
+		if closeErr := snmpClient.Conn.Close(); closeErr != nil {
+			// Log but don't fail on close error
+			_ = closeErr
+		}
+	}()
 
 	// Query temperature and fan OIDs
 	healthOIDs := []string{
@@ -92,7 +98,10 @@ func (c *sshClient) GetHardwareHealth(snmpHost string, snmpCommunity string) (*H
 func parseFloat64(pdu gosnmp.SnmpPDU) float64 {
 	switch pdu.Type {
 	case gosnmp.Integer:
-		return float64(pdu.Value.(int))
+		if v, ok := pdu.Value.(int); ok {
+			return float64(v)
+		}
+		return 0
 	case gosnmp.Gauge32, gosnmp.Counter32, gosnmp.Counter64:
 		switch v := pdu.Value.(type) {
 		case int:

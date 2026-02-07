@@ -394,9 +394,9 @@ var _ = Describe("Snapshot Operations [E2E-08]", func() {
 
 			// Second page
 			page2Resp, err := controllerClient.ListSnapshots(ctx, &csi.ListSnapshotsRequest{
-				SourceVolumeId:  volumeID,
-				MaxEntries:      maxEntries,
-				StartingToken:   nextToken,
+				SourceVolumeId: volumeID,
+				MaxEntries:     maxEntries,
+				StartingToken:  nextToken,
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page2Resp.Entries).To(HaveLen(maxEntries), "Second page should have max_entries snapshots")
@@ -407,12 +407,12 @@ var _ = Describe("Snapshot Operations [E2E-08]", func() {
 
 			// Third page (remaining snapshots)
 			page3Resp, err := controllerClient.ListSnapshots(ctx, &csi.ListSnapshotsRequest{
-				SourceVolumeId:  volumeID,
-				MaxEntries:      maxEntries,
-				StartingToken:   nextToken,
+				SourceVolumeId: volumeID,
+				MaxEntries:     maxEntries,
+				StartingToken:  nextToken,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(page3Resp.Entries).To(HaveLen(numSnapshots - 2*maxEntries), "Third page should have remaining snapshots")
+			Expect(page3Resp.Entries).To(HaveLen(numSnapshots-2*maxEntries), "Third page should have remaining snapshots")
 			Expect(page3Resp.NextToken).To(BeEmpty(), "Should not have next_token on last page")
 			allEntries = append(allEntries, page3Resp.Entries...)
 			klog.Infof("Page 3: %d snapshots (final page)", len(page3Resp.Entries))

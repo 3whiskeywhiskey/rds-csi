@@ -104,6 +104,14 @@ func (m *mockRDSClient) RestoreSnapshot(snapshotID string, newVolumeOpts rds.Cre
 	return nil
 }
 
+func (m *mockRDSClient) GetDiskMetrics(slot string) (*rds.DiskMetrics, error) {
+	return nil, nil
+}
+
+func (m *mockRDSClient) GetHardwareHealth(snmpHost string, snmpCommunity string) (*rds.HardwareHealthMetrics, error) {
+	return nil, nil
+}
+
 func TestNewOrphanReconciler(t *testing.T) {
 	tests := []struct {
 		name    string
