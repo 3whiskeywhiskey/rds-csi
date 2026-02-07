@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "RDS CSI Driver Helm Values",
+  "description": "Configuration values for the RDS CSI driver Helm chart",
+  "required": ["rds"],
+  "properties": {
+    "nameOverride": {
+      "type": "string",
+      "description": "Override the chart name"
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Override the full name of the chart"
+    },
+    "rds": {
+      "type": "object",
+      "description": "RDS connection configuration",
+      "required": ["managementIP", "secretName"],
+      "properties": {
+        "managementIP": {
+          "type": "string",
+          "description": "RDS management IP address for SSH control plane",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        },
+        "storageIP": {
+          "type": "string",
+          "description": "RDS storage IP address for NVMe/TCP data plane",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        },
+        "sshPort": {
+          "type": "integer",
+          "description": "SSH port for RouterOS CLI",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "nvmePort": {
+          "type": "integer",
+          "description": "NVMe/TCP port for storage connections",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "sshUser": {
+          "type": "string",
+          "description": "SSH username on RouterOS"
+        },
+        "basePath": {
+          "type": "string",
+          "description": "Base path for volumes on RDS",
+          "pattern": "^/"
+        },
+        "secretName": {
+          "type": "string",
+          "description": "Kubernetes Secret containing RDS credentials",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 253
+        },
+        "insecureSkipVerify": {
+          "type": "boolean",
+          "description": "Skip SSH host key verification (INSECURE - testing only)"
+        },
+        "nqnPrefix": {
+          "type": "string",
+          "description": "NQN prefix for CSI-managed volumes"
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "description": "Controller Deployment configuration",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "description": "Number of controller replicas (must be 1)",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "logLevel": {
+          "type": "integer",
+          "description": "Log verbosity level",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "priorityClassName": {
+          "type": "string",
+          "description": "Priority class for controller pod"
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "description": "Node DaemonSet configuration",
+      "properties": {
+        "logLevel": {
+          "type": "integer",
+          "description": "Log verbosity level",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "kubeletPath": {
+          "type": "string",
+          "description": "Kubelet directory path",
+          "pattern": "^/"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "description": "Termination grace period for clean volume unmount",
+          "minimum": 0
+        },
+        "priorityClassName": {
+          "type": "string",
+          "description": "Priority class for node plugin pods"
+        }
+      }
+    },
+    "storageClasses": {
+      "type": "array",
+      "description": "StorageClass configurations",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "StorageClass name",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 63
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable this StorageClass"
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "Set as default StorageClass"
+          },
+          "fsType": {
+            "type": "string",
+            "description": "Filesystem type",
+            "enum": ["ext4", "ext3", "xfs"]
+          },
+          "reclaimPolicy": {
+            "type": "string",
+            "description": "Reclaim policy",
+            "enum": ["Delete", "Retain"]
+          },
+          "volumeBindingMode": {
+            "type": "string",
+            "description": "Volume binding mode",
+            "enum": ["Immediate", "WaitForFirstConsumer"]
+          },
+          "allowVolumeExpansion": {
+            "type": "boolean",
+            "description": "Allow volume expansion"
+          }
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "description": "Monitoring configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable Prometheus metrics endpoint"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Metrics server port",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "snapshotClass": {
+      "type": "object",
+      "description": "VolumeSnapshotClass configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable VolumeSnapshotClass creation"
+        },
+        "name": {
+          "type": "string",
+          "description": "VolumeSnapshotClass name",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "deletionPolicy": {
+          "type": "string",
+          "description": "Deletion policy",
+          "enum": ["Delete", "Retain"]
+        }
+      }
+    },
+    "namespace": {
+      "type": "object",
+      "description": "Namespace configuration",
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "description": "Create namespace via chart"
+        }
+      }
+    }
+  }
+}
