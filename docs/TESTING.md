@@ -142,7 +142,7 @@ This table documents which CSI capabilities are implemented and tested by the dr
 | GET_CAPACITY | Yes | Yes (sanity) | Returns RDS storage pool capacity |
 | LIST_VOLUMES | Yes | Yes (sanity) | Enumerates CSI-managed volumes |
 | EXPAND_VOLUME | Yes | Yes (sanity) | Online volume expansion support |
-| CREATE_DELETE_SNAPSHOT | No | Skipped | Deferred to Phase 26 (future milestone) |
+| CREATE_DELETE_SNAPSHOT | Yes | ✓ | Phase 26 (v0.10.0) |
 | CLONE_VOLUME | No | Skipped | Not planned |
 | GET_VOLUME | No | Skipped | Optional capability, not required |
 
