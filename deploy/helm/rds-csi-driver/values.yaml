@@ -1,0 +1,327 @@
+# Default values for rds-csi-driver.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Chart name overrides
+nameOverride: ""
+fullnameOverride: ""
+
+# RDS connection configuration
+rds:
+  # Management interface IP (SSH control plane)
+  managementIP: "10.42.241.3"
+
+  # Storage interface IP (NVMe/TCP data plane)
+  storageIP: "10.42.68.1"
+
+  # SSH port for RouterOS CLI
+  sshPort: 22
+
+  # NVMe/TCP port for storage connections
+  nvmePort: 4420
+
+  # SSH username on RouterOS
+  sshUser: "metal-csi"
+
+  # Base path for volumes on RDS
+  basePath: "/storage-pool/metal-csi"
+
+  # Kubernetes Secret containing RDS credentials
+  # Secret must contain keys:
+  #   - rds-private-key: SSH private key for RouterOS authentication
+  #   - rds-host-key: SSH host public key for host verification
+  #   - snmp-community: (optional) SNMP community string for hardware monitoring
+  secretName: "rds-csi-secret"
+
+  # SECURITY WARNING: Skip SSH host key verification (INSECURE - testing only)
+  # NEVER set to true in production
+  insecureSkipVerify: false
+
+  # NQN prefix for CSI-managed volumes (safety filter)
+  nqnPrefix: "nqn.2000-02.com.mikrotik:pvc-"
+
+# Controller Deployment configuration
+controller:
+  # Number of controller replicas (must be 1 - no leader election for HA)
+  replicas: 1
+
+  # Container image configuration
+  image:
+    repository: ghcr.io/3whiskeywhiskey/rds-csi
+    tag: ""  # Defaults to Chart.appVersion if empty
+    pullPolicy: Always
+
+  # Log verbosity level (0-10, higher is more verbose)
+  logLevel: 5
+
+  # Resource requests and limits
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Node selector for controller pod
+  nodeSelector: {}
+
+  # Tolerations for controller pod
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+
+  # Affinity for controller pod (prefer control-plane nodes)
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: In
+                values: ["true"]
+
+  # Priority class for controller pod
+  priorityClassName: system-cluster-critical
+
+  # Orphan reconciler settings (detects and cleans up orphaned volumes)
+  orphanReconciler:
+    enabled: true
+    checkInterval: 1h
+    gracePeriod: 5m
+    dryRun: true  # Set to false to enable actual cleanup
+
+  # Attachment grace period for live migration handoff
+  attachmentGracePeriod: 30s
+
+  # Attachment reconciliation interval
+  attachmentReconcileInterval: 5m
+
+  # VMI serialization (KubeVirt concurrent operation mitigation)
+  vmiSerialization:
+    enabled: false
+    cacheTTL: 60s
+
+# Node DaemonSet configuration
+node:
+  # Container image configuration
+  image:
+    repository: ghcr.io/3whiskeywhiskey/rds-csi
+    tag: ""  # Defaults to Chart.appVersion if empty
+    pullPolicy: Always
+
+  # Log verbosity level (0-10, higher is more verbose)
+  logLevel: 5
+
+  # Resource requests and limits
+  resources:
+    requests:
+      cpu: 10m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+  # Kubelet directory path
+  kubeletPath: /var/lib/kubelet
+
+  # Node selector for node plugin pods
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  # Tolerations for node plugin pods (must run on ALL nodes)
+  tolerations:
+    - operator: Exists
+
+  # Priority class for node plugin pods
+  priorityClassName: system-node-critical
+
+  # Termination grace period for clean volume unmount
+  terminationGracePeriodSeconds: 60
+
+  # CSI node-driver-registrar sidecar
+  registrar:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+      tag: v2.10.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+  # CSI livenessprobe sidecar
+  livenessProbe:
+    image:
+      repository: registry.k8s.io/sig-storage/livenessprobe
+      tag: v2.12.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+# Controller sidecars
+sidecars:
+  # CSI external-provisioner (volume creation/deletion)
+  provisioner:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-provisioner
+      tag: v4.0.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    additionalArgs:
+      - "--timeout=300s"
+      - "--feature-gates=Topology=false"
+      - "--default-fstype=ext4"
+
+  # CSI external-attacher (volume attach/detach)
+  attacher:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-attacher
+      tag: v4.5.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    additionalArgs:
+      - "--timeout=300s"
+
+  # CSI external-resizer (volume expansion)
+  resizer:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-resizer
+      tag: v1.10.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    additionalArgs:
+      - "--timeout=300s"
+      - "--handle-volume-inuse-error=false"
+
+  # CSI external-snapshotter (snapshot operations)
+  snapshotter:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-snapshotter
+      tag: v8.2.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    additionalArgs:
+      - "--timeout=300s"
+
+  # CSI livenessprobe sidecar
+  livenessProbe:
+    image:
+      repository: registry.k8s.io/sig-storage/livenessprobe
+      tag: v2.12.0
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+
+# Monitoring configuration
+monitoring:
+  # Enable Prometheus metrics endpoint
+  enabled: true
+
+  # Metrics server port
+  port: 9809
+
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    # Enable ServiceMonitor resource creation
+    # Requires Prometheus Operator to be installed
+    enabled: false
+
+    # Override CRD auto-detection (forces creation even if CRD missing)
+    forceEnable: false
+
+    # Scrape interval
+    interval: 30s
+
+    # Additional labels for ServiceMonitor (for prometheus selector matching)
+    labels: {}
+
+  # RDS health and performance monitoring (SSH + SNMP)
+  rdsMonitoring:
+    # Enable RDS disk and hardware metrics
+    enabled: true
+
+# StorageClass configuration
+storageClasses:
+  # Primary StorageClass (ReadWriteOnce)
+  - name: rds-nvme
+    enabled: true
+    isDefault: false
+    fsType: ext4
+    nvmeAddress: ""  # Defaults to rds.storageIP
+    nvmePort: ""     # Defaults to rds.nvmePort
+    volumePath: ""   # Defaults to rds.basePath
+    volumeBindingMode: WaitForFirstConsumer
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    mountOptions: []
+
+  # ReadWriteMany StorageClass (for KubeVirt live migration)
+  # WARNING: This enables multi-attach during migration windows.
+  # NOT intended for general-purpose shared filesystems (like NFS).
+  - name: rds-nvme-rwx
+    enabled: false  # Explicitly enable for KubeVirt environments
+    isDefault: false
+    fsType: ext4
+    nvmeAddress: ""
+    nvmePort: ""
+    volumePath: ""
+    volumeBindingMode: WaitForFirstConsumer
+    reclaimPolicy: Delete
+    allowVolumeExpansion: true
+    mountOptions: []
+    # RWX: Required for KubeVirt live migration. Not for general-purpose shared filesystems.
+    accessModes:
+      - ReadWriteMany
+
+# VolumeSnapshotClass configuration
+snapshotClass:
+  # Enable VolumeSnapshotClass creation
+  # Requires VolumeSnapshot CRDs and snapshot-controller to be installed
+  enabled: true
+
+  # VolumeSnapshotClass name
+  name: rds-csi-snapclass
+
+  # Deletion policy (Delete or Retain)
+  deletionPolicy: Delete
+
+# Namespace configuration
+namespace:
+  # Create namespace via chart (set false if namespace already exists)
+  create: false

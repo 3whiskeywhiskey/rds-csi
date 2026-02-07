@@ -1,0 +1,18 @@
+apiVersion: v2
+name: rds-csi-driver
+description: Kubernetes CSI driver for MikroTik ROSE Data Server (NVMe/TCP)
+type: application
+version: 1.0.0
+appVersion: 0.10.0
+kubeVersion: ">=1.26.0-0"
+home: https://github.com/3whiskeywhiskey/rds-csi-driver
+keywords:
+  - csi
+  - nvme
+  - nvme-tcp
+  - mikrotik
+  - rds
+  - storage
+  - kubernetes
+maintainers:
+  - name: whiskey
