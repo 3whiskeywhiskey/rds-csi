@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 28 of 28 (Helm Chart)
-Plan: 1 of 7 (In progress)
-Status: Phase 28 in progress - Helm chart skeleton complete
-Last activity: 2026-02-07 — Completed 28-01-PLAN.md (Helm chart foundation with values, schema, helpers)
+Plan: 2 of 7 (Complete)
+Status: Phase 28 in progress - Core Helm templates complete
+Last activity: 2026-02-07 — Completed 28-02-PLAN.md (Core Helm templates: namespace, RBAC, controller, node)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [████████████] 68.4% (13/19 plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████████] 73.7% (14/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 109 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 13 v0.10.0)
+- Total plans completed: 110 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 14 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 13/19 (68.4%)
-- Average duration: ~7 min per plan (v0.9.0), ~6 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 14/19 (73.7%)
+- Average duration: ~7 min per plan (v0.9.0), ~5 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -31,10 +31,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 13/19 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 14/19 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 5 phases (26-28.2), 13/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete, Phase 28 in progress)
+- v0.10.0: 5 phases (26-28.2), 14/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete, Phase 28 in progress)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28-02): Secret key paths /etc/rds-csi/rds-private-key and /etc/rds-csi/rds-host-key match deployed manifests (not main.go defaults)
+- v0.10.0 (Phase 28-02): RBAC rules copied verbatim from deploy/kubernetes/rbac.yaml (verified via diff)
+- v0.10.0 (Phase 28-02): CSIDriver name hardcoded as rds.csi.srvlab.io (not templated, CSI registration identifier)
+- v0.10.0 (Phase 28-02): All sidecar leader-election-namespace args use {{ .Release.Namespace }} (per-namespace leader election)
 - v0.10.0 (Phase 28-01): Component-specific selector labels for controller and node (enables targeted pod selection)
 - v0.10.0 (Phase 28-01): Secret key documentation in values.yaml comments (rds-private-key, rds-host-key match deployed manifests)
 - v0.10.0 (Phase 28-01): JSON Schema validates required fields (rds.managementIP, rds.secretName) at install time
@@ -168,11 +172,22 @@ None. All pre-existing test failures resolved via Quick-003.
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Phase 28-01 complete (Helm chart skeleton)
+Stopped at: Phase 28-02 complete (Core Helm templates)
 Resume file: None
-Next action: Continue with Phase 28-02 (RBAC Templates) - Chart foundation ready for template development.
+Next action: Continue with Phase 28-03 (Service/ServiceMonitor templates) - Core infrastructure templates complete.
 
-**v0.10.0 Progress (13/19 plans):**
+**v0.10.0 Progress (14/19 plans):**
+- Phase 28-02: Core Helm templates for CSI driver infrastructure (namespace, RBAC, controller, node)
+  - Created 6 templates: namespace.yaml, serviceaccount.yaml, rbac.yaml, csidriver.yaml, controller.yaml, node.yaml
+  - Controller Deployment: 6 containers (driver + 5 sidecars), all args templated from values.yaml
+  - Node DaemonSet: 3 containers (driver + registrar + livenessprobe), privileged security context preserved
+  - RBAC rules verified identical to source via diff (zero differences)
+  - All namespace references use {{ .Release.Namespace }} (no hardcoded namespaces)
+  - Secret key paths /etc/rds-csi/rds-private-key and /etc/rds-csi/rds-host-key match deployed manifests
+  - CSIDriver name hardcoded as rds.csi.srvlab.io (CSI registration identifier, not templated)
+  - Leader-election-namespace args use {{ .Release.Namespace }} for all sidecars
+  - helm template renders 16 Kubernetes resources successfully
+  - helm lint passes with no errors
 - Phase 28-01: Helm chart skeleton with Chart.yaml, values.yaml, schema, helpers
   - Created Chart.yaml (apiVersion v2, version 1.0.0, appVersion 0.10.0)
   - Created comprehensive values.yaml with RDS, controller, node, sidecars, monitoring, StorageClasses
