@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -27,6 +28,7 @@ type sshClient struct {
 	sshClient          *ssh.Client
 	hostKeyCallback    ssh.HostKeyCallback
 	insecureSkipVerify bool
+	sessionMu          sync.Mutex // Protects concurrent session creation
 }
 
 // newSSHClient creates a new SSH-based RDS client
@@ -158,7 +160,10 @@ func (c *sshClient) IsConnected() bool {
 
 	// Test connection by trying to create a session
 	// RouterOS may not support keepalive requests, so use session creation as test
+	// Serialize session creation to prevent concurrent calls
+	c.sessionMu.Lock()
 	session, err := c.sshClient.NewSession()
+	c.sessionMu.Unlock()
 	if err != nil {
 		return false
 	}
@@ -174,8 +179,11 @@ func (c *sshClient) runCommand(command string) (string, error) {
 
 	klog.V(5).Infof("Executing RouterOS command: %s", command)
 
-	// Create session
+	// Serialize session creation to prevent concurrent NewSession() calls
+	// which can cause RouterOS to block or fail (session limits per connection)
+	c.sessionMu.Lock()
 	session, err := c.sshClient.NewSession()
+	c.sessionMu.Unlock()
 	if err != nil {
 		return "", fmt.Errorf("failed to create SSH session: %w", err)
 	}
