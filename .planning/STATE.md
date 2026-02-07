@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 ## Current Position
 
 Phase: 28 of 28 (Helm Chart)
-Plan: 2 of 7 (Complete)
-Status: Phase 28 in progress - Core Helm templates complete
-Last activity: 2026-02-07 — Completed 28-02-PLAN.md (Core Helm templates: namespace, RBAC, controller, node)
+Plan: 3 of 7 (Complete)
+Status: Phase 28 in progress - Storage templates and documentation complete
+Last activity: 2026-02-07 — Completed 28-03-PLAN.md (Storage classes, monitoring templates, NOTES.txt, README.md)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████████] 73.7% (14/19 plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [█████████████] 78.9% (15/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 110 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 14 v0.10.0)
+- Total plans completed: 111 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 15 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 14/19 (73.7%)
+- v0.10.0 plans completed: 15/19 (78.9%)
 - Average duration: ~7 min per plan (v0.9.0), ~5 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
@@ -31,10 +31,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 14/19 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 15/19 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 5 phases (26-28.2), 14/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete, Phase 28 in progress)
+- v0.10.0: 5 phases (26-28.2), 15/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete, Phase 28 in progress)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
@@ -47,6 +47,11 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28-03): ServiceMonitor selector includes app.kubernetes.io/component=controller (matches Service selector)
+- v0.10.0 (Phase 28-03): ServiceMonitor triple-conditional prevents deployment failures on non-Prometheus-Operator clusters
+- v0.10.0 (Phase 28-03): StorageClass loop over storageClasses array enables multiple classes with different configs
+- v0.10.0 (Phase 28-03): NOTES.txt includes Secret prerequisite validation with kubectl command
+- v0.10.0 (Phase 28-03): Chart distributed via git only (no Helm repo or OCI registry publishing)
 - v0.10.0 (Phase 28-02): Secret key paths /etc/rds-csi/rds-private-key and /etc/rds-csi/rds-host-key match deployed manifests (not main.go defaults)
 - v0.10.0 (Phase 28-02): RBAC rules copied verbatim from deploy/kubernetes/rbac.yaml (verified via diff)
 - v0.10.0 (Phase 28-02): CSIDriver name hardcoded as rds.csi.srvlab.io (not templated, CSI registration identifier)
@@ -172,11 +177,22 @@ None. All pre-existing test failures resolved via Quick-003.
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Phase 28-02 complete (Core Helm templates)
+Stopped at: Phase 28-03 complete (Storage and monitoring templates, documentation)
 Resume file: None
-Next action: Continue with Phase 28-03 (Service/ServiceMonitor templates) - Core infrastructure templates complete.
+Next action: Continue with Phase 28-04 (Deployment Templates) - Storage templates and docs ready for controller/node deployment templates.
 
-**v0.10.0 Progress (14/19 plans):**
+**v0.10.0 Progress (15/19 plans):**
+- Phase 28-03: Storage and monitoring Helm templates with comprehensive documentation
+  - Verified 4 templates already created in 28-02: storageclass.yaml, snapshotclass.yaml, service.yaml, servicemonitor.yaml
+  - StorageClass loop iterates over storageClasses array with enabled flag
+  - ServiceMonitor triple-conditional (monitoring + serviceMonitor + CRD detection) prevents deployment failures
+  - ServiceMonitor selector includes component=controller matching Service selector
+  - Created NOTES.txt (184 lines) with Secret prerequisite validation and post-install instructions
+  - Created README.md (625 lines) with complete configuration reference, troubleshooting, examples
+  - Secret structure documented (rds-private-key, rds-host-key, snmp-community keys)
+  - StorageClass explanations (RWO for general use, RWX for KubeVirt migration only)
+  - Distribution documented as git-only (no Helm repo or OCI registry)
+  - helm lint passes with 0 errors
 - Phase 28-02: Core Helm templates for CSI driver infrastructure (namespace, RBAC, controller, node)
   - Created 6 templates: namespace.yaml, serviceaccount.yaml, rbac.yaml, csidriver.yaml, controller.yaml, node.yaml
   - Controller Deployment: 6 containers (driver + 5 sidecars), all args templated from values.yaml
