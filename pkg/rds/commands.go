@@ -1102,6 +1102,24 @@ func parseSnapshotInfo(output string) (*SnapshotInfo, error) {
 		snapshot.SourceVolume = match[1]
 	}
 
+	// Extract file size if present (mock server provides this)
+	if match := regexp.MustCompile(`file-size=(\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		if size, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			snapshot.FileSizeBytes = size
+		}
+	}
+
+	// Extract creation time if present (mock server provides this for testing)
+	// In production, creation time comes from VolumeSnapshotContent annotations managed by external-snapshotter
+	if match := regexp.MustCompile(`creation-time=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		if t, err := time.Parse(time.RFC3339, match[1]); err == nil {
+			snapshot.CreatedAt = t
+		}
+	}
+
+	// If no creation time was provided, use zero time (production RDS doesn't track this)
+	// The CSI controller will get creation time from VolumeSnapshotContent annotations
+
 	return snapshot, nil
 }
 

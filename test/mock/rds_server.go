@@ -951,8 +951,9 @@ source-volume=%s
           fs=%s
    read-only=%s
    file-size=%d
+creation-time=%s
 
-`, snap.Name, snap.Parent, snap.SourceVolume, snap.FSLabel, readOnlyStr, snap.SizeBytes)
+`, snap.Name, snap.Parent, snap.SourceVolume, snap.FSLabel, readOnlyStr, snap.SizeBytes, snap.CreatedAt.Format(time.RFC3339))
 
 	return output, 0
 }
