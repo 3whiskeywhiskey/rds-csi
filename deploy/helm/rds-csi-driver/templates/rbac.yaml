@@ -1,0 +1,139 @@
+---
+# ClusterRole for Controller - full permissions for volume management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-controller-role
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+rules:
+  # Access to PersistentVolumes
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Access to PersistentVolumeClaims
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+  # Access to PersistentVolumeClaim status
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/status"]
+    verbs: ["patch"]
+
+  # Access to StorageClasses
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+
+  # Access to VolumeAttachments (for external-attacher sidecar)
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "patch"]
+
+  # Access to VolumeAttachment status
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+
+  # Access to CSINodes (for topology)
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Access to Nodes (for topology)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Access to Events (for logging)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+
+  # Access to Leases (for leader election)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "watch", "list", "delete", "update", "create"]
+
+  # Access to CSIDrivers
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csidrivers"]
+    verbs: ["get", "list", "watch"]
+
+  # VolumeSnapshot access (for csi-snapshotter sidecar)
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list"]
+
+---
+# ClusterRole for Node - limited permissions for node operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-node-role
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+rules:
+  # Access to CSINodes
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Access to Nodes
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Access to Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+
+---
+# ClusterRoleBinding for Controller
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-controller-binding
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rds-csi.fullname" . }}-controller-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rds-csi.controllerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+
+---
+# ClusterRoleBinding for Node
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-node-binding
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rds-csi.fullname" . }}-node-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rds-csi.nodeServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

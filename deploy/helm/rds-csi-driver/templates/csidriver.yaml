@@ -1,0 +1,38 @@
+---
+# CSIDriver object - registers the driver with Kubernetes
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: {{ include "rds-csi.driverName" . }}
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+spec:
+  # attachRequired: true enables ControllerPublishVolume/ControllerUnpublishVolume
+  # Required for:
+  # - RWX block volumes (KubeVirt live migration)
+  # - Volume fencing (prevents dual-attach violations)
+  # - VolumeAttachment object creation by Kubernetes
+  attachRequired: true
+
+  # podInfoOnMount: true makes pod info available to NodePublishVolume
+  # Useful for future features like per-pod access control
+  podInfoOnMount: true
+
+  # volumeLifecycleModes: Persistent means volumes persist beyond pod lifecycle
+  volumeLifecycleModes:
+    - Persistent
+
+  # fsGroupPolicy: File means the driver supports fsGroup in pod securityContext
+  # The kubelet will change ownership of mounted volume to match fsGroup
+  fsGroupPolicy: File
+
+  # requiresRepublish: false means we don't need periodic NodePublishVolume calls
+  requiresRepublish: false
+
+  # storageCapacity: true enables CSI storage capacity tracking
+  # This allows the scheduler to make informed decisions about pod placement
+  storageCapacity: true
+
+  # tokenRequests: empty means we don't need service account tokens
+  # Future: could be used for authentication to RDS
+  tokenRequests: []
