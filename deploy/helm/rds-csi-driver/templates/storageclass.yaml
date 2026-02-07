@@ -1,0 +1,28 @@
+{{- range $idx, $sc := .Values.storageClasses }}
+{{- if $sc.enabled }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $sc.name }}
+  {{- if $sc.isDefault }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+  labels:
+    {{- include "rds-csi.labels" $ | nindent 4 }}
+provisioner: rds.csi.srvlab.io
+parameters:
+  csi.storage.k8s.io/fstype: {{ $sc.fsType | default "ext4" | quote }}
+  nvmeAddress: {{ $sc.nvmeAddress | default $.Values.rds.storageIP | quote }}
+  nvmePort: {{ $sc.nvmePort | default (printf "%d" (int $.Values.rds.nvmePort)) | quote }}
+  volumePath: {{ $sc.volumePath | default $.Values.rds.basePath | quote }}
+volumeBindingMode: {{ $sc.volumeBindingMode | default "WaitForFirstConsumer" }}
+reclaimPolicy: {{ $sc.reclaimPolicy | default "Delete" }}
+allowVolumeExpansion: {{ $sc.allowVolumeExpansion | default true }}
+{{- with $sc.mountOptions }}
+mountOptions:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

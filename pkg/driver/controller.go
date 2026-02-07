@@ -4,11 +4,14 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
@@ -143,7 +146,18 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}, nil
 	}
 
-	// Volume doesn't exist, create it
+	// Volume doesn't exist - check for volume content source (snapshot restore)
+	if contentSource := req.GetVolumeContentSource(); contentSource != nil {
+		if snapshotSource := contentSource.GetSnapshot(); snapshotSource != nil {
+			return cs.createVolumeFromSnapshot(ctx, req, volumeID, snapshotSource.GetSnapshotId(), requiredBytes)
+		}
+		// Volume clone (not yet supported)
+		if contentSource.GetVolume() != nil {
+			return nil, status.Error(codes.InvalidArgument, "volume cloning is not supported, use snapshot restore instead")
+		}
+	}
+
+	// No content source - create new empty volume
 	// Get parameters from StorageClass
 	params := req.GetParameters()
 	volumeBasePath := defaultVolumeBasePath
@@ -232,6 +246,112 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 				"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
 				"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
 				"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
+			},
+		},
+	}, nil
+}
+
+// createVolumeFromSnapshot handles CreateVolume with a snapshot source (restore workflow)
+func (cs *ControllerServer) createVolumeFromSnapshot(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+	volumeID string,
+	snapshotID string,
+	requiredBytes int64,
+) (*csi.CreateVolumeResponse, error) {
+	klog.V(4).Infof("Creating volume %s from snapshot %s", volumeID, snapshotID)
+
+	// Validate snapshot ID
+	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid snapshot ID: %v", err)
+	}
+
+	// Verify snapshot exists
+	snapshotInfo, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
+	if err != nil {
+		var notFoundErr *rds.SnapshotNotFoundError
+		if stderrors.As(err, &notFoundErr) {
+			return nil, status.Errorf(codes.NotFound, "snapshot %s not found", snapshotID)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get snapshot: %v", err)
+	}
+
+	// CSI spec: volume size must not be less than snapshot size
+	if requiredBytes < snapshotInfo.FileSizeBytes {
+		requiredBytes = snapshotInfo.FileSizeBytes
+	}
+
+	// Get parameters
+	params := req.GetParameters()
+	volumeBasePath := defaultVolumeBasePath
+	if path, ok := params[paramVolumePath]; ok {
+		volumeBasePath = path
+	}
+
+	nvmePort := defaultNVMETCPPort
+	if portStr, ok := params[paramNVMEPort]; ok {
+		var port int
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil {
+			nvmePort = port
+		}
+	}
+
+	// Parse NVMe connection parameters
+	nvmeParams, err := ParseNVMEConnectionParams(params)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid NVMe connection parameters: %v", err)
+	}
+	migrationTimeout := ParseMigrationTimeout(params)
+
+	// Generate NQN and file path for new volume
+	nqn, err := utils.VolumeIDToNQN(volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate NQN: %v", err)
+	}
+	filePath, err := utils.VolumeIDToFilePath(volumeID, volumeBasePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate file path: %v", err)
+	}
+
+	// Restore: create new volume from snapshot via RDS
+	restoreOpts := rds.CreateVolumeOptions{
+		Slot:          volumeID,
+		FilePath:      filePath,
+		FileSizeBytes: requiredBytes,
+		NVMETCPPort:   nvmePort,
+		NVMETCPNQN:    nqn,
+	}
+
+	if err := cs.driver.rdsClient.RestoreSnapshot(snapshotID, restoreOpts); err != nil {
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to restore snapshot: %v", err)
+	}
+
+	klog.V(2).Infof("Restored volume %s from snapshot %s", volumeID, snapshotID)
+
+	return &csi.CreateVolumeResponse{
+		Volume: &csi.Volume{
+			VolumeId:      volumeID,
+			CapacityBytes: requiredBytes,
+			VolumeContext: map[string]string{
+				"rdsAddress":              cs.getRDSAddress(params),
+				"nvmeAddress":             cs.getNVMEAddress(params),
+				"nvmePort":                fmt.Sprintf("%d", nvmePort),
+				"nqn":                     nqn,
+				"volumePath":              filePath,
+				"ctrlLossTmo":             fmt.Sprintf("%d", nvmeParams.CtrlLossTmo),
+				"reconnectDelay":          fmt.Sprintf("%d", nvmeParams.ReconnectDelay),
+				"keepAliveTmo":            fmt.Sprintf("%d", nvmeParams.KeepAliveTmo),
+				"migrationTimeoutSeconds": fmt.Sprintf("%.0f", migrationTimeout.Seconds()),
+			},
+			ContentSource: &csi.VolumeContentSource{
+				Type: &csi.VolumeContentSource_Snapshot{
+					Snapshot: &csi.VolumeContentSource_SnapshotSource{
+						SnapshotId: snapshotID,
+					},
+				},
 			},
 		},
 	}, nil
@@ -861,19 +981,241 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
-// CreateSnapshot is not yet implemented
+// CreateSnapshot creates a Btrfs snapshot of a volume
 func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateSnapshot is not yet implemented")
+	klog.V(4).Infof("CreateSnapshot CSI call for name=%s source=%s", req.GetName(), req.GetSourceVolumeId())
+
+	// 1. Validate request
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot name is required")
+	}
+	if req.GetSourceVolumeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "source volume ID is required")
+	}
+
+	sourceVolumeID := req.GetSourceVolumeId()
+
+	// Validate source volume ID format
+	if err := utils.ValidateVolumeID(sourceVolumeID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid source volume ID: %v", err)
+	}
+
+	// Safety check: ensure RDS client is initialized
+	if cs.driver == nil || cs.driver.rdsClient == nil {
+		return nil, status.Error(codes.Internal, "RDS client not initialized")
+	}
+
+	// 2. Generate deterministic snapshot ID from name (for idempotency)
+	snapshotID := utils.SnapshotNameToID(req.GetName())
+
+	// 3. Check idempotency: does snapshot with this ID already exist?
+	existingSnapshot, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
+	if err == nil {
+		// Snapshot exists -- check if same source volume (idempotent) or different (conflict)
+		if existingSnapshot.SourceVolume == sourceVolumeID {
+			klog.V(2).Infof("Snapshot %s already exists for source %s (idempotent)", snapshotID, sourceVolumeID)
+			return &csi.CreateSnapshotResponse{
+				Snapshot: &csi.Snapshot{
+					SnapshotId:     snapshotID,
+					SourceVolumeId: existingSnapshot.SourceVolume,
+					CreationTime:   timestamppb.New(existingSnapshot.CreatedAt),
+					SizeBytes:      existingSnapshot.FileSizeBytes,
+					ReadyToUse:     true,
+				},
+			}, nil
+		}
+		return nil, status.Errorf(codes.AlreadyExists,
+			"snapshot %s already exists with different source volume (existing: %s, requested: %s)",
+			snapshotID, existingSnapshot.SourceVolume, sourceVolumeID)
+	}
+
+	// 4. Verify source volume exists on RDS
+	sourceVolume, err := cs.driver.rdsClient.GetVolume(sourceVolumeID)
+	if err != nil {
+		var notFoundErr *rds.VolumeNotFoundError
+		if stderrors.As(err, &notFoundErr) {
+			return nil, status.Errorf(codes.NotFound, "source volume %s not found", sourceVolumeID)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get source volume: %v", err)
+	}
+
+	// 5. Determine Btrfs filesystem label
+	// Use the StorageClass parameter or derive from volume base path
+	// The FSLabel needs to be discoverable -- for now use a configurable approach
+	// Default: extract from volume path or use StorageClass parameter
+	fsLabel := cs.getBtrfsFSLabel(req.GetParameters())
+
+	// 6. Create snapshot via RDS
+	createOpts := rds.CreateSnapshotOptions{
+		Name:         snapshotID,
+		SourceVolume: sourceVolumeID,
+		FSLabel:      fsLabel,
+	}
+
+	snapshotInfo, err := cs.driver.rdsClient.CreateSnapshot(createOpts)
+	if err != nil {
+		// Map connection errors to Unavailable
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to create snapshot: %v", err)
+	}
+
+	klog.V(2).Infof("Created snapshot %s from volume %s", snapshotID, sourceVolumeID)
+
+	// 7. Return response
+	// Btrfs snapshots are instant (CoW), so ready_to_use is always true
+	return &csi.CreateSnapshotResponse{
+		Snapshot: &csi.Snapshot{
+			SnapshotId:     snapshotID,
+			SourceVolumeId: sourceVolumeID,
+			CreationTime:   timestamppb.New(snapshotInfo.CreatedAt),
+			SizeBytes:      sourceVolume.FileSizeBytes,
+			ReadyToUse:     true,
+		},
+	}, nil
 }
 
-// DeleteSnapshot is not yet implemented
+// DeleteSnapshot removes a Btrfs snapshot
 func (cs *ControllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "DeleteSnapshot is not yet implemented")
+	snapshotID := req.GetSnapshotId()
+	klog.V(4).Infof("DeleteSnapshot CSI call for %s", snapshotID)
+
+	// 1. Validate request
+	if snapshotID == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot ID is required")
+	}
+
+	// Validate snapshot ID format
+	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid snapshot ID: %v", err)
+	}
+
+	// Safety check
+	if cs.driver == nil || cs.driver.rdsClient == nil {
+		return nil, status.Error(codes.Internal, "RDS client not initialized")
+	}
+
+	// 2. Delete snapshot via RDS (idempotent -- RDS client returns nil for not-found)
+	if err := cs.driver.rdsClient.DeleteSnapshot(snapshotID); err != nil {
+		// Map connection errors
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to delete snapshot: %v", err)
+	}
+
+	klog.V(2).Infof("Deleted snapshot %s", snapshotID)
+	return &csi.DeleteSnapshotResponse{}, nil
 }
 
-// ListSnapshots is not yet implemented
+// ListSnapshots lists snapshots with CSI-compliant pagination
 func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListSnapshots is not yet implemented")
+	klog.V(4).Infof("ListSnapshots CSI call (snapshot_id=%s, source_volume_id=%s, max_entries=%d, starting_token=%s)",
+		req.GetSnapshotId(), req.GetSourceVolumeId(), req.GetMaxEntries(), req.GetStartingToken())
+
+	// Safety check
+	if cs.driver == nil || cs.driver.rdsClient == nil {
+		return nil, status.Error(codes.Internal, "RDS client not initialized")
+	}
+
+	// Handle single snapshot lookup by ID
+	if req.GetSnapshotId() != "" {
+		snapshotID := req.GetSnapshotId()
+		if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+			// Invalid ID format -- return empty (not error) per CSI spec
+			return &csi.ListSnapshotsResponse{}, nil
+		}
+
+		snap, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
+		if err != nil {
+			// Not found -> return empty response (not error)
+			return &csi.ListSnapshotsResponse{}, nil
+		}
+
+		return &csi.ListSnapshotsResponse{
+			Entries: []*csi.ListSnapshotsResponse_Entry{
+				{
+					Snapshot: &csi.Snapshot{
+						SnapshotId:     snap.Name,
+						SourceVolumeId: snap.SourceVolume,
+						CreationTime:   timestamppb.New(snap.CreatedAt),
+						SizeBytes:      snap.FileSizeBytes,
+						ReadyToUse:     true,
+					},
+				},
+			},
+		}, nil
+	}
+
+	// Fetch all snapshots from RDS
+	allSnapshots, err := cs.driver.rdsClient.ListSnapshots()
+	if err != nil {
+		if stderrors.Is(err, utils.ErrConnectionFailed) || stderrors.Is(err, utils.ErrOperationTimeout) {
+			return nil, status.Errorf(codes.Unavailable, "RDS unavailable: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to list snapshots: %v", err)
+	}
+
+	// Filter by source volume if specified
+	if req.GetSourceVolumeId() != "" {
+		filtered := make([]rds.SnapshotInfo, 0)
+		for _, s := range allSnapshots {
+			if s.SourceVolume == req.GetSourceVolumeId() {
+				filtered = append(filtered, s)
+			}
+		}
+		allSnapshots = filtered
+	}
+
+	// Sort by name for deterministic pagination
+	sort.Slice(allSnapshots, func(i, j int) bool {
+		return allSnapshots[i].Name < allSnapshots[j].Name
+	})
+
+	// Handle pagination
+	startIndex := 0
+	if req.GetStartingToken() != "" {
+		idx, err := strconv.Atoi(req.GetStartingToken())
+		if err != nil {
+			return nil, status.Errorf(codes.Aborted, "invalid starting_token: %s", req.GetStartingToken())
+		}
+		if idx < 0 || idx > len(allSnapshots) {
+			return nil, status.Errorf(codes.Aborted, "starting_token out of range: %d (total: %d)", idx, len(allSnapshots))
+		}
+		startIndex = idx
+	}
+
+	// Build response entries
+	maxEntries := len(allSnapshots) - startIndex
+	if req.GetMaxEntries() > 0 && int(req.GetMaxEntries()) < maxEntries {
+		maxEntries = int(req.GetMaxEntries())
+	}
+
+	entries := make([]*csi.ListSnapshotsResponse_Entry, 0, maxEntries)
+	for i := startIndex; i < startIndex+maxEntries && i < len(allSnapshots); i++ {
+		s := allSnapshots[i]
+		entries = append(entries, &csi.ListSnapshotsResponse_Entry{
+			Snapshot: &csi.Snapshot{
+				SnapshotId:     s.Name,
+				SourceVolumeId: s.SourceVolume,
+				CreationTime:   timestamppb.New(s.CreatedAt),
+				SizeBytes:      s.FileSizeBytes,
+				ReadyToUse:     true,
+			},
+		})
+	}
+
+	// Set next token if more entries exist
+	var nextToken string
+	if startIndex+maxEntries < len(allSnapshots) {
+		nextToken = strconv.Itoa(startIndex + maxEntries)
+	}
+
+	return &csi.ListSnapshotsResponse{
+		Entries:   entries,
+		NextToken: nextToken,
+	}, nil
 }
 
 // ControllerExpandVolume expands a volume on the backend storage
@@ -1053,4 +1395,17 @@ func (cs *ControllerServer) getNVMEAddress(params map[string]string) string {
 	}
 	// Fall back to RDS address if nvmeAddress not specified
 	return cs.getRDSAddress(params)
+}
+
+// getBtrfsFSLabel determines the Btrfs filesystem label for snapshot operations.
+// Checks snapshot parameters first, then falls back to extracting from volume base path.
+func (cs *ControllerServer) getBtrfsFSLabel(params map[string]string) string {
+	// Check for explicit parameter
+	if label, ok := params["btrfsFSLabel"]; ok && label != "" {
+		return label
+	}
+	// Default: use "storage-pool" derived from the volume base path
+	// The base path is typically /storage-pool/metal-csi, and the Btrfs FS label
+	// corresponds to the mount point name
+	return "storage-pool"
 }

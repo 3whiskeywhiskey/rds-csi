@@ -733,3 +733,425 @@ func parseRouterOSTime(normalized string) time.Time {
 	// Return zero time if no match found
 	return time.Time{}
 }
+
+// Snapshot operations
+
+// CreateSnapshot creates a read-only Btrfs snapshot via RouterOS SSH
+func (c *sshClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, error) {
+	// Validate options
+	if err := utils.ValidateSnapshotID(opts.Name); err != nil {
+		return nil, fmt.Errorf("invalid snapshot name: %w", err)
+	}
+	if err := validateSlotName(opts.SourceVolume); err != nil {
+		return nil, fmt.Errorf("invalid source volume: %w", err)
+	}
+	if opts.FSLabel == "" {
+		return nil, fmt.Errorf("filesystem label is required")
+	}
+
+	// Build /disk/btrfs/subvolume/add command with read-only=yes for snapshots
+	cmd := fmt.Sprintf(
+		`/disk/btrfs/subvolume/add read-only=yes parent=%s fs=%s name=%s`,
+		opts.SourceVolume,
+		opts.FSLabel,
+		opts.Name,
+	)
+
+	// Execute command with retry
+	_, err := c.runCommandWithRetry(cmd, 3)
+	if err != nil {
+		// Cleanup attempt: remove partial snapshot if creation failed
+		cleanupCmd := fmt.Sprintf(`/disk/btrfs/subvolume/remove [find where name=%s]`, opts.Name)
+		if _, cleanupErr := c.runCommand(cleanupCmd); cleanupErr != nil {
+			klog.Warningf("Failed to cleanup partial snapshot %s: %v", opts.Name, cleanupErr)
+		}
+		return nil, fmt.Errorf("failed to create snapshot: %w", err)
+	}
+
+	// Verify snapshot was created
+	snapshot, err := c.GetSnapshot(opts.Name)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot creation verification failed: %w", err)
+	}
+
+	// NOTE: SourceVolume should be populated by parseSnapshotInfo if the backend provides it
+	// (mock server does for testing, real RouterOS may not - tracked by Kubernetes instead)
+	// If not populated, set it manually from opts for testing compatibility
+	if snapshot.SourceVolume == "" {
+		snapshot.SourceVolume = opts.SourceVolume
+	}
+
+	klog.V(2).Infof("Created snapshot %s from volume %s", opts.Name, opts.SourceVolume)
+	klog.V(4).Infof("Created snapshot %s (source=%s, fs=%s)", opts.Name, opts.SourceVolume, opts.FSLabel)
+	return snapshot, nil
+}
+
+// DeleteSnapshot removes a Btrfs snapshot from RDS
+// Idempotent: returns nil if snapshot does not exist (per CSI spec)
+func (c *sshClient) DeleteSnapshot(snapshotID string) error {
+	// Validate snapshot ID
+	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+
+	// Check if snapshot exists (for idempotency)
+	_, err := c.GetSnapshot(snapshotID)
+	if err != nil {
+		var notFoundErr *SnapshotNotFoundError
+		if errors.As(err, &notFoundErr) {
+			klog.V(4).Infof("Snapshot %s already deleted", snapshotID)
+			return nil // Idempotent: not found = success
+		}
+		return fmt.Errorf("failed to check snapshot existence: %w", err)
+	}
+
+	// Build /disk/btrfs/subvolume/remove command
+	cmd := fmt.Sprintf(`/disk/btrfs/subvolume/remove [find where name=%s]`, snapshotID)
+
+	// Execute command with retry
+	_, err = c.runCommandWithRetry(cmd, 3)
+	if err != nil {
+		// Idempotent: treat "no such item" as success
+		if strings.Contains(err.Error(), "no such item") {
+			klog.V(4).Infof("Snapshot %s does not exist, treating as success", snapshotID)
+			return nil
+		}
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+
+	klog.V(2).Infof("Deleted snapshot %s", snapshotID)
+	return nil
+}
+
+// GetSnapshot retrieves information about a specific snapshot
+func (c *sshClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
+	klog.V(4).Infof("Getting snapshot info for %s", snapshotID)
+
+	// Validate snapshot ID
+	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+		return nil, err
+	}
+
+	// Build /disk/btrfs/subvolume/print detail command
+	cmd := fmt.Sprintf(`/disk/btrfs/subvolume/print detail where name=%s`, snapshotID)
+
+	// Execute command
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get snapshot info: %w", err)
+	}
+
+	// Check if snapshot exists
+	normalized := normalizeRouterOSOutput(output)
+	if strings.TrimSpace(normalized) == "" {
+		return nil, &SnapshotNotFoundError{Name: snapshotID}
+	}
+
+	// Parse snapshot info
+	snapshot, err := parseSnapshotInfo(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse snapshot info: %w", err)
+	}
+
+	// Additional check: if name is empty, snapshot wasn't found
+	if snapshot.Name == "" {
+		return nil, &SnapshotNotFoundError{Name: snapshotID}
+	}
+
+	return snapshot, nil
+}
+
+// ListSnapshots lists all CSI-managed snapshots (snap-* prefix) on RDS
+func (c *sshClient) ListSnapshots() ([]SnapshotInfo, error) {
+	klog.V(4).Info("Listing all snapshots")
+
+	// Build /disk/btrfs/subvolume/print command with snap- filter
+	cmd := `/disk/btrfs/subvolume/print where name~"snap-"`
+
+	// Execute command
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list snapshots: %w", err)
+	}
+
+	// Parse all snapshots
+	snapshots, err := parseSnapshotList(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse snapshot list: %w", err)
+	}
+
+	return snapshots, nil
+}
+
+// RestoreSnapshot creates a new volume from a snapshot
+// Uses Btrfs snapshot-of-snapshot (writable clone) for efficient restore
+func (c *sshClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolumeOptions) error {
+	// Validate snapshot ID
+	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+
+	// Validate new volume options
+	if err := validateCreateVolumeOptions(newVolumeOpts); err != nil {
+		return fmt.Errorf("invalid volume options: %w", err)
+	}
+
+	// Verify snapshot exists
+	snapshot, err := c.GetSnapshot(snapshotID)
+	if err != nil {
+		return fmt.Errorf("snapshot not found: %w", err)
+	}
+
+	fsLabel := snapshot.FSLabel
+	klog.V(4).Infof("Restoring snapshot %s to new volume %s (fs=%s)", snapshotID, newVolumeOpts.Slot, fsLabel)
+
+	// Step 1: Create writable snapshot-of-snapshot (Btrfs clone)
+	// NOTE: NO read-only=yes flag -- this creates a writable subvolume from the read-only snapshot
+	cloneCmd := fmt.Sprintf(
+		`/disk/btrfs/subvolume/add parent=%s fs=%s name=%s`,
+		snapshotID,
+		fsLabel,
+		newVolumeOpts.Slot,
+	)
+
+	_, err = c.runCommandWithRetry(cloneCmd, 3)
+	if err != nil {
+		return fmt.Errorf("failed to create writable clone from snapshot: %w", err)
+	}
+	klog.V(4).Infof("Created writable clone %s from snapshot %s", newVolumeOpts.Slot, snapshotID)
+
+	// Step 2: Create /disk entry for NVMe/TCP export
+	// NOTE: This is the expected flow based on RouterOS documentation.
+	// The exact relationship between Btrfs subvolumes and /disk entries may need
+	// adjustment during hardware validation (see RESEARCH.md Open Question 1).
+	sizeStr := formatBytes(newVolumeOpts.FileSizeBytes)
+	diskCmd := fmt.Sprintf(
+		`/disk add type=file file-path=%s file-size=%s slot=%s nvme-tcp-export=yes nvme-tcp-server-port=%d nvme-tcp-server-nqn=%s`,
+		newVolumeOpts.FilePath,
+		sizeStr,
+		newVolumeOpts.Slot,
+		newVolumeOpts.NVMETCPPort,
+		newVolumeOpts.NVMETCPNQN,
+	)
+
+	_, err = c.runCommandWithRetry(diskCmd, 3)
+	if err != nil {
+		// Cleanup: remove the Btrfs subvolume clone
+		cleanupCmd := fmt.Sprintf(`/disk/btrfs/subvolume/remove [find where name=%s]`, newVolumeOpts.Slot)
+		if _, cleanupErr := c.runCommand(cleanupCmd); cleanupErr != nil {
+			klog.Warningf("Failed to cleanup Btrfs clone %s after disk creation failure: %v", newVolumeOpts.Slot, cleanupErr)
+		}
+		return fmt.Errorf("failed to create disk entry for restored volume: %w", err)
+	}
+
+	klog.V(2).Infof("Restored snapshot %s to new volume %s", snapshotID, newVolumeOpts.Slot)
+	return nil
+}
+
+// GetDiskMetrics retrieves real-time disk performance metrics via /disk monitor-traffic
+// Uses "once" modifier to get a single snapshot instead of continuous stream output.
+// The slot parameter is the disk slot name (e.g., "storage-pool") or disk number.
+func (c *sshClient) GetDiskMetrics(slot string) (*DiskMetrics, error) {
+	klog.V(4).Infof("Getting disk metrics for %s", slot)
+
+	// Validate slot name to prevent command injection
+	if err := validateSlotName(slot); err != nil {
+		return nil, err
+	}
+
+	// Use "once" to get snapshot, not continuous stream
+	// Continuous output uses terminal control sequences that break parsing
+	cmd := fmt.Sprintf(`/disk monitor-traffic %s once`, slot)
+
+	output, err := c.runCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get disk metrics: %w", err)
+	}
+
+	metrics, err := parseDiskMetrics(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse disk metrics: %w", err)
+	}
+
+	metrics.Slot = slot
+	return metrics, nil
+}
+
+// parseDiskMetrics parses /disk monitor-traffic output into DiskMetrics
+// Expected format (from RouterOS):
+//
+//	slot: storage-pool
+//	read-ops-per-second:               0
+//	write-ops-per-second:             76
+//	read-rate:            0bps
+//	write-rate:        12.8Mbps
+//	read-time:             0ms
+//	write-time:             0ms
+//	in-flight-ops:               0
+//	active-time:             0ms
+//	wait-time:             0ms
+func parseDiskMetrics(output string) (*DiskMetrics, error) {
+	metrics := &DiskMetrics{}
+
+	// Parse integer fields (IOPS, in-flight-ops)
+	intFields := map[string]*float64{
+		`read-ops-per-second:\s+(\d+)`:  &metrics.ReadOpsPerSecond,
+		`write-ops-per-second:\s+(\d+)`: &metrics.WriteOpsPerSecond,
+		`in-flight-ops:\s+(\d+)`:        &metrics.InFlightOps,
+	}
+
+	for pattern, field := range intFields {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(output); len(matches) > 1 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				*field = value
+			}
+		}
+	}
+
+	// Parse rate fields with units (e.g., "0bps", "12.8Mbps", "1.5Gbps")
+	rateFields := map[string]*float64{
+		`read-rate:\s+([\d.]+)\s*(\w+)`:  &metrics.ReadBytesPerSec,
+		`write-rate:\s+([\d.]+)\s*(\w+)`: &metrics.WriteBytesPerSec,
+	}
+
+	for pattern, field := range rateFields {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(output); len(matches) > 2 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				*field = convertRateToBytesPerSec(value, matches[2])
+			}
+		}
+	}
+
+	// Parse time fields (ms suffix)
+	timeFields := map[string]*float64{
+		`read-time:\s+([\d.]+)\s*ms`:   &metrics.ReadTimeMs,
+		`write-time:\s+([\d.]+)\s*ms`:  &metrics.WriteTimeMs,
+		`wait-time:\s+([\d.]+)\s*ms`:   &metrics.WaitTimeMs,
+		`active-time:\s+([\d.]+)\s*ms`: &metrics.ActiveTimeMs,
+	}
+
+	for pattern, field := range timeFields {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(output); len(matches) > 1 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				*field = value
+			}
+		}
+	}
+
+	return metrics, nil
+}
+
+// convertRateToBytesPerSec converts RouterOS rate units to bytes per second
+// RouterOS reports rates in bits per second with unit suffixes: bps, kbps, Mbps, Gbps
+func convertRateToBytesPerSec(value float64, unit string) float64 {
+	switch unit {
+	case "bps":
+		return value / 8
+	case "kbps", "Kbps":
+		return (value * 1000) / 8
+	case "Mbps":
+		return (value * 1_000_000) / 8
+	case "Gbps":
+		return (value * 1_000_000_000) / 8
+	default:
+		return value
+	}
+}
+
+// parseSnapshotInfo parses RouterOS Btrfs subvolume output for a single snapshot
+// TODO: RouterOS output format for /disk/btrfs/subvolume needs hardware validation.
+// Expected format is similar to /disk print detail with key=value pairs.
+func parseSnapshotInfo(output string) (*SnapshotInfo, error) {
+	snapshot := &SnapshotInfo{}
+
+	// Normalize multi-line output
+	normalized := normalizeRouterOSOutput(output)
+
+	// Extract name
+	if match := regexp.MustCompile(`name="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.Name = match[1]
+	} else if match := regexp.MustCompile(`name=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.Name = match[1]
+	}
+
+	// Extract read-only flag
+	if match := regexp.MustCompile(`read-only=(yes|no)`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.ReadOnly = match[1] == "yes"
+	}
+
+	// Extract filesystem label
+	// TODO: Verify RouterOS field name during hardware validation (may be "fs" or "filesystem")
+	if match := regexp.MustCompile(`fs="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.FSLabel = match[1]
+	} else if match := regexp.MustCompile(`fs=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.FSLabel = match[1]
+	}
+
+	// Extract source volume if present (mock server provides this for testing, real RouterOS doesn't)
+	// NOTE: Real RouterOS may not return source volume or creation time in subvolume output.
+	// These fields are tracked by the CSI controller layer in VolumeSnapshotContent annotations.
+	// The mock server provides source-volume for testing idempotency without Kubernetes.
+	if match := regexp.MustCompile(`source-volume="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.SourceVolume = match[1]
+	} else if match := regexp.MustCompile(`source-volume=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.SourceVolume = match[1]
+	}
+
+	// Extract file size if present (mock server provides this)
+	if match := regexp.MustCompile(`file-size=(\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		if size, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			snapshot.FileSizeBytes = size
+		}
+	}
+
+	// Extract creation time if present (mock server provides this for testing)
+	// In production, creation time comes from VolumeSnapshotContent annotations managed by external-snapshotter
+	if match := regexp.MustCompile(`creation-time=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+		if t, err := time.Parse(time.RFC3339, match[1]); err == nil {
+			snapshot.CreatedAt = t
+		}
+	}
+
+	// If no creation time was provided, use zero time (production RDS doesn't track this)
+	// The CSI controller will get creation time from VolumeSnapshotContent annotations
+
+	return snapshot, nil
+}
+
+// parseSnapshotList parses RouterOS Btrfs subvolume output for multiple snapshots
+func parseSnapshotList(output string) ([]SnapshotInfo, error) {
+	var snapshots []SnapshotInfo
+
+	// Split by snapshot entries (each starts with a number)
+	entries := regexp.MustCompile(`(?m)^\s*\d+\s+`).Split(output, -1)
+
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+
+		snapshot, err := parseSnapshotInfo(entry)
+		if err != nil {
+			klog.V(4).Infof("Skipping unparseable snapshot entry: %v", err)
+			continue
+		}
+
+		// Only include snapshots with snap- prefix (filter at parse level)
+		if strings.HasPrefix(snapshot.Name, utils.SnapshotIDPrefix) {
+			snapshots = append(snapshots, *snapshot)
+		}
+	}
+
+	// Return empty slice (not nil) if no snapshots found
+	if snapshots == nil {
+		return []SnapshotInfo{}, nil
+	}
+
+	return snapshots, nil
+}

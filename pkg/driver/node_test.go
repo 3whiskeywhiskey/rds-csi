@@ -1244,8 +1244,8 @@ func TestNodeGetVolumeStats_VolumeConditionNeverNil(t *testing.T) {
 					metrics: observability.NewMetrics(),
 				}
 				return &NodeServer{
-					driver:       driver,
-					mounter:      &mockMounter{
+					driver: driver,
+					mounter: &mockMounter{
 						isLikelyMounted: true,
 					},
 					nodeID:       "test-node",

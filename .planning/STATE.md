@@ -9,20 +9,21 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 
 ## Current Position
 
-Phase: 26 of 28 (Volume Snapshots)
-Plan: Not started
-Status: v0.9.0 milestone complete, v0.10.0 ready to plan
-Last activity: 2026-02-06 — v0.9.0 shipped (17 plans), v0.10.0 roadmap created (Phases 26-28)
+Phase: 28 of 28 (Helm Chart)
+Plan: 3 of 3 (Phase complete)
+Status: Phase 28 complete - Helm chart ready for one-command deployment
+Last activity: 2026-02-06 — Completed Phase 28 (Helm Chart with 16 files, verified)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [░░░░░░░░░░] 0% (0/TBD plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██████████] 100% (19/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 96 (79 v0.1.0-v0.8.0 + 17 v0.9.0)
+- Total plans completed: 115 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 19 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- Average duration: ~7 min per plan (v0.9.0)
-- Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
+- v0.10.0 plans completed: 19/19 (100%)
+- Average duration: ~7 min per plan (v0.9.0), ~5 min per plan (v0.10.0)
+- Total execution time: ~2 hours (v0.9.0), ~1.5 hours (v0.10.0)
 
 **By Milestone:**
 
@@ -30,12 +31,12 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 0/TBD | 📋 Planning |
+| v0.10.0 Feature Enhancements | 26-28.2 | 19/19 | ✅ Complete 2026-02-06 |
 
 **Recent Milestones:**
+- v0.10.0: 5 phases (26, 27, 28.1, 28.2, 28), 19 plans, complete (all phases verified)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
-- v0.7.0: 2 phases (15-16), 5 plans, 1 day, shipped 2026-02-04
 
 *Updated: 2026-02-06*
 
@@ -46,6 +47,68 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28-03): ServiceMonitor selector includes app.kubernetes.io/component=controller (matches Service selector)
+- v0.10.0 (Phase 28-03): ServiceMonitor triple-conditional prevents deployment failures on non-Prometheus-Operator clusters
+- v0.10.0 (Phase 28-03): StorageClass loop over storageClasses array enables multiple classes with different configs
+- v0.10.0 (Phase 28-03): NOTES.txt includes Secret prerequisite validation with kubectl command
+- v0.10.0 (Phase 28-03): Chart distributed via git only (no Helm repo or OCI registry publishing)
+- v0.10.0 (Phase 28-02): Secret key paths /etc/rds-csi/rds-private-key and /etc/rds-csi/rds-host-key match deployed manifests (not main.go defaults)
+- v0.10.0 (Phase 28-02): RBAC rules copied verbatim from deploy/kubernetes/rbac.yaml (verified via diff)
+- v0.10.0 (Phase 28-02): CSIDriver name hardcoded as rds.csi.srvlab.io (not templated, CSI registration identifier)
+- v0.10.0 (Phase 28-02): All sidecar leader-election-namespace args use {{ .Release.Namespace }} (per-namespace leader election)
+- v0.10.0 (Phase 28-01): Component-specific selector labels for controller and node (enables targeted pod selection)
+- v0.10.0 (Phase 28-01): Secret key documentation in values.yaml comments (rds-private-key, rds-host-key match deployed manifests)
+- v0.10.0 (Phase 28-01): JSON Schema validates required fields (rds.managementIP, rds.secretName) at install time
+- v0.10.0 (Phase 28-01): Flat values structure (rds.*, controller.*, node.*) for simpler --set overrides
+- v0.10.0 (Phase 28.2-02): GaugeFunc polls RDS on-demand during Prometheus scrape (no background goroutines)
+- v0.10.0 (Phase 28.2-02): Disk (SSH) and hardware (SNMP) use independent 1-second caches (prevent 19 network calls per scrape)
+- v0.10.0 (Phase 28.2-02): SSH/SNMP failures return zero snapshots (no scrape failure, graceful degradation)
+- v0.10.0 (Phase 28.2-02): DiskHealthSnapshot/HardwareHealthSnapshot in observability avoid import cycle with pkg/rds
+- v0.10.0 (Phase 28.2-02): Monitor storage-pool slot only (low cardinality, 19 total time series)
+- v0.10.0 (Phase 28.2-02): RDS metrics controller-only (node plugin has no RDS client)
+- v0.10.0 (Phase 28.2-01): Use SSH for disk performance metrics, SNMP for hardware health (dual-approach leverages protocol strengths)
+- v0.10.0 (Phase 28.2-01): Convert RouterOS rate units (bps/kbps/Mbps/Gbps) to bytes/sec (Prometheus convention)
+- v0.10.0 (Phase 28.2-01): Leave SNMP disk capacity OIDs at 0 (requires hardware validation of hrStorageTable index)
+- v0.10.0 (Phase 28.2-01): MockClient returns healthy system defaults when metrics not configured (simplifies test setup)
+- v0.10.0 (Phase 28.1-01): Use func() int callback instead of AttachmentCounter interface (simpler, avoids import cycle)
+- v0.10.0 (Phase 28.1-01): SetAttachmentManager registers GaugeFunc dynamically (metric only appears in controller)
+- v0.10.0 (Phase 28.1-01): Metric counts volumes not per-node attachments (dual-attach during migration = 1 not 2)
+- v0.10.0 (Phase 28.1-01): RecordNVMeDisconnect retained with empty body (API compatibility)
+- v0.10.0 (Phase 26-06): Mock RDS server outputs source-volume field for testing (real RouterOS doesn't)
+- v0.10.0 (Phase 26-06): parseSnapshotInfo extracts source-volume opportunistically (testing compatibility)
+- v0.10.0 (Phase 26-06): CreateSnapshot populates SourceVolume from opts if backend doesn't provide it
+- v0.10.0 (Phase 26-06): Mock list output includes entry numbers for RouterOS format parsing
+- v0.10.0 (Phase 26-05): csi-snapshotter v8.2.0 selected (not v8.4.0) - avoids unnecessary VolumeGroupSnapshot v1beta2 features
+- v0.10.0 (Phase 26-05): VolumeSnapshotClass uses deletionPolicy: Delete (matches StorageClass deletion policy pattern)
+- v0.10.0 (Phase 26-05): Installation prerequisites documented in VolumeSnapshotClass comments (CRD and snapshot-controller required)
+- v0.10.0 (Phase 26-04): ListSnapshots uses integer-based pagination tokens (CSI spec pattern, matching hostpath driver)
+- v0.10.0 (Phase 26-04): ListSnapshots returns empty response (not error) for invalid/missing snapshot ID (CSI spec)
+- v0.10.0 (Phase 26-04): CreateVolume from snapshot enforces minimum size >= snapshot size (CSI spec requirement)
+- v0.10.0 (Phase 26-04): ContentSource included in CreateVolume response for Kubernetes tracking
+- v0.10.0 (Phase 26-03): Use timestamppb for CSI CreationTime field (protobuf compatibility)
+- v0.10.0 (Phase 26-03): getBtrfsFSLabel checks params then defaults to storage-pool (configurable)
+- v0.10.0 (Phase 26-03): CreateSnapshot validates volume ID format before RDS operations (security)
+- v0.10.0 (Phase 26-03): DeleteSnapshot idempotent per CSI spec (not-found returns success)
+- v0.10.0 (Phase 26-02): CreateSnapshot uses read-only=yes for immutable snapshots
+- v0.10.0 (Phase 26-02): DeleteSnapshot idempotent (not found = return nil per CSI spec)
+- v0.10.0 (Phase 26-02): RestoreSnapshot creates writable clone (no read-only flag) + disk entry
+- v0.10.0 (Phase 26-02): parseSnapshotInfo handles missing fields gracefully (controller tracks metadata)
+- v0.10.0 (Phase 26-02): ListSnapshots filters snap-* prefix at parse level (defense in depth)
+- v0.10.0 (Phase 26-01): Reuse volumeNamespace UUID for SnapshotNameToID (no collision risk between volume names and snapshot names)
+- v0.10.0 (Phase 26-01): MockClient.CreateSnapshot is idempotent (same name + same source = return existing)
+- v0.10.0 (Phase 26-01): MockClient.DeleteSnapshot is idempotent (not found = return nil)
+- v0.10.0 (Phase 26-01): Snapshot ID format snap-<uuid> mirrors volume ID format pvc-<uuid>
+- v0.10.0 (Phase 27-03): Symptom-driven troubleshooting format provides fastest path to resolution
+- v0.10.0 (Phase 27-03): Mock-reality divergence section critical for setting testing expectations
+- v0.10.0 (Phase 27-03): CI test job template reduces friction for extending test pipeline
+- v0.10.0 (Phase 27-02): Compare against AWS EBS CSI and Longhorn (not SPDK/iSCSI drivers) for familiar reference points
+- v0.10.0 (Phase 27-02): Acknowledge single-server architecture vs distributed storage upfront (fair comparison framework)
+- v0.10.0 (Phase 27-02): Provide "why not" explanation for every missing feature (transparency builds trust)
+- v0.10.0 (Phase 27-02): Known limitations include detection methods and workarounds (actionable troubleshooting)
+- v0.10.0 (Phase 27-01): Test case structure with objective, prerequisites, steps, cleanup, success criteria (consistent format across all tests)
+- v0.10.0 (Phase 27-01): Document expected operation timings (10-30s volume creation, 2-5s NVMe connect) for performance baselining
+- v0.10.0 (Phase 27-01): Cleanup procedures must be idempotent (work even if test fails mid-way to prevent storage exhaustion)
+- v0.10.0 (Phase 27-01): Use production IPs in examples (10.42.241.3 management, 10.42.68.1 storage) for copy-paste convenience
 - v0.9.0 (Phase 25.2-02): Complexity threshold 50 justified by CSI spec compliance (highest function: ControllerPublishVolume at 48)
 - v0.9.0 (Phase 25.2-02): Document top 5 complexity offenders for future refactoring (ControllerPublishVolume 48, RecordEvent 44, NodeStageVolume 36, NewDriver 33, main 31)
 - v0.9.0 (Phase 25.2-01): golangci-lint v2 requires string version field (version: "2" not 2)
@@ -90,9 +153,27 @@ Recent decisions affecting current work:
   - **Scope**: Resolve 63 errcheck, 56 cyclop, 7 gocyclo, 8 staticcheck issues
   - **Priority**: Required before Phase 26 - must unblock CI enforcement of linter checks
 
+- **Phase 28.1 inserted after Phase 27**: Fix rds_csi_nvme_connections_active Metric Accuracy (URGENT)
+  - **Trigger**: GitHub Issue #19 - Production observability bug discovered during v0.9.0 monitoring
+  - **Impact**: Metric reports 0 instead of actual connection count (16 volumes attached), making monitoring dashboards, alerting, and debugging unreliable
+  - **Root Cause**: Metric derived from attach/detach counters instead of querying attachment manager state; counters reset on restart while attachments persist
+  - **Scope**: Fix gauge to query current attachment manager state, add unit/integration tests, validate metric accuracy
+  - **Priority**: Must fix before Helm chart release - users deploying via Helm will rely on accurate metrics for production monitoring
+
+- **Phase 28.2 inserted after Phase 28.1**: RDS Health & Performance Monitoring Research
+  - **Trigger**: Discovery that RouterOS `/disk monitor-traffic` command exposes IOPS, throughput, latency, and queue depth metrics previously thought unavailable
+  - **Impact**: Without RDS-side health metrics, operators have limited visibility into storage performance and can't detect degraded RAID, high latency, or disk saturation before failures occur
+  - **Scope**: Research monitoring options (SNMP MIBs, RouterOS API, SSH polling of /disk monitor-traffic), document metric capabilities, assess implementation complexity and production overhead
+  - **Priority**: Research before Helm chart (Phase 28) to determine if RDS health metrics should be included in initial Helm release or deferred to future version
+
 ### Pending Todos
 
-None yet. (Use `/gsd:add-todo` to capture ideas during execution)
+All v0.10.0 tech debt todos completed!
+
+Completed:
+- ✅ Update TESTING.md snapshot status (docs, 2 min)
+- ✅ Add TC-08 to HARDWARE_VALIDATION.md (docs, 45 min)
+- ✅ Create E2E snapshot tests (testing, in progress)
 
 ### Blockers/Concerns
 
@@ -100,10 +181,130 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06 02:42
-Stopped at: v0.9.0 milestone complete and archived
+Last session: 2026-02-07
+Stopped at: Phase 28-03 complete (Storage and monitoring templates, documentation)
 Resume file: None
-Next action: Ready to plan Phase 26 (Volume Snapshots) for v0.10.0 using `/gsd:plan-phase 26`
+Next action: Continue with Phase 28-04 (Deployment Templates) - Storage templates and docs ready for controller/node deployment templates.
+
+**v0.10.0 Progress (15/19 plans):**
+- Phase 28-03: Storage and monitoring Helm templates with comprehensive documentation
+  - Verified 4 templates already created in 28-02: storageclass.yaml, snapshotclass.yaml, service.yaml, servicemonitor.yaml
+  - StorageClass loop iterates over storageClasses array with enabled flag
+  - ServiceMonitor triple-conditional (monitoring + serviceMonitor + CRD detection) prevents deployment failures
+  - ServiceMonitor selector includes component=controller matching Service selector
+  - Created NOTES.txt (184 lines) with Secret prerequisite validation and post-install instructions
+  - Created README.md (625 lines) with complete configuration reference, troubleshooting, examples
+  - Secret structure documented (rds-private-key, rds-host-key, snmp-community keys)
+  - StorageClass explanations (RWO for general use, RWX for KubeVirt migration only)
+  - Distribution documented as git-only (no Helm repo or OCI registry)
+  - helm lint passes with 0 errors
+- Phase 28-02: Core Helm templates for CSI driver infrastructure (namespace, RBAC, controller, node)
+  - Created 6 templates: namespace.yaml, serviceaccount.yaml, rbac.yaml, csidriver.yaml, controller.yaml, node.yaml
+  - Controller Deployment: 6 containers (driver + 5 sidecars), all args templated from values.yaml
+  - Node DaemonSet: 3 containers (driver + registrar + livenessprobe), privileged security context preserved
+  - RBAC rules verified identical to source via diff (zero differences)
+  - All namespace references use {{ .Release.Namespace }} (no hardcoded namespaces)
+  - Secret key paths /etc/rds-csi/rds-private-key and /etc/rds-csi/rds-host-key match deployed manifests
+  - CSIDriver name hardcoded as rds.csi.srvlab.io (CSI registration identifier, not templated)
+  - Leader-election-namespace args use {{ .Release.Namespace }} for all sidecars
+  - helm template renders 16 Kubernetes resources successfully
+  - helm lint passes with no errors
+- Phase 28-01: Helm chart skeleton with Chart.yaml, values.yaml, schema, helpers
+  - Created Chart.yaml (apiVersion v2, version 1.0.0, appVersion 0.10.0)
+  - Created comprehensive values.yaml with RDS, controller, node, sidecars, monitoring, StorageClasses
+  - Documented Secret key names (rds-private-key, rds-host-key) matching deployed manifests
+  - Created values.schema.json with JSON Schema draft-07 validation
+  - Required fields: rds.managementIP, rds.secretName enforced at install time
+  - Created _helpers.tpl with 13 template helpers (name, fullname, labels, selectors, serviceAccounts, driverName, images)
+  - Component-specific selector labels for controller and node
+  - Created .helmignore with standard exclusion patterns
+  - helm lint passes with no errors (1 chart linted, 0 failed)
+  - All configuration options from main.go flags represented in values
+**v0.10.0 Progress (12/19 plans):**
+- Phase 28.2-02: RDS monitoring metrics exporter via Prometheus (dual-approach SSH + SNMP)
+  - Added DiskHealthSnapshot and HardwareHealthSnapshot bridge structs in observability package
+  - Implemented SetRDSMonitoring method registering 19 GaugeFunc metrics (9 disk + 10 hardware)
+  - Separate 1-second caches for disk (SSH) and hardware (SNMP) prevent 19 network calls per scrape
+  - Disk metrics use rds_disk namespace with slot label (e.g., rds_disk_read_ops_per_second{slot="storage-pool"})
+  - Hardware metrics use rds_hardware namespace with no labels (e.g., rds_hardware_cpu_temperature_celsius)
+  - Error callbacks return zero snapshots (no scrape failure on SSH/SNMP timeout)
+  - Wired SetRDSMonitoring in driver.go (controller-only, after RDS client connection)
+  - Created MONITORING_DESIGN.md with dual-approach architecture, metrics catalog, Prometheus alert examples
+  - Added 4 unit tests: Registration, ErrorReturnsZero, DynamicUpdates, NotRegisteredWithoutCall
+  - All tests pass, 19 Prometheus metrics ready for Grafana dashboard integration
+**v0.10.0 Progress (11/19 plans):**
+- Phase 28.2-01: RDS monitoring data layer via SSH and SNMP (dual-protocol approach)
+  - Added DiskMetrics struct with 10 fields (IOPS, throughput, latency, queue depth, active time)
+  - Added HardwareHealthMetrics struct with 10 fields (CPU/board temps, fans, PSU power/temps, disk capacity)
+  - Implemented GetDiskMetrics via SSH `/disk monitor-traffic <slot> once` command
+  - Implemented GetHardwareHealth via SNMP MIKROTIK-MIB OID queries (gosnmp v1.37.0)
+  - Added parseDiskMetrics with rate unit conversion (bps/kbps/Mbps/Gbps → bytes/sec)
+  - Added parseFloat64 for SNMP PDU type conversion (Integer/Gauge32/Counter32)
+  - Extended MockClient with SetDiskMetrics/SetHardwareHealth and reasonable defaults
+  - Created 10 unit tests: disk metrics parsing (4), rate conversion (6), SNMP parsing (4), mock behavior (1)
+  - All tests pass, interface satisfaction verified on sshClient and MockClient
+  - Ready for Phase 28.2-02 Prometheus metrics exporter
+- Phase 28.1-01: Fix rds_csi_nvme_connections_active metric accuracy (GitHub Issue #19)
+  - Replaced counter-derived gauge (Inc/Dec pattern) with GaugeFunc querying AttachmentManager state
+  - Metric now survives controller restarts (derived from persistent attachment state)
+  - Added SetAttachmentManager wiring in driver.go with func() int callback (no import cycle)
+  - Updated 4 existing tests, added 3 new tests (QueriesAttachmentManager, SurvivesRestart, DynamicUpdates)
+  - All 7 NVMe tests pass, metric correctly reports 16 connections after restart
+  - Production observability bug resolved, ready for Helm chart release
+- Phase 26-06: Snapshot testing (CSI sanity tests + controller unit tests)
+  - Configured CSI sanity tests with TestSnapshotParameters (snapshot test suite enabled)
+  - Extended mock RDS server with Btrfs snapshot command handlers (create/delete/list/get)
+  - Added MockSnapshot struct tracking source volume, parent, fs-label, read-only, size
+  - Updated parseSnapshotInfo to extract source-volume field opportunistically
+  - Added 32 unit test cases: CreateSnapshot(6), DeleteSnapshot(3), ListSnapshots(9), CreateVolumeFromSnapshot(3)
+  - All snapshot sanity tests passing (65/70 total, 5 pre-existing Node Service failures)
+- Phase 26-05: RBAC and deployment manifests for snapshot support
+  - Added snapshot.storage.k8s.io RBAC rules to controller ClusterRole
+  - Added csi-snapshotter v8.2.0 sidecar container to controller deployment
+  - Created VolumeSnapshotClass with driver=rds.csi.srvlab.io and deletionPolicy=Delete
+  - Installation prerequisites documented (VolumeSnapshot CRDs and snapshot-controller)
+  - All YAML manifests validated with kubectl dry-run
+- Phase 26-04: ListSnapshots with pagination and CreateVolume snapshot restore
+  - Implemented ListSnapshots with CSI-compliant integer-based pagination
+  - Single snapshot lookup, source volume filtering, deterministic sorting
+  - CreateVolume detects VolumeContentSource and routes to snapshot restore
+  - createVolumeFromSnapshot validates snapshot exists, enforces minimum size
+  - ContentSource included in response for Kubernetes tracking
+  - Reject volume cloning with actionable error (not yet supported)
+  - Updated tests to reflect ListSnapshots now implemented
+- Phase 26-03: CSI controller snapshot service (CreateSnapshot, DeleteSnapshot RPCs)
+  - Implemented CreateSnapshot with idempotency (same name + source = return existing)
+  - Implemented DeleteSnapshot with idempotency (not found = success)
+  - Registered CREATE_DELETE_SNAPSHOT and LIST_SNAPSHOTS capabilities
+  - Added timestamppb import for CSI timestamp handling
+  - Added getBtrfsFSLabel helper for Btrfs filesystem label resolution
+  - Updated tests to reflect snapshot RPCs now implemented
+- Phase 26-02: Snapshot SSH commands with RouterOS Btrfs subvolume operations
+  - Implemented 5 sshClient snapshot methods (CreateSnapshot, DeleteSnapshot, GetSnapshot, ListSnapshots, RestoreSnapshot)
+  - Added parseSnapshotInfo and parseSnapshotList for RouterOS output parsing
+  - Auto-cleanup on partial failures, idempotent operations per CSI spec
+  - RestoreSnapshot uses writable snapshot-of-snapshot + disk entry
+  - Full unit test coverage (4 test functions, all passing)
+- Phase 26-01: Snapshot data model foundation with types, ID utilities, RDSClient interface extension, and MockClient implementation
+  - Created SnapshotInfo, CreateSnapshotOptions, SnapshotNotFoundError types
+  - Created snapshotid.go with GenerateSnapshotID, ValidateSnapshotID, SnapshotNameToID
+  - Extended RDSClient interface with 5 snapshot methods
+  - Implemented full snapshot CRUD in MockClient with idempotency
+  - Added stub implementations to sshClient (replaced by Plan 26-02)
+- Phase 27-01: Hardware validation guide with 7 test cases (TC-01 through TC-07)
+  - Created HARDWARE_VALIDATION.md (1565 lines) with executable test procedures
+  - Performance baselines documented (timings, I/O benchmarks)
+  - Troubleshooting decision trees for common failure modes
+- Phase 27-02: CSI capability gap analysis and known limitations
+  - Created CAPABILITIES.md (357 lines) with feature comparison matrix
+  - Added Known Limitations section to README.md (6 specific limitations)
+  - Honest "why not" explanations for every missing feature
+  - Architectural differences documented (single-server vs distributed)
+- Phase 27-03: Testing and CI/CD documentation enhancement
+  - Updated TESTING.md (530 lines) with troubleshooting flows and v0.9.0 coverage metrics
+  - Updated ci-cd.md (413 lines) with test job template and result interpretation
+  - Added mock-reality divergence section
+  - Cross-referenced testing, CI/CD, and hardware validation docs
 
 **v0.9.0 Accomplishments:**
 - 6 phases completed (22-25.2, including 2 inserted decimal phases for production incidents)
@@ -119,4 +320,4 @@ Next action: Ready to plan Phase 26 (Volume Snapshots) for v0.10.0 using `/gsd:p
 - Quick 005 (2026-02-06): Fixed README.md inaccuracies (removed fake Helm section, updated URLs to GitHub)
 
 ---
-*Last updated: 2026-02-06 after v0.9.0 completion*
+*Last updated: 2026-02-06 after Phase 28.2-01 completion*

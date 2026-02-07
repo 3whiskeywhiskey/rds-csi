@@ -217,6 +217,45 @@ spec:
 
 See [docs/configuration.md](docs/configuration.md) for comprehensive configuration reference.
 
+## Known Limitations
+
+### RouterOS Version Compatibility
+**Requires:** RouterOS 7.1+ with ROSE Data Server feature enabled
+**Impact:** Cannot deploy on RouterOS 6.x, CHR (Cloud Hosted Router), or non-RDS RouterOS
+**Detection:** Controller logs "SSH connection failed" or unexpected command output
+**Workaround:** Ensure RDS hardware with RouterOS 7.16+ for full feature support
+
+### NVMe Device Timing Assumptions
+**Requires:** NVMe block device appears within 30 seconds of `nvme connect`
+**Impact:** On congested networks or heavily loaded RDS, NodeStageVolume may timeout
+**Detection:** Node plugin logs "timeout waiting for NVMe device" or pod stuck in ContainerCreating
+**Workaround:** Check network latency to RDS storage IP; restart node plugin pod if transient
+
+### Dual-IP Architecture
+**Recommended:** Separate management (SSH) and storage (NVMe/TCP) network interfaces
+**Impact:** Single-IP deployments work but SSH management traffic shares bandwidth with storage I/O
+**Detection:** Higher than expected I/O latency; management operations slow during heavy I/O
+**Workaround:** Configure `nvmeAddress` in StorageClass to use dedicated storage interface. Management via `rdsAddress` can use lower-bandwidth interface.
+
+### Single Controller Instance
+**Design:** One controller replica (no HA leader election)
+**Impact:** Brief volume provisioning unavailability during controller pod restarts (~10s)
+**Detection:** PVC stuck Pending during controller restart
+**Workaround:** Existing volumes remain accessible; only new provisioning/deletion is affected during restart
+
+### Access Mode Restrictions
+**Supported:** ReadWriteOnce (RWO) only
+**Impact:** Cannot mount a volume on multiple nodes simultaneously
+**Detection:** PVC with ReadWriteMany will fail to provision
+**Workaround:** Use one PVC per pod; for shared storage needs, consider alternative solutions
+
+### Volume Size Minimum
+**Minimum:** Volume size must be at least 1 GiB
+**Impact:** Requests below 1 GiB will be rounded up by the driver
+**Detection:** Created volume size may differ from requested size for sub-1GiB requests
+
+For a comprehensive comparison with other CSI drivers, see [Capabilities Analysis](docs/CAPABILITIES.md).
+
 ## Kubernetes Deployment
 
 ### Prerequisites
@@ -244,7 +283,9 @@ For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubern
 
 ## Documentation
 
+- **[Hardware Validation Guide](docs/HARDWARE_VALIDATION.md)** - Step-by-step test procedures for production RDS hardware
 - **[Kubernetes Setup Guide](docs/kubernetes-setup.md)** - Complete deployment guide
+- **[Capabilities & Comparison](docs/CAPABILITIES.md)** - Feature comparison with AWS EBS CSI and Longhorn
 - [Architecture](docs/architecture.md) - System design and component interactions
 - [RDS Commands Reference](docs/rds-commands.md) - RouterOS CLI commands used
 - [CI/CD Pipeline](docs/ci-cd.md) - Automated builds, releases, and versioning

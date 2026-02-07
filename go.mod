@@ -6,6 +6,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/google/uuid v1.6.0
+	github.com/gosnmp/gosnmp v1.37.0
 	github.com/kubernetes-csi/csi-test/v5 v5.4.0
 	github.com/moby/sys/mountinfo v0.7.2
 	github.com/onsi/ginkgo/v2 v2.22.0

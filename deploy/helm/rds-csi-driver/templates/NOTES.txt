@@ -1,0 +1,184 @@
+Thank you for installing {{ .Chart.Name }}.
+
+Your release is named {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+================================================================================
+IMPORTANT: Prerequisites Check
+================================================================================
+
+The RDS CSI driver requires a Kubernetes Secret containing SSH credentials.
+
+1. Verify the Secret exists:
+
+   kubectl get secret {{ .Values.rds.secretName }} -n {{ .Release.Namespace }}
+
+   WARNING: The controller will fail to start if the Secret does not exist.
+
+2. The Secret must contain these keys:
+   - rds-private-key: SSH private key for RouterOS CLI authentication
+   - rds-host-key: SSH host public key for host verification
+   - snmp-community: (optional) SNMP community string for hardware monitoring
+
+3. Create the Secret if it doesn't exist:
+
+   kubectl create secret generic {{ .Values.rds.secretName }} \
+     -n {{ .Release.Namespace }} \
+     --from-file=rds-private-key=/path/to/ssh-key \
+     --from-file=rds-host-key=/path/to/host-key
+
+   Example Secret YAML:
+
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: {{ .Values.rds.secretName }}
+     namespace: {{ .Release.Namespace }}
+   type: Opaque
+   data:
+     rds-private-key: <base64-encoded-ssh-private-key>
+     rds-host-key: <base64-encoded-ssh-host-key>
+     snmp-community: <base64-encoded-snmp-community>
+
+================================================================================
+Verify Deployment
+================================================================================
+
+1. Check controller pod status:
+
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/component=controller
+
+2. Check node plugin pods (should run on all nodes):
+
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/component=node
+
+3. Verify CSI driver registration:
+
+   kubectl get csidriver rds.csi.srvlab.io
+
+4. Check controller logs for connection status:
+
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=controller -c rds-csi-plugin
+
+================================================================================
+Available StorageClasses
+================================================================================
+{{- $hasStorageClass := false }}
+{{- range $idx, $sc := .Values.storageClasses }}
+{{- if $sc.enabled }}
+{{- $hasStorageClass = true }}
+- {{ $sc.name }}{{- if $sc.isDefault }} (default){{- end }}
+{{- end }}
+{{- end }}
+{{- if not $hasStorageClass }}
+WARNING: No StorageClasses are enabled. Enable at least one in values.yaml.
+{{- end }}
+
+To use a StorageClass in a PersistentVolumeClaim:
+
+  apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: my-pvc
+  spec:
+{{- range $idx, $sc := .Values.storageClasses }}
+{{- if $sc.enabled }}
+    storageClassName: {{ $sc.name }}
+{{- break }}
+{{- end }}
+{{- end }}
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+
+{{- if .Values.snapshotClass.enabled }}
+================================================================================
+Snapshot Support
+================================================================================
+
+VolumeSnapshotClass "{{ .Values.snapshotClass.name }}" has been created.
+
+IMPORTANT: Snapshot functionality requires:
+1. VolumeSnapshot CRDs to be installed cluster-wide
+2. snapshot-controller to be deployed
+
+To install snapshot CRDs:
+
+  kubectl kustomize https://github.com/kubernetes-csi/external-snapshotter/client/config/crd | kubectl create -f -
+
+To deploy snapshot-controller:
+
+  kubectl kustomize https://github.com/kubernetes-csi/external-snapshotter/deploy/kubernetes/snapshot-controller | kubectl create -f -
+
+To create a snapshot:
+
+  apiVersion: snapshot.storage.k8s.io/v1
+  kind: VolumeSnapshot
+  metadata:
+    name: my-snapshot
+  spec:
+    volumeSnapshotClassName: {{ .Values.snapshotClass.name }}
+    source:
+      persistentVolumeClaimName: my-pvc
+{{- end }}
+
+{{- if .Values.monitoring.enabled }}
+================================================================================
+Monitoring
+================================================================================
+
+Prometheus metrics are exposed on port {{ .Values.monitoring.port }}.
+
+To access metrics locally:
+
+  kubectl port-forward -n {{ .Release.Namespace }} \
+    svc/{{ include "rds-csi.fullname" . }}-metrics \
+    {{ .Values.monitoring.port }}:{{ .Values.monitoring.port }}
+
+Then visit: http://localhost:{{ .Values.monitoring.port }}/metrics
+
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+ServiceMonitor has been created for Prometheus Operator.
+{{- else }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+
+NOTE: ServiceMonitor is disabled. To enable Prometheus Operator integration:
+  - Install Prometheus Operator
+  - Set monitoring.serviceMonitor.enabled=true
+{{- end }}
+{{- end }}
+
+{{- if .Values.monitoring.rdsMonitoring.enabled }}
+RDS health and performance monitoring is enabled.
+Metrics include disk IOPS, throughput, latency, and hardware health.
+{{- end }}
+{{- end }}
+
+{{- if .Release.IsUpgrade }}
+================================================================================
+Upgrade Notice
+================================================================================
+
+You are upgrading {{ .Chart.Name }} from a previous release.
+
+IMPORTANT: When upgrading, avoid using --reuse-values as it can skip new
+required configuration. Instead, use --reset-then-reuse-values or provide
+a full values.yaml file.
+
+Check for breaking changes in the release notes:
+https://github.com/3whiskeywhiskey/rds-csi/releases
+{{- end }}
+
+================================================================================
+Documentation
+================================================================================
+
+For more information, visit:
+https://github.com/3whiskeywhiskey/rds-csi
+
+To view all configuration options:
+
+  helm show values deploy/helm/rds-csi-driver/
+
+================================================================================

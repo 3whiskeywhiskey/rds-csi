@@ -30,6 +30,17 @@ type RDSClient interface {
 
 	// GetAddress returns the RDS server address (for logging/debugging)
 	GetAddress() string
+
+	// Snapshot operations
+	CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, error)
+	DeleteSnapshot(snapshotID string) error
+	GetSnapshot(snapshotID string) (*SnapshotInfo, error)
+	ListSnapshots() ([]SnapshotInfo, error)
+	RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolumeOptions) error
+
+	// Monitoring operations
+	GetDiskMetrics(slot string) (*DiskMetrics, error)
+	GetHardwareHealth(snmpHost string, snmpCommunity string) (*HardwareHealthMetrics, error)
 }
 
 // ClientConfig holds configuration for creating an RDS client

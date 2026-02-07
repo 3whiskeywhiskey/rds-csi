@@ -230,6 +230,95 @@ All images are built for multiple architectures using Docker Buildx:
 - `linux/amd64` - Intel/AMD 64-bit
 - `linux/arm64` - ARM 64-bit (Apple Silicon, ARM servers)
 
+## Adding a New Test Job
+
+When you add a new test type that should gate merges, add a job to `.github/workflows/pr.yml`.
+
+### Template
+
+```yaml
+  new-test-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run tests
+        run: make test-new-type
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-test-logs
+          path: /tmp/test-output/
+```
+
+### Checklist for New Test Jobs
+
+1. **Makefile target**: Add `test-new-type` target in Makefile before adding CI job
+2. **Local verification**: Ensure `make test-new-type` passes locally
+3. **Timeout**: Set job timeout (default: 10 minutes; extend for integration tests)
+4. **Artifacts**: Always upload logs on failure for debugging
+5. **Dependencies**: If test needs tools (nvme-cli, etc.), install in a setup step
+6. **PR scope**: Run on all PRs (not just main) for early feedback
+
+### Decision Guide
+
+| Question | Yes | No |
+|----------|-----|-----|
+| Does it test spec compliance? | Run on all PRs | - |
+| Does it need real hardware? | Manual only, don't add to CI | Run in CI |
+| Does it take >10 minutes? | Consider running only on main | Run on all PRs |
+| Does it test new capability? | Add as separate job (parallel) | Add to existing test job |
+
+## Interpreting Test Results
+
+When a CI job fails, use this guide to understand what went wrong and how to fix it.
+
+### verify job
+**What it tests:** Code formatting, static analysis, linting, unit tests, integration tests
+**Common failure patterns:**
+
+| Pattern | Cause | Fix |
+|---------|-------|-----|
+| `golangci-lint errors found` | New code violates linter rules | Run `make lint` locally, fix reported issues |
+| `FAIL: TestXxx` | Unit test failure | Run `make test` locally, check specific test |
+| `gofmt -d` shows diff | Code not formatted | Run `make fmt` |
+| `go vet` findings | Suspicious code patterns | Address vet warnings |
+
+### sanity-tests job
+**What it tests:** CSI specification compliance using official csi-test package
+**Common failure patterns:**
+
+| Pattern | Cause | Fix |
+|---------|-------|-----|
+| `idempotency check failed` | CreateVolume/DeleteVolume not idempotent | Check volume name handling for duplicate requests |
+| `capability not supported` | Driver reports capability but doesn't implement it | Update GetCapabilities or implement the RPC |
+| `unexpected error code` | Wrong gRPC status code returned | Check CSI spec for required error codes per RPC |
+
+**Debugging:** Download `sanity-test-logs` artifact from failed run for full output.
+
+### e2e job
+**What it tests:** Full-stack driver behavior with mock RDS
+**Common failure patterns:**
+
+| Pattern | Cause | Fix |
+|---------|-------|-----|
+| `Ginkgo timed out` | Eventually/Consistently timeout too short | Increase timeout in test, or check for deadlock |
+| `expected volume to be bound` | Volume provisioning failed in mock | Check mock RDS state, verify CreateVolume logic |
+| `block volume test failed` | Block volume capability issue | Verify BLOCK_VOLUME capability in driver |
+
+### build-test job
+**What it tests:** Docker image builds correctly for linux/amd64 and linux/arm64
+**Common failure patterns:**
+
+| Pattern | Cause | Fix |
+|---------|-------|-----|
+| `go build failed` | Compilation error | Fix build errors, ensure `make build` works locally |
+| `docker buildx failed` | Dockerfile issue | Test with `make docker` locally |
+
 ## Troubleshooting
 
 ### Release Not Created
@@ -317,3 +406,8 @@ Potential improvements to the CI/CD pipeline:
 - [ ] Create Gitea mirror and Actions compatibility
 - [ ] Add artifact signing with Sigstore/cosign
 - [ ] Implement SBOM (Software Bill of Materials) generation
+
+## Related Documentation
+
+- [Testing Guide](TESTING.md) - How to run tests locally and contribute new tests
+- [Hardware Validation](HARDWARE_VALIDATION.md) - Manual testing procedures for production hardware

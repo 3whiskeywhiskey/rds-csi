@@ -51,3 +51,57 @@ type VolumeNotFoundError struct {
 func (e *VolumeNotFoundError) Error() string {
 	return fmt.Sprintf("volume not found: %s", e.Slot)
 }
+
+// SnapshotInfo represents an RDS Btrfs snapshot
+type SnapshotInfo struct {
+	Name          string    // Snapshot name (snap-<uuid>)
+	SourceVolume  string    // Source volume slot (pvc-<uuid>)
+	FileSizeBytes int64     // Size of snapshot (same as source volume)
+	CreatedAt     time.Time // Creation timestamp
+	ReadOnly      bool      // Should always be true for snapshots
+	FSLabel       string    // Btrfs filesystem label
+}
+
+// CreateSnapshotOptions contains parameters for creating a snapshot
+type CreateSnapshotOptions struct {
+	Name         string // snap-<uuid>
+	SourceVolume string // pvc-<uuid> (parent subvolume)
+	FSLabel      string // Btrfs filesystem label
+}
+
+// SnapshotNotFoundError is returned when a snapshot is not found
+type SnapshotNotFoundError struct {
+	Name string
+}
+
+func (e *SnapshotNotFoundError) Error() string {
+	return fmt.Sprintf("snapshot not found: %s", e.Name)
+}
+
+// DiskMetrics represents real-time disk performance metrics from /disk monitor-traffic
+type DiskMetrics struct {
+	Slot              string  // Disk slot name (e.g., "storage-pool")
+	ReadOpsPerSecond  float64 // Current read IOPS
+	WriteOpsPerSecond float64 // Current write IOPS
+	ReadBytesPerSec   float64 // Read throughput in bytes/sec (converted from bps)
+	WriteBytesPerSec  float64 // Write throughput in bytes/sec (converted from bps)
+	ReadTimeMs        float64 // Read latency in milliseconds
+	WriteTimeMs       float64 // Write latency in milliseconds
+	WaitTimeMs        float64 // Wait/queue latency in milliseconds
+	InFlightOps       float64 // Current queue depth (in-flight operations)
+	ActiveTimeMs      float64 // Disk active/busy time in milliseconds
+}
+
+// HardwareHealthMetrics represents hardware health status from SNMP
+type HardwareHealthMetrics struct {
+	CPUTemperature    float64 // CPU temperature in Celsius
+	BoardTemperature  float64 // Board temperature in Celsius
+	Fan1Speed         float64 // Fan 1 RPM
+	Fan2Speed         float64 // Fan 2 RPM
+	PSU1Power         float64 // PSU 1 power draw in watts
+	PSU2Power         float64 // PSU 2 power draw in watts
+	PSU1Temperature   float64 // PSU 1 temperature in Celsius
+	PSU2Temperature   float64 // PSU 2 temperature in Celsius
+	DiskPoolSizeBytes float64 // RAID6 pool total size in bytes
+	DiskPoolUsedBytes float64 // RAID6 pool used space in bytes
+}

@@ -1,0 +1,183 @@
+---
+# Node DaemonSet - runs on all worker nodes
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-node
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+spec:
+  selector:
+    matchLabels:
+      {{- include "rds-csi.nodeSelectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        {{- include "rds-csi.nodeSelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "rds-csi.nodeServiceAccountName" . }}
+      hostNetwork: true  # Required for NVMe/TCP connections
+      dnsPolicy: ClusterFirstWithHostNet
+      priorityClassName: {{ .Values.node.priorityClassName }}
+
+      # Allow extra time for volume cleanup before SIGKILL
+      terminationGracePeriodSeconds: {{ .Values.node.terminationGracePeriodSeconds }}
+
+      # SECURITY: Add seccomp profile for syscall filtering
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+
+      {{- with .Values.node.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.node.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        # RDS CSI Driver Node
+        - name: rds-csi-driver
+          image: {{ include "rds-csi.nodeImage" . }}
+          imagePullPolicy: {{ .Values.node.image.pullPolicy }}
+          args:
+            - "-endpoint=$(CSI_ENDPOINT)"
+            - "-node-id=$(NODE_ID)"
+            - "-node"
+            - "-v={{ .Values.node.logLevel }}"
+            {{- if .Values.monitoring.enabled }}
+            - "-metrics-address=:{{ .Values.monitoring.port }}"
+            {{- end }}
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # NQN prefix for volume filtering - REQUIRED for safety
+            - name: CSI_MANAGED_NQN_PREFIX
+              value: {{ .Values.rds.nqnPrefix | quote }}
+          securityContext:
+            # SECURITY NOTE: CSI node plugins require privileged mode
+            # Reason: Bidirectional mount propagation is a hard Kubernetes requirement
+            # for CSI drivers (mounts inside container must be visible to kubelet/host)
+            # We minimize impact by:
+            # - Keeping readOnlyRootFilesystem: true
+            # - Running in dedicated namespace with Pod Security Standard
+            # - Using specific writable volume mounts only where needed
+            privileged: true
+            readOnlyRootFilesystem: true
+            runAsUser: 0  # Required for mount/NVMe operations
+          volumeMounts:
+            # CSI socket directory
+            - name: plugin-dir
+              mountPath: /csi
+
+            # Kubelet directories for volume staging and publishing
+            - name: pods-mount-dir
+              mountPath: {{ .Values.node.kubeletPath }}
+              mountPropagation: Bidirectional
+
+            # Device directory for NVMe devices
+            - name: device-dir
+              mountPath: /dev
+
+            # Sys directory for NVMe device discovery
+            - name: sys-dir
+              mountPath: /sys
+              mountPropagation: HostToContainer
+
+            # SECURITY: Writable volumes for readOnlyRootFilesystem
+            - name: tmp
+              mountPath: /tmp
+            - name: var-run
+              mountPath: /var/run
+
+          resources:
+            {{- toYaml .Values.node.resources | nindent 12 }}
+
+        # CSI node-driver-registrar sidecar
+        - name: node-driver-registrar
+          image: "{{ .Values.node.registrar.image.repository }}:{{ .Values.node.registrar.image.tag }}"
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
+            - "--v=5"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: DRIVER_REG_SOCK_PATH
+              value: {{ .Values.node.kubeletPath }}/plugins/{{ include "rds-csi.driverName" . }}/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          resources:
+            {{- toYaml .Values.node.registrar.resources | nindent 12 }}
+
+        # CSI livenessprobe sidecar
+        - name: liveness-probe
+          image: "{{ .Values.node.livenessProbe.image.repository }}:{{ .Values.node.livenessProbe.image.tag }}"
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+          resources:
+            {{- toYaml .Values.node.livenessProbe.resources | nindent 12 }}
+
+      volumes:
+        # Plugin directory for CSI socket
+        - name: plugin-dir
+          hostPath:
+            path: {{ .Values.node.kubeletPath }}/plugins/{{ include "rds-csi.driverName" . }}/
+            type: DirectoryOrCreate
+
+        # Registration directory for kubelet
+        - name: registration-dir
+          hostPath:
+            path: {{ .Values.node.kubeletPath }}/plugins_registry/
+            type: Directory
+
+        # Kubelet pods directory
+        - name: pods-mount-dir
+          hostPath:
+            path: {{ .Values.node.kubeletPath }}
+            type: Directory
+
+        # Device directory for NVMe devices
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+
+        # Sys directory for NVMe device discovery
+        - name: sys-dir
+          hostPath:
+            path: /sys
+            type: Directory
+
+        # SECURITY: Writable volumes for readOnlyRootFilesystem
+        - name: tmp
+          emptyDir: {}
+        - name: var-run
+          emptyDir: {}
