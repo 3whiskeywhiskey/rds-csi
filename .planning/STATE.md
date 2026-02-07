@@ -168,17 +168,13 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-3 todos pending (v0.10.0 tech debt cleanup):
+2 todos pending (v0.10.0 tech debt cleanup):
 
-1. **Update TESTING.md snapshot status** (docs, 5 min)
-   - Fix line 145: Change Phase 26 status from "Deferred" to "✓ Phase 26 (v0.10.0)"
-   - File: docs/TESTING.md:145
-
-2. **Add snapshot test case to HARDWARE_VALIDATION.md** (docs, 1-2 hours)
+1. **Add snapshot test case to HARDWARE_VALIDATION.md** (docs, 1-2 hours)
    - Add TC-08 for snapshot create/restore/delete validation
    - File: docs/HARDWARE_VALIDATION.md:80
 
-3. **Create E2E snapshot tests** (testing, 4-6 hours, nice-to-have)
+2. **Create E2E snapshot tests** (testing, 4-6 hours, nice-to-have)
    - test/e2e/snapshot_test.go for real RDS hardware validation
    - Deferred based on production feedback
 
