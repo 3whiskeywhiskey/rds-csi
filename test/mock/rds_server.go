@@ -185,6 +185,25 @@ func (s *MockRDSServer) ListFiles() []*MockFile {
 	return files
 }
 
+// GetSnapshot returns a snapshot by name
+func (s *MockRDSServer) GetSnapshot(name string) (*MockSnapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap, ok := s.snapshots[name]
+	return snap, ok
+}
+
+// ListSnapshots returns all snapshots
+func (s *MockRDSServer) ListSnapshots() []*MockSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshots := make([]*MockSnapshot, 0, len(s.snapshots))
+	for _, snap := range s.snapshots {
+		snapshots = append(snapshots, snap)
+	}
+	return snapshots
+}
+
 // CreateOrphanedFile creates a file without a corresponding disk object (for testing)
 func (s *MockRDSServer) CreateOrphanedFile(path string, sizeBytes int64) {
 	s.mu.Lock()
