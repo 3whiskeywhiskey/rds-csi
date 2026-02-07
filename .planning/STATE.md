@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 
 ## Current Position
 
-Phase: 28.2 of 28 (RDS Health & Performance Monitoring Research)
-Plan: 2 of 2 (Phase complete)
-Status: Phase 28.2 complete - RDS monitoring metrics exporter ready
-Last activity: 2026-02-06 — Completed 28.2-02-PLAN.md (Prometheus metrics exporter with dual-approach monitoring)
+Phase: 28 of 28 (Helm Chart)
+Plan: 1 of 7 (In progress)
+Status: Phase 28 in progress - Helm chart skeleton complete
+Last activity: 2026-02-07 — Completed 28-01-PLAN.md (Helm chart foundation with values, schema, helpers)
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [███████████] 63.2% (12/19 plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [████████████] 68.4% (13/19 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 108 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 12 v0.10.0)
+- Total plans completed: 109 (79 v0.1.0-v0.8.0 + 17 v0.9.0 + 13 v0.10.0)
 - v0.9.0 plans completed: 17/17 (100%)
-- v0.10.0 plans completed: 12/19 (63.2%)
-- Average duration: ~7 min per plan (v0.9.0), ~7 min per plan (v0.10.0 so far)
+- v0.10.0 plans completed: 13/19 (68.4%)
+- Average duration: ~7 min per plan (v0.9.0), ~6 min per plan (v0.10.0 so far)
 - Total execution time: ~2 hours (v0.9.0 execution, 92 days calendar)
 
 **By Milestone:**
@@ -31,14 +31,14 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 |-----------|--------|-------|--------|
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
-| v0.10.0 Feature Enhancements | 26-28 | 11/19 | 🚧 In Progress |
+| v0.10.0 Feature Enhancements | 26-28 | 13/19 | 🚧 In Progress |
 
 **Recent Milestones:**
-- v0.10.0: 5 phases (26-28.2), 12/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete)
+- v0.10.0: 5 phases (26-28.2), 13/19 plans, in progress (Phase 26 complete, Phase 27 complete, Phase 28.1 complete, Phase 28.2 complete, Phase 28 in progress)
 - v0.9.0: 6 phases (22-25.2), 17 plans, 92 days, shipped 2026-02-06
 - v0.8.0: 5 phases (17-21), 20 plans, 1 day, shipped 2026-02-04
 
-*Updated: 2026-02-06*
+*Updated: 2026-02-07*
 
 ## Accumulated Context
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- v0.10.0 (Phase 28-01): Component-specific selector labels for controller and node (enables targeted pod selection)
+- v0.10.0 (Phase 28-01): Secret key documentation in values.yaml comments (rds-private-key, rds-host-key match deployed manifests)
+- v0.10.0 (Phase 28-01): JSON Schema validates required fields (rds.managementIP, rds.secretName) at install time
+- v0.10.0 (Phase 28-01): Flat values structure (rds.*, controller.*, node.*) for simpler --set overrides
 - v0.10.0 (Phase 28.2-02): GaugeFunc polls RDS on-demand during Prometheus scrape (no background goroutines)
 - v0.10.0 (Phase 28.2-02): Disk (SSH) and hardware (SNMP) use independent 1-second caches (prevent 19 network calls per scrape)
 - v0.10.0 (Phase 28.2-02): SSH/SNMP failures return zero snapshots (no scrape failure, graceful degradation)
@@ -163,11 +167,23 @@ None. All pre-existing test failures resolved via Quick-003.
 
 ## Session Continuity
 
-Last session: 2026-02-06
-Stopped at: Phase 28.2-02 complete (Prometheus metrics exporter)
+Last session: 2026-02-07
+Stopped at: Phase 28-01 complete (Helm chart skeleton)
 Resume file: None
-Next action: Continue with Phase 28 (Helm Chart) - RDS monitoring metrics ready for Grafana dashboard integration.
+Next action: Continue with Phase 28-02 (RBAC Templates) - Chart foundation ready for template development.
 
+**v0.10.0 Progress (13/19 plans):**
+- Phase 28-01: Helm chart skeleton with Chart.yaml, values.yaml, schema, helpers
+  - Created Chart.yaml (apiVersion v2, version 1.0.0, appVersion 0.10.0)
+  - Created comprehensive values.yaml with RDS, controller, node, sidecars, monitoring, StorageClasses
+  - Documented Secret key names (rds-private-key, rds-host-key) matching deployed manifests
+  - Created values.schema.json with JSON Schema draft-07 validation
+  - Required fields: rds.managementIP, rds.secretName enforced at install time
+  - Created _helpers.tpl with 13 template helpers (name, fullname, labels, selectors, serviceAccounts, driverName, images)
+  - Component-specific selector labels for controller and node
+  - Created .helmignore with standard exclusion patterns
+  - helm lint passes with no errors (1 chart linted, 0 failed)
+  - All configuration options from main.go flags represented in values
 **v0.10.0 Progress (12/19 plans):**
 - Phase 28.2-02: RDS monitoring metrics exporter via Prometheus (dual-approach SSH + SNMP)
   - Added DiskHealthSnapshot and HardwareHealthSnapshot bridge structs in observability package
