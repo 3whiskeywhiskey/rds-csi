@@ -8,16 +8,32 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current Milestone: v0.10.0 Feature Enhancements
+## Current State
 
-**Goal:** Add volume snapshots, comprehensive documentation, and Helm chart for easier deployment
+**Version:** v0.10.0 (shipped 2026-02-06)
+**Milestone:** Feature Enhancements
+**Duration:** 3 days (5 phases, 15 plans, 206 commits)
 
-**Target features:**
-- Btrfs-based volume snapshots with restore capability
-- Comprehensive documentation (hardware validation, testing guide, capability analysis)
-- Helm chart for simplified deployment and configuration
+### Shipped Features
 
-## Latest Milestone: v0.9.0 Production Readiness & Test Maturity (Shipped: 2026-02-06)
+- ✅ **Volume Snapshots**: Btrfs-based snapshots with restore workflow, external-snapshotter v8.2.0
+- ✅ **Hardware Validation**: 7 executable test cases for production RDS validation
+- ✅ **Comprehensive Documentation**: Testing guide, capability analysis, CI/CD integration
+- ✅ **Helm Chart**: One-command deployment with configurable RDS parameters
+- ✅ **RDS Health Monitoring**: Disk metrics design via SSH polling
+- ✅ **Production Observability**: Fixed nvme_connections_active metric accuracy
+
+### Next Milestone Goals
+
+To be defined. Run `/gsd:new-milestone` to start milestone planning for v0.11.0+.
+
+## Latest Milestones
+
+**v0.10.0 Feature Enhancements** (Shipped: 2026-02-06)
+- Volume snapshots, comprehensive documentation, Helm chart
+- See: `.planning/milestones/v0.10.0-ROADMAP.md`
+
+**v0.9.0 Production Readiness & Test Maturity** (Shipped: 2026-02-06)
 
 **Delivered:** Production-ready testing infrastructure with CSI spec compliance validation and resilience features
 
@@ -99,14 +115,17 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 - ✓ RDS connection manager with exponential backoff and auto-reconnection — v0.9.0
 - ✓ Probe health check reflects RDS connection state — v0.9.0
 - ✓ golangci-lint v2 enforced in CI with all issues resolved — v0.9.0
+- ✓ Volume snapshots via Btrfs snapshot operations — v0.10.0
+- ✓ CreateVolume from snapshot (restore workflow) — v0.10.0
+- ✓ Manual test scenarios documented for hardware validation — v0.10.0
+- ✓ CSI capability gap analysis vs peer drivers — v0.10.0
+- ✓ Helm chart for simplified deployment — v0.10.0
+- ✓ RDS health monitoring design (SSH polling with Prometheus metrics) — v0.10.0
+- ✓ Accurate nvme_connections_active metric from attachment manager — v0.10.0
 
 ### Active
 
-- [ ] Volume snapshots via Btrfs snapshot operations
-- [ ] CreateVolume from snapshot (restore workflow)
-- [ ] Manual test scenarios documented for hardware validation
-- [ ] CSI capability gap analysis vs peer drivers
-- [ ] Helm chart for simplified deployment
+To be defined for v0.11.0+. Run `/gsd:new-milestone` to start planning.
 
 ### Out of Scope
 
