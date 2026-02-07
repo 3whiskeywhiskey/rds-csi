@@ -1282,6 +1282,295 @@ ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-aaaa|pvc-bbbb|pvc-cccc"
 
 ---
 
+### TC-08: Volume Snapshot Operations
+
+**Objective:** Validate Btrfs snapshot create/restore/delete via CSI driver
+
+**Estimated Time:** 10 minutes
+
+**Prerequisites:**
+- VolumeSnapshotClass `rds-csi-snapclass` exists (deployed with v0.10.0+)
+- VolumeSnapshot CRDs installed (`kubectl get crd volumesnapshots.snapshot.storage.k8s.io`)
+- snapshot-controller running in cluster
+- At least 10GB free space on RDS (5Gi source + 5Gi restored)
+
+**Steps:**
+
+#### 1. Create Source PVC with Test Data
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-hw-pvc-08-source
+  labels:
+    test: hardware-validation
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rds-nvme-tcp
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-08-source
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-08-source
+EOF
+```
+
+**Expected:** PVC bound and pod running within 60 seconds
+
+```bash
+kubectl wait --for=condition=Ready pod/test-hw-pod-08-source --timeout=90s
+```
+
+#### 2. Write Test Data to Source Volume
+
+```bash
+kubectl exec test-hw-pod-08-source -- sh -c 'echo "snapshot-test-data-$(date +%s)" > /data/test.txt'
+kubectl exec test-hw-pod-08-source -- cat /data/test.txt
+```
+
+**Expected:** Unique test data written and readable
+
+```
+snapshot-test-data-1738876543
+```
+
+**Save the data for later verification:**
+
+```bash
+SOURCE_DATA=$(kubectl exec test-hw-pod-08-source -- cat /data/test.txt)
+echo "Source data: $SOURCE_DATA"
+```
+
+#### 3. Create VolumeSnapshot
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: test-hw-snapshot-08
+  labels:
+    test: hardware-validation
+spec:
+  volumeSnapshotClassName: rds-csi-snapclass
+  source:
+    persistentVolumeClaimName: test-hw-pvc-08-source
+EOF
+```
+
+**Expected:** VolumeSnapshot created and becomes "ReadyToUse" within 10-15 seconds
+
+```bash
+kubectl get volumesnapshot test-hw-snapshot-08 --watch
+```
+
+```
+NAME                   READYTOUSE   SOURCEPVC                 SOURCESNAPSHOTCONTENT   RESTORESIZE   SNAPSHOTCLASS       SNAPSHOTCONTENT                                    CREATIONTIME   AGE
+test-hw-snapshot-08    false        test-hw-pvc-08-source                                           rds-csi-snapclass                                                                    2s
+test-hw-snapshot-08    true         test-hw-pvc-08-source                             5Gi           rds-csi-snapclass   snapcontent-12345678-1234-1234-1234-123456789abc   8s             8s
+```
+
+**If stuck in non-ready state >30s:** Check controller logs:
+```bash
+kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=30 | grep CreateSnapshot
+```
+
+#### 4. Verify Snapshot on RDS via SSH
+
+```bash
+# Get the snapshot ID from VolumeSnapshotContent
+SNAPSHOT_ID=$(kubectl get volumesnapshot test-hw-snapshot-08 -o jsonpath='{.status.boundVolumeSnapshotContentName}' | sed 's/snapcontent-/snap-/')
+
+# Check snapshot exists on RDS
+ssh admin@10.42.241.3 "/disk print detail where slot~\"snap-\""
+```
+
+**Expected:** Snapshot visible on RDS with `type=snapshot` and `read-only=yes`
+
+```
+Flags: I
+ 0   slot="snap-12345678-1234-1234-1234-123456789abc"
+     type=snapshot
+     snapshot-of="pvc-12345678-1234-1234-1234-123456789abc.img"
+     read-only=yes
+     nvme-tcp-export=no
+```
+
+#### 5. Restore from Snapshot (Create PVC from Snapshot)
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-hw-pvc-08-restored
+  labels:
+    test: hardware-validation
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rds-nvme-tcp
+  resources:
+    requests:
+      storage: 5Gi
+  dataSource:
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+    name: test-hw-snapshot-08
+EOF
+```
+
+**Expected:** PVC created with dataSource pointing to snapshot
+
+```bash
+kubectl get pvc test-hw-pvc-08-restored
+```
+
+```
+NAME                      STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+test-hw-pvc-08-restored   Pending                                      rds-nvme-tcp   3s
+```
+
+#### 6. Mount Restored Volume and Verify Data Integrity
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-08-restored
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-08-restored
+EOF
+```
+
+**Expected:** Pod running and restored volume mounted
+
+```bash
+kubectl wait --for=condition=Ready pod/test-hw-pod-08-restored --timeout=90s
+```
+
+**Verify data matches source:**
+
+```bash
+RESTORED_DATA=$(kubectl exec test-hw-pod-08-restored -- cat /data/test.txt)
+echo "Restored data: $RESTORED_DATA"
+echo "Source data:   $SOURCE_DATA"
+
+if [ "$SOURCE_DATA" = "$RESTORED_DATA" ]; then
+  echo "✓ Data integrity verified - snapshot restore successful"
+else
+  echo "✗ Data mismatch - snapshot restore failed"
+fi
+```
+
+**Expected:** Data matches exactly
+
+```
+Restored data: snapshot-test-data-1738876543
+Source data:   snapshot-test-data-1738876543
+✓ Data integrity verified - snapshot restore successful
+```
+
+#### 7. Delete Snapshot
+
+```bash
+kubectl delete volumesnapshot test-hw-snapshot-08
+```
+
+**Expected:** VolumeSnapshot deleted, but restored PVC still works
+
+```bash
+# Verify snapshot deleted
+kubectl get volumesnapshot test-hw-snapshot-08
+```
+
+```
+Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "test-hw-snapshot-08" not found
+```
+
+**Verify snapshot removed from RDS:**
+
+```bash
+ssh admin@10.42.241.3 "/disk print detail where slot~\"snap-\""
+```
+
+**Expected:** No snapshots found (snapshot deleted from RDS)
+
+**Verify restored volume still accessible:**
+
+```bash
+kubectl exec test-hw-pod-08-restored -- cat /data/test.txt
+```
+
+**Expected:** Data still readable (snapshot deletion doesn't affect restored volumes)
+
+**Cleanup:**
+
+```bash
+# Delete pods
+kubectl delete pod test-hw-pod-08-source test-hw-pod-08-restored
+
+# Wait for pod deletion
+kubectl wait --for=delete pod/test-hw-pod-08-source pod/test-hw-pod-08-restored --timeout=60s
+
+# Delete PVCs
+kubectl delete pvc test-hw-pvc-08-source test-hw-pvc-08-restored
+
+# Wait for cleanup
+sleep 30
+
+# Verify all volumes deleted on RDS
+ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-"'
+```
+
+**Expected:** No test volumes remaining
+
+**Success Criteria:**
+- ✅ VolumeSnapshot created and becomes ReadyToUse within 15 seconds
+- ✅ Snapshot visible on RDS with correct attributes (type=snapshot, read-only=yes)
+- ✅ Restored PVC created from snapshot successfully
+- ✅ Restored volume data matches source volume exactly
+- ✅ Snapshot deletion removes from RDS but doesn't affect restored volume
+- ✅ All resources cleaned up after test
+
+**Troubleshooting:**
+- **Snapshot stuck in non-ready state:** Check controller logs for CreateSnapshot errors, verify snapshot-controller running
+- **VolumeSnapshot CRD not found:** Install snapshot CRDs: `kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.2.0/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml`
+- **Restore fails:** Verify VolumeSnapshotClass exists, check source snapshot is ReadyToUse
+- **Data mismatch:** Indicates Btrfs snapshot corruption or incorrect snapshot-of reference, verify RDS Btrfs pool health
+- **Snapshot not deleted from RDS:** Check controller logs for DeleteSnapshot errors, may need manual cleanup
+
+---
+
 ## Performance Baselines
 
 These are expected timing values for common operations on production RDS hardware. Actual timings may vary based on network latency, RDS load, and storage pool performance.
@@ -1536,6 +1825,7 @@ Use this table to record test results for your environment:
 | TC-05: Pod Reattachment | ☐ Pass / ☐ Fail | ___ min | |
 | TC-06: Connection Resilience | ☐ Pass / ☐ Fail | ___ min | |
 | TC-07: Concurrent Operations | ☐ Pass / ☐ Fail | ___ min | |
+| TC-08: Snapshot Operations | ☐ Pass / ☐ Fail | ___ min | |
 
 **Environment Details:**
 - RDS Hardware: _______________
