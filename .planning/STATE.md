@@ -322,7 +322,7 @@ Next action: Continue with Phase 28-04 (Deployment Templates) - Storage template
 - Quick 003 (2026-02-05): Fixed 22 test failures (IP validation, ControllerPublishVolume, NodeGetVolumeStats)
 - Quick 004 (2026-02-06): Updated documentation to reflect v0.8.0 shipped, v0.9.0 in progress (README, ROADMAP, MILESTONES)
 - Quick 005 (2026-02-06): Fixed README.md inaccuracies (removed fake Helm section, updated URLs to GitHub)
-- Quick 006 (2026-02-12): Fixed blkid race condition causing data loss on NVMe-oF reconnect (exit code distinction + retry logic)
+- Quick 006 (2026-02-12): Fixed blkid race condition causing data loss on NVMe-oF reconnect (exit code 1 vs 2 distinction, retry logic)
 
 ---
 *Last updated: 2026-02-12 after Quick-006 completion*
