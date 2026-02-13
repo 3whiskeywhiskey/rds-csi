@@ -1,7 +1,8 @@
 name: Release
 
-# Full test suite + multi-arch build for tagged releases
-# Triggered manually or by pushing a tag
+# Full test suite + build for tagged releases
+# Triggered by tag push or manual dispatch
+# Pure shell commands - no JavaScript actions (act_runner k8s has no Node.js)
 
 on:
   push:
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g., v0.9.0)'
+        description: 'Release tag (e.g., v0.10.3)'
         required: true
         type: string
 
@@ -21,15 +22,21 @@ env:
 jobs:
   full-test:
     name: Run Full Test Suite
-    runs-on: ubuntu-latest
+    runs-on: golang
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Install build deps
+        run: apt-get update -qq && apt-get install -y -qq make bc
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
+      - name: Checkout code
+        run: |
+          git config --global credential.helper store
+          echo "https://token:${{ github.token }}@$(echo '${{ github.server_url }}' | sed 's|https\?://||')" > ~/.git-credentials
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git clone --branch ${{ github.event.inputs.tag }} ${{ github.server_url }}/${{ github.repository }}.git .
+          else
+            git clone ${{ github.server_url }}/${{ github.repository }}.git .
+            git checkout ${{ github.sha }}
+          fi
 
       - name: Install dependencies
         run: |
@@ -50,7 +57,7 @@ jobs:
           echo "Running stress tests..."
           go test -v -race -timeout 5m ./test/mock/... -run TestConcurrent
 
-          echo "✅ All tests passed"
+          echo "All tests passed"
 
       - name: Check coverage
         run: |
@@ -59,19 +66,29 @@ jobs:
           echo "Coverage: ${COVERAGE}%"
 
           if (( $(echo "$COVERAGE < 60" | bc -l) )); then
-            echo "❌ Coverage ${COVERAGE}% is below 60% threshold"
+            echo "Coverage ${COVERAGE}% is below 60% threshold"
             exit 1
           fi
 
   build-release:
-    name: Build Release Images
-    runs-on: ubuntu-latest
+    name: Build Release Binary
+    runs-on: golang
     needs: full-test
     steps:
+      - name: Install build deps
+        run: apt-get update -qq && apt-get install -y -qq make
+
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        run: |
+          git config --global credential.helper store
+          echo "https://token:${{ github.token }}@$(echo '${{ github.server_url }}' | sed 's|https\?://||')" > ~/.git-credentials
+          git clone ${{ github.server_url }}/${{ github.repository }}.git .
+          git fetch --tags
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git checkout ${{ github.event.inputs.tag }}
+          else
+            git checkout ${{ github.sha }}
+          fi
 
       - name: Get version info
         id: version
@@ -89,40 +106,15 @@ jobs:
           echo "commit=${GIT_COMMIT}" >> $GITHUB_OUTPUT
           echo "date=${BUILD_DATE}" >> $GITHUB_OUTPUT
 
-          echo "Building release ${VERSION}"
+          echo "Building release ${VERSION} (commit: ${GIT_COMMIT})"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Uncomment when ready to push to registry
-      # - name: Log in to registry
-      #   run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ secrets.REGISTRY_USER }} --password-stdin
-
-      - name: Build multi-arch images
+      - name: Build release binaries
         run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --build-arg GIT_COMMIT=${{ steps.version.outputs.commit }} \
-            --build-arg GIT_TAG=${{ steps.version.outputs.version }} \
-            --build-arg BUILD_DATE=${{ steps.version.outputs.date }} \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            --load \
-            .
-
-          echo "✅ Multi-arch images built"
-
-      # Uncomment when ready to push to registry
-      # - name: Push images
-      #   run: |
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          make build-all
+          echo "Release binaries built"
+          ls -lh bin/
 
       - name: Create release notes
-        id: notes
         run: |
           VERSION=${{ steps.version.outputs.version }}
           PREV_TAG=$(git describe --tags --abbrev=0 ${VERSION}^ 2>/dev/null || echo "")
@@ -133,43 +125,23 @@ jobs:
           **Built:** ${{ steps.version.outputs.date }}
           **Commit:** ${{ steps.version.outputs.commit }}
 
-          ### Container Images
-
-          \`\`\`
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          \`\`\`
-
           **Platforms:** linux/amd64, linux/arm64
-
           EOF
 
           if [ -n "$PREV_TAG" ]; then
+            echo "" >> release-notes.md
             echo "### Changes since ${PREV_TAG}" >> release-notes.md
             echo "" >> release-notes.md
             git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%an)" --no-merges >> release-notes.md
           fi
 
+          echo "--- Release Notes ---"
           cat release-notes.md
-
-      # Create Gitea release using tea CLI
-      # Uncomment and configure when tea is available
-      # - name: Create Gitea release
-      #   run: |
-      #     tea release create \
-      #       --tag ${{ steps.version.outputs.version }} \
-      #       --title "Release ${{ steps.version.outputs.version }}" \
-      #       --note "$(cat release-notes.md)" \
-      #       --asset ./bin/rds-csi-plugin-*
 
       - name: Release summary
         run: |
-          echo "## 🎉 Release ${{ steps.version.outputs.version }}"
+          echo "Release ${{ steps.version.outputs.version }}"
           echo ""
-          echo "✅ Tests passed"
-          echo "✅ Multi-arch images built"
-          echo ""
-          echo "**Next steps:**"
-          echo "1. Uncomment registry push in this workflow"
-          echo "2. Configure tea CLI for Gitea releases"
-          echo "3. Push images and create release"
+          echo "Tests passed"
+          echo "Binaries built"
+          ls -lh bin/

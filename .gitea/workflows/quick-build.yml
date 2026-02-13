@@ -1,8 +1,8 @@
 name: Quick Build
 
-# Fast build on push to main branches - NO TESTS, NO GITHUB ACTIONS
+# Fast build on push to main branches - NO TESTS
 # Goal: <2 minutes for rapid feedback
-# Uses direct commands instead of GitHub actions to avoid slow cloning
+# Pure shell commands - no JavaScript actions (act_runner k8s has no Node.js)
 
 on:
   push:
@@ -20,40 +20,35 @@ env:
 jobs:
   quick-build:
     name: Build Binary Only (Fast)
-    runs-on: golang  # golang:1.24-bookworm or custom image with Go 1.24
+    runs-on: golang
     steps:
-      - name: Install Node.js for actions
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq curl
-          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-          apt-get install -y -qq nodejs make
-          node --version
-          echo "✅ Node.js installed for GitHub actions"
+      - name: Install build deps
+        run: apt-get update -qq && apt-get install -y -qq make
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        run: |
+          git config --global credential.helper store
+          echo "https://token:${{ github.token }}@$(echo '${{ github.server_url }}' | sed 's|https\?://||')" > ~/.git-credentials
+          git clone --depth=1 --branch ${{ github.ref_name }} ${{ github.server_url }}/${{ github.repository }}.git .
 
       - name: Verify build environment
         run: |
           go version
           make --version
-          echo "✅ Build environment ready"
+          echo "Build environment ready"
 
-      - name: Build binary (includes dependency download)
+      - name: Build binary
         run: make build-local
 
       - name: Verify binary
         run: |
           ls -lh bin/
           ./bin/rds-csi-plugin-* --version || true
-          echo "✅ Binary built successfully"
+          echo "Binary built successfully"
 
       - name: Build summary
         run: |
-          echo "✅ Quick build complete!"
+          echo "Quick build complete!"
           echo "Branch: ${{ github.ref_name }}"
           echo "Commit: ${{ github.sha }}"
-          echo ""
-          echo "Built binary:"
           ls -lh bin/ | grep rds-csi-plugin
