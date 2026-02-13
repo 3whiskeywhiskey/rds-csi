@@ -2,6 +2,7 @@ package mount
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -353,6 +354,9 @@ func (m *mounter) Format(device, fsType string) error {
 		return nil
 	}
 
+	// Log the format decision for audit trail
+	klog.V(2).Infof("Format: device %s confirmed unformatted by blkid, proceeding with mkfs.%s", device, fsType)
+
 	// Build mkfs command based on filesystem type
 	var cmd *exec.Cmd
 	switch fsType {
@@ -384,17 +388,37 @@ func (m *mounter) IsFormatted(device string) (bool, error) {
 	cmd := m.execCommand("blkid", "-o", "value", "-s", "TYPE", device)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// blkid returns exit status 2 if no filesystem found
-		// blkid returns exit status 1 if device not found or other error
-		if strings.Contains(err.Error(), "exit status 2") || strings.Contains(err.Error(), "exit status 1") {
-			return false, nil
+		// Parse exit code to distinguish between different blkid failure modes:
+		// - Exit 0: success, filesystem found
+		// - Exit 2: no filesystem found (definitive - safe to format)
+		// - Exit 1: device error (I/O error, device not ready, device not found)
+		//           CRITICAL: Do NOT treat as "not formatted" - would cause data loss
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 2:
+				// blkid exit 2 = no filesystem found on device
+				klog.V(4).Infof("IsFormatted: device %s has no filesystem (blkid exit 2)", device)
+				return false, nil
+			case 1:
+				// blkid exit 1 = device error (I/O error, device not found, device not ready)
+				// CRITICAL: Do NOT treat this as "not formatted" - this would cause data loss
+				klog.Warningf("IsFormatted: blkid cannot read device %s (exit 1, output: %q) - device may not be ready", device, string(output))
+				return false, fmt.Errorf("blkid cannot read device %s (exit status 1): device may not be ready or has I/O errors", device)
+			default:
+				return false, fmt.Errorf("blkid failed on %s with exit code %d: %w", device, exitErr.ExitCode(), err)
+			}
 		}
 		return false, fmt.Errorf("blkid failed: %w", err)
 	}
 
 	// If blkid returned a filesystem type, device is formatted
 	fsType := strings.TrimSpace(string(output))
-	return len(fsType) > 0, nil
+	if len(fsType) > 0 {
+		klog.V(4).Infof("IsFormatted: device %s has filesystem type %s", device, fsType)
+		return true, nil
+	}
+	return false, nil
 }
 
 // ResizeFilesystem resizes the filesystem on the device to use available space

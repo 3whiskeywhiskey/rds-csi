@@ -302,6 +302,22 @@ func TestIsFormatted(t *testing.T) {
 			expectedResult: false,
 			expectError:    false,
 		},
+		{
+			name:           "device error exit 1",
+			device:         "/dev/nvme0n1",
+			blkidOutput:    "",
+			blkidExitCode:  1,
+			expectedResult: false,
+			expectError:    true,
+		},
+		{
+			name:           "unknown exit code",
+			device:         "/dev/nvme0n1",
+			blkidOutput:    "",
+			blkidExitCode:  3,
+			expectedResult: false,
+			expectError:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1208,5 +1224,30 @@ func TestFormat_ErrorScenarios(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestFormat_BlkidDeviceError tests that Format refuses to mkfs when blkid exits with status 1
+func TestFormat_BlkidDeviceError(t *testing.T) {
+	m := &mounter{
+		execCommand: func(name string, args ...string) *exec.Cmd {
+			switch name {
+			case "blkid":
+				// Simulate blkid exit 1 (device error)
+				return mockExecCommand("", "", 1)(name, args...)
+			default:
+				// If this is called, Format did not respect the blkid error
+				t.Errorf("mkfs should not be called when blkid exits with status 1")
+				return mockExecCommand("", "", 0)(name, args...)
+			}
+		},
+	}
+
+	err := m.Format("/dev/nvme0n1", "ext4")
+	if err == nil {
+		t.Fatal("expected error when blkid exits with status 1, got nil")
+	}
+	if !strings.Contains(err.Error(), "blkid cannot read device") && !strings.Contains(err.Error(), "failed to check if device is formatted") {
+		t.Errorf("expected error about blkid failure, got: %v", err)
 	}
 }
