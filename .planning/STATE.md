@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-06)
 Phase: 28 of 28 (Helm Chart)
 Plan: 3 of 3 (Phase complete)
 Status: Phase 28 complete - Helm chart ready for one-command deployment
-Last activity: 2026-02-06 — Completed Phase 28 (Helm Chart with 16 files, verified)
+Last activity: 2026-02-12 — Completed Quick-006 (blkid race condition fix)
 
 Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██████████] 100% (19/19 plans)
 
@@ -47,6 +47,10 @@ Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Quick-006 (2026-02-12): blkid exit 1 treated as error (not 'not formatted') to prevent data loss on NVMe-oF reconnect
+- Quick-006 (2026-02-12): NodeStageVolume retries IsFormatted 5 times with 2s delay for transient device errors after NVMe connect
+- Quick-006 (2026-02-12): Format refuses to run mkfs when IsFormatted returns any error (fail-safe principle)
+- Quick-006 (2026-02-12): exec.ExitError type assertion provides reliable exit code parsing (more robust than string matching)
 - v0.10.0 (Phase 28-03): ServiceMonitor selector includes app.kubernetes.io/component=controller (matches Service selector)
 - v0.10.0 (Phase 28-03): ServiceMonitor triple-conditional prevents deployment failures on non-Prometheus-Operator clusters
 - v0.10.0 (Phase 28-03): StorageClass loop over storageClasses array enables multiple classes with different configs
@@ -318,6 +322,7 @@ Next action: Continue with Phase 28-04 (Deployment Templates) - Storage template
 - Quick 003 (2026-02-05): Fixed 22 test failures (IP validation, ControllerPublishVolume, NodeGetVolumeStats)
 - Quick 004 (2026-02-06): Updated documentation to reflect v0.8.0 shipped, v0.9.0 in progress (README, ROADMAP, MILESTONES)
 - Quick 005 (2026-02-06): Fixed README.md inaccuracies (removed fake Helm section, updated URLs to GitHub)
+- Quick 006 (2026-02-12): Fixed blkid race condition causing data loss on NVMe-oF reconnect (exit code distinction + retry logic)
 
 ---
-*Last updated: 2026-02-06 after Phase 28.2-01 completion*
+*Last updated: 2026-02-12 after Quick-006 completion*
