@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,8 @@ type mockMounter struct {
 	mountErr        error
 	unmountErr      error
 	formatErr       error
+	isFormatted     bool
+	isFormattedErr  error
 	isLikelyMounted bool
 	isLikelyErr     error
 	stats           *mount.DeviceStats
@@ -53,7 +56,7 @@ func (m *mockMounter) Format(device, fsType string) error {
 }
 
 func (m *mockMounter) IsFormatted(device string) (bool, error) {
-	return true, nil
+	return m.isFormatted, m.isFormattedErr
 }
 
 func (m *mockMounter) ResizeFilesystem(device, volumePath string) error {
@@ -1486,6 +1489,73 @@ func TestNodeStageVolume_ErrorScenarios(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNodeStageVolume_IsFormattedRetry tests that NodeStageVolume retries IsFormatted on device errors
+func TestNodeStageVolume_IsFormattedRetry(t *testing.T) {
+	// Create temp directory for staging
+	tmpDir, err := os.MkdirTemp("", "node-test-retry-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stagingPath := filepath.Join(tmpDir, "staging")
+
+	// Setup mocks - IsFormatted returns persistent error (simulating unreadable device)
+	mounter := &mockMounter{
+		isFormattedErr: fmt.Errorf("blkid cannot read device /dev/nvme0n1 (exit status 1): device may not be ready or has I/O errors"),
+	}
+	connector := &mockNVMEConnector{
+		devicePath: "/dev/nvme0n1",
+	}
+
+	driver := &Driver{
+		name:    "rds.csi.srvlab.io",
+		version: "test",
+		metrics: observability.NewMetrics(),
+	}
+
+	ns := &NodeServer{
+		driver:         driver,
+		mounter:        mounter,
+		nvmeConn:       connector,
+		nodeID:         "test-node",
+		circuitBreaker: circuitbreaker.NewVolumeCircuitBreaker(),
+	}
+
+	// Create request for filesystem volume
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          "pvc-12345678-1234-1234-1234-123456789012",
+		StagingTargetPath: stagingPath,
+		VolumeCapability:  createFilesystemVolumeCapability(),
+		VolumeContext: map[string]string{
+			"nqn":         "nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789012",
+			"nvmeAddress": "10.42.68.1",
+			"nvmePort":    "4420",
+		},
+	}
+
+	// Execute with a short timeout to avoid waiting 10 seconds for all retries
+	// The retry logic uses 2s delay, so 5 retries = ~10s. We'll use 3s timeout to verify
+	// context cancellation path works.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err = ns.NodeStageVolume(ctx, req)
+	if err == nil {
+		t.Fatal("expected error when IsFormatted persistently fails, got nil")
+	}
+
+	// Error should mention either context cancellation OR refusing to format
+	if !strings.Contains(err.Error(), "context") && !strings.Contains(err.Error(), "refusing to format") && !strings.Contains(err.Error(), "cannot determine filesystem state") {
+		t.Errorf("expected error about context cancellation or refusing to format, got: %v", err)
+	}
+
+	// Verify: Format was NOT called (critical safety check)
+	if mounter.formatCalled {
+		t.Fatal("Format should NEVER be called when IsFormatted returns errors - this would cause data loss!")
 	}
 }
 

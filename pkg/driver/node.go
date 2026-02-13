@@ -269,18 +269,54 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	// Filesystem volume: format and mount with circuit breaker protection
 	// Wrap format and mount operations in circuit breaker to prevent retry storms
 	err = ns.circuitBreaker.Execute(ctx, volumeID, func() error {
-		// Step 2a: Check filesystem health before mount (only for existing filesystems)
-		formatted, formatErr := ns.mounter.IsFormatted(devicePath)
-		if formatErr != nil {
-			klog.Warningf("Could not check if device is formatted, skipping health check: %v", formatErr)
-		} else if formatted {
+		// Step 2a: Determine filesystem state with retry for transient device errors
+		// After NVMe-oF connect, the device may not be immediately ready for I/O.
+		// blkid exit 1 means "cannot read device" which is transient after connect.
+		// blkid exit 2 means "no filesystem" which is definitive.
+		// We retry on exit 1 errors to avoid mistakenly formatting an existing volume.
+		const (
+			isFormattedMaxRetries = 5
+			isFormattedRetryDelay = 2 * time.Second
+		)
+
+		var formatted bool
+		var formatCheckErr error
+
+		for attempt := 1; attempt <= isFormattedMaxRetries; attempt++ {
+			formatted, formatCheckErr = ns.mounter.IsFormatted(devicePath)
+			if formatCheckErr == nil {
+				// blkid succeeded or returned exit 2 (no fs) - we have a definitive answer
+				break
+			}
+
+			// blkid returned an error (likely exit 1 - device not ready)
+			if attempt < isFormattedMaxRetries {
+				klog.Warningf("IsFormatted check failed for %s (attempt %d/%d): %v - retrying in %v",
+					devicePath, attempt, isFormattedMaxRetries, formatCheckErr, isFormattedRetryDelay)
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("context cancelled while waiting for device %s to be ready: %w", devicePath, ctx.Err())
+				case <-time.After(isFormattedRetryDelay):
+					// continue retry
+				}
+			} else {
+				// All retries exhausted - device is not readable
+				klog.Errorf("IsFormatted check failed for %s after %d attempts: %v - refusing to format to prevent data loss",
+					devicePath, isFormattedMaxRetries, formatCheckErr)
+				return fmt.Errorf("cannot determine filesystem state of device %s after %d attempts (last error: %w) - refusing to format to prevent potential data loss",
+					devicePath, isFormattedMaxRetries, formatCheckErr)
+			}
+		}
+
+		// Step 2b: Check filesystem health (only for existing filesystems)
+		if formatted {
 			klog.V(2).Infof("Running filesystem health check for %s", devicePath)
 			if healthErr := mount.CheckFilesystemHealth(ctx, devicePath, fsType); healthErr != nil {
 				return fmt.Errorf("filesystem health check failed: %w", healthErr)
 			}
 		}
 
-		// Step 2b: Format filesystem if needed
+		// Step 2c: Format filesystem if needed (only when blkid definitively confirmed no filesystem)
 		if formatErr := ns.mounter.Format(devicePath, fsType); formatErr != nil {
 			return fmt.Errorf("failed to format device: %w", formatErr)
 		}
