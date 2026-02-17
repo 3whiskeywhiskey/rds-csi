@@ -8,24 +8,29 @@ A Kubernetes CSI driver for MikroTik ROSE Data Server (RDS) that provides dynami
 
 **Volumes remain accessible after NVMe-oF reconnections.** When network hiccups or RDS restarts cause connection drops, the driver detects and handles controller renumbering so mounted volumes continue working without pod restarts.
 
-## Current State
+## Current Milestone: v0.11.0 Data Protection
+
+**Goal:** Fix broken snapshot implementation and ensure data safety with automated backups
+
+**Target features:**
+- Fix snapshot implementation (replace Btrfs subvolume with `/disk add copy-from` CoW)
+- End-to-end snapshot validation against real RDS hardware
+- Scheduled snapshot CronJob with retention/cleanup
+- Resilience regression test suite (NVMe reconnect, RDS restart, node failure)
+
+## Previous State
 
 **Version:** v0.10.0 (shipped 2026-02-06)
 **Milestone:** Feature Enhancements
-**Duration:** 3 days (5 phases, 15 plans, 206 commits)
 
 ### Shipped Features
 
-- ✅ **Volume Snapshots**: Btrfs-based snapshots with restore workflow, external-snapshotter v8.2.0
+- ⚠️ **Volume Snapshots**: Btrfs subvolume approach broken in production (file-backed disks aren't subvolumes) — fix is v0.11.0 priority
 - ✅ **Hardware Validation**: 7 executable test cases for production RDS validation
 - ✅ **Comprehensive Documentation**: Testing guide, capability analysis, CI/CD integration
 - ✅ **Helm Chart**: One-command deployment with configurable RDS parameters
 - ✅ **RDS Health Monitoring**: Disk metrics design via SSH polling
 - ✅ **Production Observability**: Fixed nvme_connections_active metric accuracy
-
-### Next Milestone Goals
-
-To be defined. Run `/gsd:new-milestone` to start milestone planning for v0.11.0+.
 
 ## Latest Milestones
 
@@ -67,7 +72,7 @@ To be defined. Run `/gsd:new-milestone` to start milestone planning for v0.11.0+
 ### Known Limitations
 
 - Single RDS controller (no multipath)
-- No volume snapshots yet
+- Volume snapshots broken (v0.10.0 used wrong Btrfs approach, fix in v0.11.0)
 - No controller HA (single replica)
 
 ## Requirements
@@ -115,8 +120,8 @@ To be defined. Run `/gsd:new-milestone` to start milestone planning for v0.11.0+
 - ✓ RDS connection manager with exponential backoff and auto-reconnection — v0.9.0
 - ✓ Probe health check reflects RDS connection state — v0.9.0
 - ✓ golangci-lint v2 enforced in CI with all issues resolved — v0.9.0
-- ✓ Volume snapshots via Btrfs snapshot operations — v0.10.0
-- ✓ CreateVolume from snapshot (restore workflow) — v0.10.0
+- ⚠️ Volume snapshots via Btrfs snapshot operations — v0.10.0 (broken: file-backed disks aren't Btrfs subvolumes, fix in v0.11.0)
+- ⚠️ CreateVolume from snapshot (restore workflow) — v0.10.0 (broken: depends on snapshot fix)
 - ✓ Manual test scenarios documented for hardware validation — v0.10.0
 - ✓ CSI capability gap analysis vs peer drivers — v0.10.0
 - ✓ Helm chart for simplified deployment — v0.10.0
@@ -125,7 +130,12 @@ To be defined. Run `/gsd:new-milestone` to start milestone planning for v0.11.0+
 
 ### Active
 
-To be defined for v0.11.0+. Run `/gsd:new-milestone` to start planning.
+- [ ] Snapshot creation uses `/disk add copy-from` CoW instead of Btrfs subvolume — v0.11.0
+- [ ] Snapshot restore creates new volume from snapshot via copy-from — v0.11.0
+- [ ] Snapshot deletion cleans up copied disk and file — v0.11.0
+- [ ] Snapshots validated end-to-end against real RDS hardware — v0.11.0
+- [ ] Scheduled snapshot CronJob with configurable retention — v0.11.0
+- [ ] Resilience regression tests for NVMe reconnect, RDS restart, node failure — v0.11.0
 
 ### Out of Scope
 
@@ -162,12 +172,14 @@ To be defined for v0.11.0+. Run `/gsd:new-milestone` to start planning.
 | MaxElapsedTime=0 for reconnection | Never give up on RDS reconnection | ✓ Good |
 | Complexity threshold 50 | Justified by CSI spec compliance needs | ✓ Good |
 | golangci-lint v2 nested config | Required for v2 compatibility | ✓ Good |
+| `/disk add copy-from` for snapshots | Btrfs subvolume snapshots don't work with file-backed disks; copy-from creates CoW reflink copies | — Pending |
 
 ## Constraints
 
 - **Testing**: RDS restart affects site networking; need confidence before testing
 - **Compatibility**: Must work with existing volumes and mounts (no breaking changes)
 - **Dependencies**: Uses nvme-cli binary; solutions must work within that constraint
+- **Data Safety**: Postgres consolidation makes snapshot reliability critical — data loss is unacceptable
 
 ---
-*Last updated: 2026-02-06 after v0.9.0 milestone completion*
+*Last updated: 2026-02-17 after v0.11.0 milestone start*

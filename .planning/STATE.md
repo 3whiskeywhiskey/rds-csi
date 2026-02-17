@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-06)
+See: .planning/PROJECT.md (updated 2026-02-17)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** v0.10.0 Feature Enhancements
+**Current focus:** v0.11.0 Data Protection
 
 ## Current Position
 
-Phase: 28 of 28 (Helm Chart)
-Plan: 3 of 3 (Phase complete)
-Status: Phase 28 complete - Helm chart ready for one-command deployment
-Last activity: 2026-02-12 — Completed Quick-006 (blkid race condition fix)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements for v0.11.0
+Last activity: 2026-02-17 — Milestone v0.11.0 started
 
-Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██████████] 100% (19/19 plans)
+Progress: v0.9.0 [██████████] 100% (17/17 plans) | v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
