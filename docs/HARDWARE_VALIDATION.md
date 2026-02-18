@@ -1,7 +1,7 @@
 # Hardware Validation Guide
 
 **Version:** Written for RDS CSI Driver v0.9.0+, RouterOS 7.16+
-**Last Updated:** 2026-02-06
+**Last Updated:** 2026-02-18
 **Purpose:** Step-by-step test procedures for validating RDS CSI driver functionality on production hardware
 
 ## Overview
@@ -1575,6 +1575,606 @@ This test case is designed for manual execution against real RDS hardware. After
 
 ---
 
+### TC-09: NVMe Reconnect After Network Interruption
+
+**Objective:** Verify that after a network interruption causes NVMe/TCP connection drop, pods with mounted volumes recover and continue I/O without manual intervention.
+
+**Estimated Time:** 15 minutes
+
+**Prerequisites:**
+- TC-01 passed and environment validation complete
+- Worker node SSH access
+- Ability to temporarily block NVMe/TCP traffic on the worker node (iptables or similar)
+
+> **CAUTION:** This test temporarily interrupts NVMe/TCP traffic on a worker node. If other pods use RDS volumes on the same node, they will also be affected. Run during a maintenance window.
+
+**Steps:**
+
+#### 1. Create PVC and Pod with Continuous I/O Writer
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-hw-pvc-09
+  labels:
+    test: hardware-validation
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rds-nvme-tcp
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-09
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: alpine
+    command: ["sh", "-c", "while true; do date >> /data/io-test.log; sleep 1; done"]
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-09
+EOF
+```
+
+#### 2. Wait for Pod Running and Verify I/O
+
+```bash
+kubectl wait --for=condition=Ready pod/test-hw-pod-09 --timeout=60s
+
+# Verify I/O is happening
+kubectl exec test-hw-pod-09 -- tail -5 /data/io-test.log
+```
+
+**Expected:** Recent timestamps appearing in the log file
+
+```
+Wed Feb 18 10:00:01 UTC 2026
+Wed Feb 18 10:00:02 UTC 2026
+Wed Feb 18 10:00:03 UTC 2026
+```
+
+#### 3. Note the Last Written Timestamp
+
+```bash
+kubectl exec test-hw-pod-09 -- tail -1 /data/io-test.log
+```
+
+Save this timestamp. After the test, data written before the interruption must still be present.
+
+#### 4. Get Node Placement and Block NVMe/TCP Traffic
+
+```bash
+NODE_NAME=$(kubectl get pod test-hw-pod-09 -o jsonpath='{.spec.nodeName}')
+echo "Pod is on node: $NODE_NAME"
+```
+
+SSH to the worker node and block NVMe/TCP traffic to RDS:
+
+```bash
+# SSH to the worker node
+ssh <node-ip>
+
+# Block NVMe/TCP outbound traffic to RDS storage IP
+iptables -A OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP
+```
+
+#### 5. Wait 30 Seconds and Observe NVMe Errors
+
+```bash
+# On the worker node, check for NVMe connection timeout/error messages
+sleep 30
+dmesg | tail -20 | grep nvme
+```
+
+**Expected:** NVMe error messages indicating connection timeout or I/O errors
+
+```
+[12345.678] nvme nvme1: Connect command failed, error wo/-19
+[12345.679] nvme nvme1: queue 0: reconnecting in 1 seconds
+```
+
+#### 6. Verify Pod I/O Pauses
+
+```bash
+# I/O will stall because NVMe/TCP is blocked
+kubectl exec test-hw-pod-09 -- tail -5 /data/io-test.log
+```
+
+**Expected:** No new timestamps appearing (write loop is stalled or filesystem hung/read-only).
+
+#### 7. Restore NVMe/TCP Traffic
+
+```bash
+# On the worker node
+iptables -D OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP
+```
+
+#### 8. Wait for NVMe/TCP Reconnection
+
+```bash
+# Wait up to 60 seconds for kernel NVMe/TCP reconnection
+# Controlled by ctrl_loss_tmo and reconnect_delay parameters
+sleep 60
+
+# Check NVMe reconnection messages on worker node
+dmesg | tail -20 | grep nvme
+```
+
+**Expected:** NVMe reconnection messages
+
+```
+[12405.123] nvme nvme1: Successfully reconnected (1 attempts, <elapsed>s total)
+```
+
+The driver sets `ctrl_loss_tmo=-1` for infinite retry, so the kernel will keep attempting reconnection until it succeeds.
+
+#### 9. Verify I/O Resumes
+
+```bash
+kubectl exec test-hw-pod-09 -- tail -10 /data/io-test.log
+```
+
+**Expected:** New timestamps after the gap, confirming I/O has resumed without pod restart.
+
+```
+Wed Feb 18 10:00:03 UTC 2026
+<gap during interruption>
+Wed Feb 18 10:01:05 UTC 2026
+Wed Feb 18 10:01:06 UTC 2026
+```
+
+#### 10. Verify Pre-Interruption Data is Preserved
+
+```bash
+# Timestamps from before step 4 should still be in the log
+kubectl exec test-hw-pod-09 -- head -10 /data/io-test.log
+```
+
+**Expected:** Data written before the network interruption is still present and readable.
+
+**Cleanup:**
+
+```bash
+kubectl delete pod test-hw-pod-09
+kubectl delete pvc test-hw-pvc-09
+
+# Remove any lingering iptables rules (from the worker node)
+ssh <node-ip> 'iptables -D OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP 2>/dev/null; true'
+```
+
+**Success Criteria:**
+- ✅ NVMe/TCP connection recovers automatically after network restoration
+- ✅ I/O resumes without pod restart
+- ✅ Data written before interruption is preserved
+- ✅ No data corruption (log file readable, timestamps in order)
+
+**Troubleshooting:**
+- **I/O doesn't resume after 60s:** Check `ctrl_loss_tmo` setting on the worker node: `cat /sys/class/nvme/nvmeX/ctrl_loss_tmo`. If set to a short value (e.g., 600 seconds), the controller may have timed out and given up. The driver sets `ctrl_loss_tmo=-1` for infinite retry — verify this is applied during `NodeStageVolume`.
+- **Pod is evicted:** Check if the node marked the volume as unhealthy, check kubelet logs for volume condition changes.
+- **Filesystem goes read-only:** May require a pod restart to remount. This indicates `ctrl_loss_tmo` fired before reconnection, which means the timeout was not set to infinite.
+
+---
+
+### TC-10: RDS Restart Volume Preservation
+
+**Objective:** Verify that after an RDS restart, volumes remain mounted and data written before the restart is readable after reconnection.
+
+**Estimated Time:** 15-20 minutes
+
+**Prerequisites:**
+- TC-01 passed and environment validation complete
+- SSH access to RDS management IP (10.42.241.3)
+- Understanding that RDS restart will affect ALL NVMe/TCP connections on ALL nodes
+
+> **DANGER:** Restarting RDS affects ALL NVMe/TCP connections on ALL cluster nodes. Only run this test during a maintenance window when no production workloads are running. Ensure you have physical access to the RDS hardware in case it doesn't come back online.
+
+**Steps:**
+
+#### 1. Create PVC and Pod
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-hw-pvc-10
+  labels:
+    test: hardware-validation
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rds-nvme-tcp
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-10
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-10
+EOF
+
+kubectl wait --for=condition=Ready pod/test-hw-pod-10 --timeout=60s
+```
+
+#### 2. Write Test Data with Timestamp
+
+```bash
+kubectl exec test-hw-pod-10 -- sh -c 'echo "pre-restart-$(date +%s)" > /data/restart-test.txt'
+```
+
+#### 3. Verify Data and Save Output
+
+```bash
+SOURCE_DATA=$(kubectl exec test-hw-pod-10 -- cat /data/restart-test.txt)
+echo "Pre-restart data: $SOURCE_DATA"
+```
+
+**Expected:** File contains the pre-restart timestamp
+
+```
+pre-restart-1771434800
+```
+
+#### 4. Check NVMe Connection Status Before Restart
+
+```bash
+NODE_NAME=$(kubectl get pod test-hw-pod-10 -o jsonpath='{.spec.nodeName}')
+ssh <node-ip> 'nvme list-subsys'
+```
+
+**Expected:** Connection state is "live"
+
+```
+nvme-subsys1 - NQN=nqn.2000-02.com.mikrotik:pvc-<uuid>
+ +- nvme1 tcp traddr=10.42.68.1 trsvcid=4420 live
+```
+
+#### 5. Restart RDS
+
+```bash
+ssh admin@10.42.241.3 '/system/reboot'
+```
+
+Confirm with `y` when prompted. The RDS will begin rebooting immediately.
+
+#### 6. Wait for RDS to Come Back Online
+
+Poll until the management interface responds (typically 60-120 seconds):
+
+```bash
+until ssh admin@10.42.241.3 '/system/resource/print' 2>/dev/null | grep -q version; do
+  echo "Waiting for RDS to come back online..."
+  sleep 10
+done
+echo "RDS is back online"
+```
+
+#### 7. Monitor NVMe Reconnection on Worker Node
+
+```bash
+ssh <node-ip> 'dmesg | tail -30 | grep nvme'
+```
+
+**Expected:** NVMe reconnection log messages
+
+```
+[54321.001] nvme nvme1: queue 0: reconnecting in 1 seconds
+[54321.002] nvme nvme1: queue 0: reconnecting in 2 seconds
+[54335.456] nvme nvme1: Successfully reconnected (8 attempts, 32.4s total)
+```
+
+#### 8. Wait for NVMe/TCP to Reconnect
+
+```bash
+# Check connection state (should return to "live")
+ssh <node-ip> 'nvme list-subsys'
+```
+
+**Expected:** Connection state back to "live". With `ctrl_loss_tmo=-1` (infinite retry), the kernel will keep attempting reconnection for up to 2-3 minutes while RDS comes back online.
+
+#### 9. Check Controller Logs for Reconnection
+
+```bash
+kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "reconnect"
+```
+
+**Expected:** Connection manager logs showing SSH reconnection via exponential backoff
+
+```
+INFO    ConnectionManager: RDS connection lost to 10.42.241.3:22, starting reconnection
+INFO    ConnectionManager: Reconnection attempt 1 to 10.42.241.3:22
+INFO    ConnectionManager: Reconnection attempt 5 to 10.42.241.3:22
+INFO    ConnectionManager: Successfully reconnected to 10.42.241.3:22 after 8 attempts (45.20s)
+```
+
+#### 10. Verify Data Integrity After Restart
+
+```bash
+RESTORED_DATA=$(kubectl exec test-hw-pod-10 -- cat /data/restart-test.txt)
+echo "Post-restart data: $RESTORED_DATA"
+echo "Pre-restart data:  $SOURCE_DATA"
+
+if [ "$SOURCE_DATA" = "$RESTORED_DATA" ]; then
+  echo "✓ Data integrity verified - RDS restart preserved data"
+else
+  echo "✗ Data mismatch - data loss occurred during RDS restart"
+fi
+```
+
+**Expected:** Data matches exactly. File-backed volumes are stored on persistent Btrfs RAID6 storage and survive RDS reboots.
+
+#### 11. Verify Continued I/O After Restart
+
+```bash
+kubectl exec test-hw-pod-10 -- sh -c 'echo "post-restart-$(date +%s)" >> /data/restart-test.txt && cat /data/restart-test.txt'
+```
+
+**Expected:** Both pre-restart and post-restart entries in the file
+
+```
+pre-restart-1771434800
+post-restart-1771434999
+```
+
+**Cleanup:**
+
+```bash
+kubectl delete pod test-hw-pod-10
+kubectl delete pvc test-hw-pvc-10
+```
+
+**Success Criteria:**
+- ✅ RDS restarts and comes back online within 2 minutes
+- ✅ NVMe/TCP connections reconnect automatically (ctrl_loss_tmo=-1 infinite retry)
+- ✅ Data written before restart is fully preserved and readable
+- ✅ New I/O succeeds after reconnection
+- ✅ Controller SSH connection manager reconnects via exponential backoff
+
+**Troubleshooting:**
+- **RDS doesn't come back:** Check physical hardware, verify RDS management IP is still reachable, check power and network connections.
+- **NVMe doesn't reconnect:** Check `ctrl_loss_tmo` on the worker node. If the kernel gave up (connection expired), a pod restart may be needed to trigger `NodeStageVolume` again.
+- **Data is lost:** This would indicate a serious bug — file-backed volumes are on persistent Btrfs storage and should survive any RDS restart. Investigate storage pool integrity.
+- **Controller can't reconnect:** Check SSH key is still valid, verify RDS IP hasn't changed after restart, check RDS user account and authorized_keys.
+
+---
+
+### TC-11: Node Failure Stale VolumeAttachment Cleanup
+
+**Objective:** Verify that after a node failure, stale VolumeAttachment objects are detected and removed, allowing volumes to be reattached on another node.
+
+**Estimated Time:** 10-15 minutes
+
+**Prerequisites:**
+- TC-01 passed and environment validation complete
+- Cluster with at least 2 worker nodes
+- kubectl admin access
+
+**Steps:**
+
+#### 1. Create PVC and Pod
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-hw-pvc-11
+  labels:
+    test: hardware-validation
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rds-nvme-tcp
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-11
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-11
+EOF
+
+kubectl wait --for=condition=Ready pod/test-hw-pod-11 --timeout=60s
+```
+
+#### 2. Note Which Node the Pod is Scheduled On
+
+```bash
+NODE_NAME=$(kubectl get pod test-hw-pod-11 -o jsonpath='{.spec.nodeName}')
+echo "Pod is on node: $NODE_NAME"
+```
+
+#### 3. Write Test Data
+
+```bash
+kubectl exec test-hw-pod-11 -- sh -c 'echo "node-failure-test-$(date +%s)" > /data/node-test.txt'
+kubectl exec test-hw-pod-11 -- cat /data/node-test.txt
+```
+
+**Expected:** Data written and readable
+
+```
+node-failure-test-1771434800
+```
+
+#### 4. Verify VolumeAttachment Exists
+
+```bash
+PV_NAME=$(kubectl get pvc test-hw-pvc-11 -o jsonpath='{.spec.volumeName}')
+echo "PV name: $PV_NAME"
+kubectl get volumeattachment | grep "$PV_NAME"
+```
+
+**Expected:** VolumeAttachment object exists for the volume
+
+```
+csi-<hash>   rds.csi.srvlab.io   <pv-name>   <node-name>   true   Running   <age>
+```
+
+#### 5. Simulate Node Failure
+
+```bash
+# Cordon and drain the node to evict the pod
+kubectl cordon $NODE_NAME
+kubectl drain $NODE_NAME --force --ignore-daemonsets --delete-emptydir-data --grace-period=0
+
+# Wait for pod to be evicted
+kubectl wait --for=delete pod/test-hw-pod-11 --timeout=60s
+
+# Delete the node object to simulate the node going away entirely
+kubectl delete node $NODE_NAME
+```
+
+**Expected:** Node deleted, pod is in Terminating or Evicted state.
+
+#### 6. Observe Attachment Reconciler Behavior
+
+```bash
+kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "stale\|reconcil\|attachment"
+```
+
+**Expected:** Attachment reconciler logs detecting the stale attachment
+
+```
+INFO    Starting attachment reconciliation
+INFO    Clearing stale attachment: volume=pvc-<uuid> node=<node-name> (node deleted)
+INFO    Attachment reconciliation complete: cleared 1 stale attachments (duration=12ms)
+```
+
+#### 7. Wait for Stale Attachment Cleanup
+
+The attachment reconciler runs on a 5-minute interval with a 30-second grace period. To see cleanup faster, restart the controller pod to trigger immediate reconciliation:
+
+```bash
+# Trigger immediate reconciliation by restarting the controller
+kubectl rollout restart deployment/rds-csi-controller -n kube-system
+kubectl rollout status deployment/rds-csi-controller -n kube-system --timeout=60s
+```
+
+Then check the reconciler logs again:
+
+```bash
+kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "stale\|reconcil"
+```
+
+#### 8. Verify VolumeAttachment is Cleared
+
+```bash
+kubectl get volumeattachment | grep "$PV_NAME"
+```
+
+**Expected:** No output or the VolumeAttachment is gone.
+
+```
+(no output)
+```
+
+#### 9. Re-Join Node or Reschedule on Another Node
+
+If using a Deployment: The pod will be rescheduled to another available node automatically once the VolumeAttachment is cleared.
+
+If testing with a bare Pod, recreate on another node:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hw-pod-11-v2
+  labels:
+    test: hardware-validation
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-hw-pvc-11
+EOF
+
+kubectl wait --for=condition=Ready pod/test-hw-pod-11-v2 --timeout=60s
+```
+
+#### 10. Verify Data is Accessible on New Node
+
+```bash
+kubectl exec test-hw-pod-11-v2 -- cat /data/node-test.txt
+```
+
+**Expected:** Data from step 3 is readable on the new node
+
+```
+node-failure-test-1771434800
+```
+
+**Cleanup:**
+
+```bash
+# Delete pods
+kubectl delete pod test-hw-pod-11 test-hw-pod-11-v2 --ignore-not-found=true
+
+# Delete PVC
+kubectl delete pvc test-hw-pvc-11
+
+# Re-join the drained node to the cluster (node-specific procedure)
+# e.g., for a NixOS node: run nixos-rebuild switch and rejoin via kubeadm
+```
+
+**Success Criteria:**
+- ✅ VolumeAttachment for the deleted node is cleared by the reconciler
+- ✅ Pod reschedules to another node successfully
+- ✅ Volume reattaches to the new node without errors
+- ✅ Data written on the original node is accessible on the new node
+
+**Troubleshooting:**
+- **VolumeAttachment persists:** Check reconciler logs, verify reconciler interval and grace period configuration. Force reconciliation by restarting the controller pod.
+- **Pod can't reschedule:** Check if PV still has stale nodeAffinity. Check VolumeAttachment status for any blocking conditions.
+- **Volume fails to attach on new node:** The NVMe/TCP connection from the old node may not have been cleanly disconnected. If the node crashed before `NodeUnstageVolume` ran, the NVMe subsystem may still hold the connection on the RDS side. Check for "already connected" errors in node plugin logs. Verify `nvme disconnect` ran on the old node (it may not have if the node hard-crashed) and check RDS connection count.
+
+---
+
 ## Performance Baselines
 
 These are expected timing values for common operations on production RDS hardware. Actual timings may vary based on network latency, RDS load, and storage pool performance.
@@ -1830,6 +2430,9 @@ Use this table to record test results for your environment:
 | TC-06: Connection Resilience | ☐ Pass / ☐ Fail | ___ min | |
 | TC-07: Concurrent Operations | ☐ Pass / ☐ Fail | ___ min | |
 | TC-08: Snapshot Operations (copy-from) | ☐ Pass / ☐ Fail | ___ min | |
+| TC-09: NVMe Reconnect After Network Interruption | ☐ Pass / ☐ Fail | ___ min | |
+| TC-10: RDS Restart Volume Preservation | ☐ Pass / ☐ Fail | ___ min | |
+| TC-11: Node Failure Stale VolumeAttachment Cleanup | ☐ Pass / ☐ Fail | ___ min | |
 
 **Environment Details:**
 - RDS Hardware: _______________
