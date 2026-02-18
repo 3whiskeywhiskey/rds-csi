@@ -1,0 +1,171 @@
+{{- if .Values.scheduledSnapshots.enabled }}
+---
+# Source: rds-csi-driver/templates/scheduled-snapshots.yaml
+# ServiceAccount for scheduled snapshot CronJob pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rds-csi.snapshotScheduleServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-scheduler
+---
+# Role with permissions to manage VolumeSnapshots (namespaced, not ClusterRole)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-snapshot-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-scheduler
+rules:
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+---
+# RoleBinding binding the Role to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rds-csi.fullname" . }}-snapshot-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rds-csi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: snapshot-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rds-csi.snapshotScheduleServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "rds-csi.fullname" . }}-snapshot-scheduler
+  apiGroup: rbac.authorization.k8s.io
+{{- range .Values.scheduledSnapshots.schedules }}
+{{- $schedule := . }}
+---
+# CronJob for schedule: {{ $schedule.name }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "rds-csi.fullname" $ }}-{{ $schedule.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "rds-csi.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: snapshot-scheduler
+    rds-csi.srvlab.io/schedule: {{ $schedule.name | quote }}
+spec:
+  schedule: {{ $schedule.schedule | default "0 2 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "rds-csi.selectorLabels" $ | nindent 12 }}
+            app.kubernetes.io/component: snapshot-scheduler
+            rds-csi.srvlab.io/schedule: {{ $schedule.name | quote }}
+        spec:
+          serviceAccountName: {{ include "rds-csi.snapshotScheduleServiceAccountName" $ }}
+          restartPolicy: Never
+          containers:
+            - name: snapshot-manager
+              image: "{{ $.Values.scheduledSnapshots.image.repository }}:{{ $.Values.scheduledSnapshots.image.tag }}"
+              imagePullPolicy: {{ $.Values.scheduledSnapshots.image.pullPolicy }}
+              resources:
+                {{- toYaml $.Values.scheduledSnapshots.resources | nindent 16 }}
+              command: ["/bin/sh"]
+              args:
+                - -c
+                - |
+                  set -e
+
+                  SNAPSHOT_NAME="{{ $schedule.name }}-$(date +%Y%m%d-%H%M%S)"
+                  PVC_NAME="{{ $schedule.pvcName }}"
+                  SNAPSHOT_CLASS="{{ $schedule.snapshotClassName | default $.Values.snapshotClass.name }}"
+                  NAMESPACE="{{ $.Release.Namespace }}"
+
+                  echo "Creating snapshot ${SNAPSHOT_NAME} for PVC ${PVC_NAME}"
+
+                  # Verify PVC exists
+                  if ! kubectl get pvc "${PVC_NAME}" -n "${NAMESPACE}" > /dev/null 2>&1; then
+                    echo "ERROR: PVC ${PVC_NAME} not found in namespace ${NAMESPACE}"
+                    exit 1
+                  fi
+
+                  # Create VolumeSnapshot
+                  cat <<SNAP_EOF | kubectl apply -f -
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: ${SNAPSHOT_NAME}
+                    namespace: ${NAMESPACE}
+                    labels:
+                      app.kubernetes.io/managed-by: rds-csi-snapshot-scheduler
+                      rds-csi.srvlab.io/schedule: "{{ $schedule.name }}"
+                      rds-csi.srvlab.io/pvc: "{{ $schedule.pvcName }}"
+                  spec:
+                    volumeSnapshotClassName: ${SNAPSHOT_CLASS}
+                    source:
+                      persistentVolumeClaimName: ${PVC_NAME}
+                  SNAP_EOF
+
+                  echo "Snapshot ${SNAPSHOT_NAME} created successfully"
+
+                  MAX_COUNT={{ dig "retention" "maxCount" 7 $schedule }}
+                  MAX_AGE="{{ dig "retention" "maxAge" "168h" $schedule }}"
+
+                  echo "Running retention cleanup: maxCount=${MAX_COUNT}, maxAge=${MAX_AGE}"
+
+                  # Convert maxAge to seconds for comparison
+                  # Support hours (h) format: strip trailing 'h' and multiply by 3600
+                  MAX_AGE_HOURS=$(echo "${MAX_AGE}" | sed 's/h$//')
+                  MAX_AGE_SECONDS=$((MAX_AGE_HOURS * 3600))
+                  NOW=$(date +%s)
+
+                  # Write snapshots to temp file (sorted oldest first)
+                  # Avoids subshell variable scope issues from piped while read
+                  kubectl get volumesnapshot -n "${NAMESPACE}" \
+                    -l "rds-csi.srvlab.io/schedule={{ $schedule.name }}" \
+                    -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}' \
+                    | sort -k2 > /tmp/snapshots.txt
+
+                  TOTAL=$(wc -l < /tmp/snapshots.txt | tr -d ' ')
+                  echo "Found ${TOTAL} snapshots for schedule {{ $schedule.name }}"
+
+                  DELETED=0
+                  while IFS=' ' read -r SNAP_NAME SNAP_TIME; do
+                    [ -z "${SNAP_NAME}" ] && continue
+
+                    # Calculate age in seconds (GNU date - Debian-based image)
+                    SNAP_EPOCH=$(date -d "${SNAP_TIME}" +%s 2>/dev/null || echo 0)
+                    AGE_SECONDS=$((NOW - SNAP_EPOCH))
+
+                    REMAINING=$((TOTAL - DELETED))
+
+                    # Never delete if we'd go below maxCount
+                    if [ "${REMAINING}" -le "${MAX_COUNT}" ]; then
+                      echo "Keeping ${SNAP_NAME} (at minimum count ${MAX_COUNT})"
+                      continue
+                    fi
+
+                    # Delete if older than maxAge
+                    if [ "${AGE_SECONDS}" -gt "${MAX_AGE_SECONDS}" ]; then
+                      echo "Deleting ${SNAP_NAME} (age: $((AGE_SECONDS / 3600))h, exceeds ${MAX_AGE})"
+                      kubectl delete volumesnapshot "${SNAP_NAME}" -n "${NAMESPACE}" --ignore-not-found
+                      DELETED=$((DELETED + 1))
+                    else
+                      echo "Keeping ${SNAP_NAME} (age: $((AGE_SECONDS / 3600))h, within ${MAX_AGE})"
+                    fi
+                  done < /tmp/snapshots.txt
+
+                  echo "Retention cleanup complete: deleted ${DELETED} of ${TOTAL} snapshots"
+{{- end }}
+{{- end }}
