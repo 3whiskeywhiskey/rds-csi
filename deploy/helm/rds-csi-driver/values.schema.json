@@ -193,6 +193,74 @@
         }
       }
     },
+    "scheduledSnapshots": {
+      "type": "object",
+      "description": "Scheduled snapshot configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable scheduled snapshots"
+        },
+        "schedules": {
+          "type": "array",
+          "description": "List of snapshot schedules",
+          "items": {
+            "type": "object",
+            "required": ["name", "pvcName"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Schedule name (used in CronJob and snapshot names)",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "maxLength": 63
+              },
+              "pvcName": {
+                "type": "string",
+                "description": "Target PVC name to snapshot"
+              },
+              "schedule": {
+                "type": "string",
+                "description": "Cron schedule expression"
+              },
+              "snapshotClassName": {
+                "type": "string",
+                "description": "VolumeSnapshotClass name"
+              },
+              "retention": {
+                "type": "object",
+                "properties": {
+                  "maxCount": {
+                    "type": "integer",
+                    "description": "Maximum number of snapshots to keep",
+                    "minimum": 1
+                  },
+                  "maxAge": {
+                    "type": "string",
+                    "description": "Maximum age of snapshots (Go duration format)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "image": {
+          "type": "object",
+          "description": "kubectl container image",
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["Always", "IfNotPresent", "Never"]
+            }
+          }
+        }
+      }
+    },
     "namespace": {
       "type": "object",
       "description": "Namespace configuration",

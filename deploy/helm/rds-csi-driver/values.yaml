@@ -321,6 +321,43 @@ snapshotClass:
   # Deletion policy (Delete or Retain)
   deletionPolicy: Delete
 
+# Scheduled snapshot configuration
+# Creates a CronJob that periodically snapshots a target PVC
+scheduledSnapshots:
+  # Enable scheduled snapshots (requires snapshotClass.enabled=true)
+  enabled: false
+
+  # List of snapshot schedules (one CronJob per entry)
+  schedules:
+    - name: daily-snapshot
+      # Target PVC name to snapshot
+      pvcName: ""
+      # Cron schedule expression (default: daily at 02:00)
+      schedule: "0 2 * * *"
+      # VolumeSnapshotClass to use (defaults to snapshotClass.name)
+      snapshotClassName: ""
+      # Retention policy
+      retention:
+        # Maximum number of snapshots to keep (always keeps at least this many regardless of age)
+        maxCount: 7
+        # Maximum age of snapshots (Go duration format: 168h = 7 days)
+        maxAge: "168h"
+
+  # Container image for kubectl (used to create/delete VolumeSnapshots)
+  image:
+    repository: bitnami/kubectl
+    tag: "1.28"
+    pullPolicy: IfNotPresent
+
+  # Resource requests/limits for the CronJob pod
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
 # Namespace configuration
 namespace:
   # Create namespace via chart (set false if namespace already exists)

@@ -113,3 +113,10 @@ Node image with tag
 {{- $tag := include "rds-csi.imageTag" (merge (dict "Chart" .Chart) .Values.node.image) }}
 {{- printf "%s:%s" .Values.node.image.repository $tag }}
 {{- end }}
+
+{{/*
+Scheduled snapshot ServiceAccount name
+*/}}
+{{- define "rds-csi.snapshotScheduleServiceAccountName" -}}
+{{- printf "%s-snapshot-scheduler" (include "rds-csi.fullname" .) }}
+{{- end }}
