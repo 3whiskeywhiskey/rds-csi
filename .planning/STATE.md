@@ -40,6 +40,7 @@ Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 
 | Phase 30-snapshot-validation P01 | 7 min | 2 tasks | 2 files |
 | Phase 30-snapshot-validation P02 | 35 min | 2 tasks | 6 files |
 | Phase 31-scheduled-snapshots P01 | 3 min | 3 tasks | 5 files |
+| Phase 32-resilience-regression-tests P02 | 8 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,9 @@ Recent decisions affecting current work:
 - [Phase 31-scheduled-snapshots P01]: dig helper for nil-safe retention value access in Helm template (avoids nil pointer on --set without retention sub-object)
 - [Phase 31-scheduled-snapshots P01]: Temp file at /tmp/snapshots.txt for retention while loop to avoid pipe subshell DELETED counter bug
 - [Phase 31-scheduled-snapshots P01]: Namespaced Role (not ClusterRole) for snapshot-scheduler since VolumeSnapshots are namespace-scoped
+- [Phase 32-resilience-regression-tests]: TC-09 uses iptables OUTPUT chain on worker node to block NVMe/TCP to RDS, verifying ctrl_loss_tmo=-1 infinite retry reconnection
+- [Phase 32-resilience-regression-tests]: TC-10 includes DANGER warning: RDS restart affects ALL NVMe/TCP connections on ALL cluster nodes (maintenance window required)
+- [Phase 32-resilience-regression-tests]: TC-11 documents controller pod restart as shortcut to trigger immediate reconciliation (vs 5-minute default interval)
 
 ### Pending Todos
 
