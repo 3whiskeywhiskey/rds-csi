@@ -54,27 +54,27 @@ Requirements for v0.11.0 Data Protection milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SNAP-01 | — | Pending |
-| SNAP-02 | — | Pending |
-| SNAP-03 | — | Pending |
-| SNAP-04 | — | Pending |
-| SNAP-05 | — | Pending |
-| SNAP-06 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| SCHED-01 | — | Pending |
-| SCHED-02 | — | Pending |
-| SCHED-03 | — | Pending |
-| RESIL-01 | — | Pending |
-| RESIL-02 | — | Pending |
-| RESIL-03 | — | Pending |
+| SNAP-01 | Phase 29 | Pending |
+| SNAP-02 | Phase 29 | Pending |
+| SNAP-03 | Phase 29 | Pending |
+| SNAP-04 | Phase 29 | Pending |
+| SNAP-05 | Phase 29 | Pending |
+| SNAP-06 | Phase 29 | Pending |
+| TEST-01 | Phase 30 | Pending |
+| TEST-02 | Phase 30 | Pending |
+| TEST-03 | Phase 30 | Pending |
+| SCHED-01 | Phase 31 | Pending |
+| SCHED-02 | Phase 31 | Pending |
+| SCHED-03 | Phase 31 | Pending |
+| RESIL-01 | Phase 32 | Pending |
+| RESIL-02 | Phase 32 | Pending |
+| RESIL-03 | Phase 32 | Pending |
 
 **Coverage:**
 - v0.11.0 requirements: 15 total
-- Mapped to phases: 0
-- Unmapped: 15
+- Mapped to phases: 15
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-17*
-*Last updated: 2026-02-17 after initial definition*
+*Last updated: 2026-02-17 after roadmap creation (phases 29-32)*
