@@ -37,7 +37,7 @@ See milestone archives in `.planning/milestones/` for complete phase details:
 
 **Milestone Goal:** Fix broken snapshot implementation and ensure data safety with automated backups
 
-- [ ] **Phase 29: Snapshot Implementation Fix** - Rewrite SSH snapshot commands to use `/disk add copy-from` CoW; update CSI controller RPCs
+- [x] **Phase 29: Snapshot Implementation Fix** - Rewrite SSH snapshot commands to use `/disk add copy-from` CoW; update CSI controller RPCs ✅ 2026-02-18
 - [ ] **Phase 30: Snapshot Validation** - Update mock RDS server to copy-from semantics; pass CSI sanity tests; validate against real hardware
 - [ ] **Phase 31: Scheduled Snapshots** - CronJob with configurable schedule and retention cleanup; Helm chart template
 - [ ] **Phase 32: Resilience Regression Tests** - Validate NVMe reconnect, RDS restart, and node failure scenarios don't regress
@@ -58,8 +58,8 @@ See milestone archives in `.planning/milestones/` for complete phase details:
 **Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 29-01-PLAN.md — Rewrite SSH snapshot commands (types, ID generation, /disk add copy-from) in pkg/rds/
-- [ ] 29-02-PLAN.md — Update CSI controller snapshot RPCs to use new SSH backend
+- [x] 29-01-PLAN.md — Rewrite SSH snapshot commands (types, ID generation, /disk add copy-from) in pkg/rds/
+- [x] 29-02-PLAN.md — Update CSI controller snapshot RPCs to use new SSH backend
 
 ### Phase 30: Snapshot Validation
 
@@ -110,10 +110,10 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 29. Snapshot Implementation Fix | v0.11.0 | 0/2 | Not started | - |
+| 29. Snapshot Implementation Fix | v0.11.0 | 2/2 | ✅ Complete | 2026-02-18 |
 | 30. Snapshot Validation | v0.11.0 | 0/2 | Not started | - |
 | 31. Scheduled Snapshots | v0.11.0 | 0/1 | Not started | - |
 | 32. Resilience Regression Tests | v0.11.0 | 0/1 | Not started | - |
 
 ---
-*Last updated: 2026-02-17 after v0.11.0 roadmap creation*
+*Last updated: 2026-02-18 after Phase 29 completion*
