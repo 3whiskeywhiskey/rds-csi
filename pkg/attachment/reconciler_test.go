@@ -503,6 +503,73 @@ func TestTriggerReconcile_NotRunning(t *testing.T) {
 	// Should not panic
 }
 
+func TestReconciler_RESIL03_StaleCleanupAndReattachment(t *testing.T) {
+	// Scenario: Volume attached to node-A, node-A is deleted,
+	// reconciler clears stale attachment, volume reattaches to node-B.
+
+	// Setup: fake k8s with only node-B (node-A does not exist = "deleted")
+	nodeB := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-b"},
+	}
+	k8sClient := fake.NewSimpleClientset(nodeB)
+	nodeLister, pvLister := createTestListers(k8sClient, nodeB)
+
+	am := NewAttachmentManager(nil)
+	ctx := context.Background()
+	volumeID := "pvc-resil-03"
+	nodeA := "node-a" // This node does NOT exist in k8s
+
+	// Step 1: Track attachment to node-A (simulates ControllerPublishVolume)
+	err := am.TrackAttachment(ctx, volumeID, nodeA)
+	if err != nil {
+		t.Fatalf("TrackAttachment to node-a failed: %v", err)
+	}
+
+	// Verify attachment exists on node-A
+	state, exists := am.GetAttachment(volumeID)
+	if !exists || state.NodeID != nodeA {
+		t.Fatalf("Expected attachment on node-a, got exists=%v state=%+v", exists, state)
+	}
+
+	// Step 2: Run reconciliation (should detect node-A is gone and clear attachment)
+	r, err := NewAttachmentReconciler(ReconcilerConfig{
+		Manager:     am,
+		K8sClient:   k8sClient,
+		NodeLister:  nodeLister,
+		PVLister:    pvLister,
+		Interval:    100 * time.Millisecond,
+		GracePeriod: 1 * time.Nanosecond, // Immediately expired
+	})
+	if err != nil {
+		t.Fatalf("Failed to create reconciler: %v", err)
+	}
+
+	r.reconcile(ctx)
+
+	// Step 3: Verify stale attachment was cleared
+	_, exists = am.GetAttachment(volumeID)
+	if exists {
+		t.Error("Expected stale attachment on node-a to be cleared after reconciliation")
+	}
+
+	// Step 4: Reattach to node-B (simulates volume moving to surviving node)
+	err = am.TrackAttachment(ctx, volumeID, "node-b")
+	if err != nil {
+		t.Fatalf("TrackAttachment to node-b failed: %v", err)
+	}
+
+	// Step 5: Run reconciliation again — attachment on node-B should be preserved
+	r.reconcile(ctx)
+
+	state, exists = am.GetAttachment(volumeID)
+	if !exists {
+		t.Error("Expected attachment on node-b to be preserved (node exists)")
+	}
+	if exists && state.NodeID != "node-b" {
+		t.Errorf("Expected attachment on node-b, got %s", state.NodeID)
+	}
+}
+
 func TestTriggerReconcile_AfterStop(t *testing.T) {
 	am := NewAttachmentManager(nil)
 	k8sClient := fake.NewSimpleClientset()
