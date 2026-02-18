@@ -1165,20 +1165,13 @@ func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 	}
 
 	// Filter by source volume if specified.
-	// The SourceVolume field is populated by the RDS layer from the snapshot name using
-	// ExtractSourceVolumeIDFromSnapshotID. As a defense-in-depth fallback, we also try
-	// extracting from the snapshot name directly if SourceVolume is empty.
+	// SourceVolume is populated by parseSnapshotInfo from the source-volume= field in
+	// RDS /disk print output. Snapshots without a source-volume field are excluded from
+	// source-based filtering (they cannot be matched to a source volume).
 	if req.GetSourceVolumeId() != "" {
 		filtered := make([]rds.SnapshotInfo, 0)
 		for _, s := range allSnapshots {
-			sourceVol := s.SourceVolume
-			if sourceVol == "" {
-				// Fallback: derive source volume from snapshot name (snap-<uuid>-at-<suffix>)
-				if derived, err := utils.ExtractSourceVolumeIDFromSnapshotID(s.Name); err == nil {
-					sourceVol = derived
-				}
-			}
-			if sourceVol == req.GetSourceVolumeId() {
+			if s.SourceVolume == req.GetSourceVolumeId() {
 				filtered = append(filtered, s)
 			}
 		}
