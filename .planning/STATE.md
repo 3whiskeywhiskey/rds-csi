@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 ## Current Position
 
 Phase: 29 of 32 (Snapshot Implementation Fix)
-Plan: 0 of 2 in current phase
-Status: Ready to plan
-Last activity: 2026-02-17 — v0.11.0 roadmap created (phases 29-32)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-18 — Phase 29 Plan 01 complete (snapshot SSH command rewrite)
 
-Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [░░░░░░░░░░] 0% (0/6 plans)
+Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [█░░░░░░░░░] 17% (1/6 plans)
 
 ## Performance Metrics
 
@@ -33,7 +33,9 @@ Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 
 | v0.10.0 Feature Enhancements | 26-28 | 19/19 | ✅ Shipped 2026-02-06 |
 | v0.11.0 Data Protection | 29-32 | 0/6 | 🚧 In progress |
 
-*Updated: 2026-02-17*
+*Updated: 2026-02-18*
+
+| Phase 29-snapshot-implementation-fix P01 | 12 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -47,6 +49,9 @@ Recent decisions affecting current work:
 - v0.11.0: Snapshot disks must NOT be NVMe-exported (immutable, write-protected by omission)
 - Quick-006 (2026-02-12): blkid exit 1 treated as error to prevent data loss on NVMe-oF reconnect
 - v0.10.0 snapshot code in pkg/rds/commands.go uses wrong Btrfs subvolume approach — full rewrite needed
+- [Phase 29-snapshot-implementation-fix]: Snapshot IDs use snap-<source-uuid>-at-<unix-timestamp> format embedding source lineage directly in slot name
+- [Phase 29-snapshot-implementation-fix]: Snapshot disks created without NVMe export flags (not network-exported, immutable backing files)
+- [Phase 29-snapshot-implementation-fix]: copy-from uses [find slot=<name>] to reference source by slot (more reliable than file path)
 
 ### Pending Todos
 
@@ -54,13 +59,14 @@ None.
 
 ### Blockers/Concerns
 
-- Snapshot implementation is fully broken in v0.10.0 (wrong approach); Phase 29 is a rewrite, not a patch
+- Phase 29 Plan 01 complete: SSH snapshot commands rewritten (copy-from approach)
+- Phase 29 Plan 02 needed: CSI controller RPC updates (CreateSnapshot uses new ID format, etc.)
 - RDS restart testing affects site networking — requires confidence before running (document before executing)
-- Mock server snapshot handlers must be updated before sanity tests can pass (Phase 30 dependency on Phase 29)
+- Mock server snapshot handlers updated correctly in Plan 01
 
 ## Session Continuity
 
-Last session: 2026-02-17
-Stopped at: v0.11.0 roadmap created (phases 29-32 defined)
+Last session: 2026-02-18
+Stopped at: Completed 29-01-PLAN.md — snapshot SSH command rewrite (copy-from, new ID format, types updated)
 Resume file: None
-Next action: Plan Phase 29 — rewrite SSH snapshot commands in pkg/rds/commands.go to use `/disk add copy-from`
+Next action: Execute Phase 29 Plan 02 — update CSI controller RPCs (CreateSnapshot, ListSnapshots) for new ID format
