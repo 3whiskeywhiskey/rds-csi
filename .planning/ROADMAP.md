@@ -70,11 +70,11 @@ Plans:
   1. CSI sanity test suite passes all snapshot test cases with zero failures (no regressions from snapshot fix)
   2. Mock RDS server responds to copy-from commands with semantics matching real RouterOS behavior (independent copies, no NVMe export)
   3. Hardware validation test case TC-08 (snapshot create/restore/delete) passes against real RDS hardware end-to-end
-**Plans:** TBD
+**Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 30-01: Update mock RDS server to replace Btrfs subvolume handlers with copy-from semantics; update snapshot unit tests
-- [ ] 30-02: Run CSI sanity snapshot test suite and fix any failures; add TC-08 hardware validation test case to HARDWARE_VALIDATION.md
+- [ ] 30-01-PLAN.md — Update mock RDS server: replace Btrfs subvolume handlers with copy-from semantics; add snapshot unit tests
+- [ ] 30-02-PLAN.md — Run CSI sanity snapshot tests and fix failures; update TC-08 hardware validation for copy-from approach
 
 ### Phase 31: Scheduled Snapshots
 
@@ -116,4 +116,4 @@ Plans:
 | 32. Resilience Regression Tests | v0.11.0 | 0/1 | Not started | - |
 
 ---
-*Last updated: 2026-02-18 after Phase 29 completion*
+*Last updated: 2026-02-18 after Phase 30 planning*
