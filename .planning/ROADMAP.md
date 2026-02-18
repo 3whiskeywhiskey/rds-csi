@@ -99,10 +99,11 @@ Plans:
   1. After a simulated network interruption causes NVMe connection drop, pods with mounted volumes recover and continue I/O without manual intervention
   2. After an RDS restart, volumes remain mounted and data written before the restart is readable after reconnection
   3. After a node failure, stale VolumeAttachment objects are detected and removed automatically, allowing volumes to be reattached on another node
-**Plans:** TBD
+**Plans:** 2 plans in 1 wave
 
 Plans:
-- [ ] 32-01: Document and implement resilience regression test suite covering NVMe reconnect, RDS restart, and node failure scenarios
+- [ ] 32-01-PLAN.md — Automated E2E resilience regression tests using mock error injection (RESIL-01, RESIL-02, RESIL-03)
+- [ ] 32-02-PLAN.md — Hardware validation test cases TC-09, TC-10, TC-11 for manual resilience testing; update TESTING.md
 
 ## Progress
 
@@ -113,7 +114,7 @@ Plans:
 | 29. Snapshot Implementation Fix | v0.11.0 | 2/2 | ✅ Complete | 2026-02-18 |
 | 30. Snapshot Validation | v0.11.0 | 2/2 | ✅ Complete | 2026-02-17 |
 | 31. Scheduled Snapshots | v0.11.0 | 1/1 | ✅ Complete | 2026-02-18 |
-| 32. Resilience Regression Tests | v0.11.0 | 0/1 | Not started | - |
+| 32. Resilience Regression Tests | v0.11.0 | 0/2 | Not started | - |
 
 ---
-*Last updated: 2026-02-18 after Phase 31 execution*
+*Last updated: 2026-02-18 after Phase 32 planning*
