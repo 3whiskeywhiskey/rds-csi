@@ -83,12 +83,14 @@ make test-e2e
 - Block volume support (raw block mode)
 - Driver startup and shutdown
 - In-process testing for fast iteration
+- `resilience_test.go` - NVMe reconnect, RDS connection recovery, and node failure stale attachment cleanup
 
 **Test location:** `test/e2e/`
 
 **Key test suites:**
 - `lifecycle_test.go` - Volume create, delete, and expansion workflows
 - `block_volume_test.go` - Block mode volume operations
+- `resilience_test.go` - Resilience regression (RESIL-01, RESIL-02, RESIL-03) with mock error injection
 
 **E2E in CI:** E2E tests run in a dedicated CI job without requiring real hardware, using the mock RDS server for fast validation.
 
@@ -106,6 +108,37 @@ RDS_ADDRESS=10.42.241.3 RDS_USER=admin RDS_PRIVATE_KEY_PATH=~/.ssh/id_rsa go tes
 - Test file: `test/integration/hardware_integration_test.go`
 
 For comprehensive manual validation procedures against real hardware, see [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md).
+
+### Resilience Regression Tests
+
+Resilience regression tests validate driver resilience to connection failures and node failures using mock infrastructure, without requiring real hardware. These tests live in `test/e2e/resilience_test.go` and use a mock RDS server with error injection to simulate failure scenarios.
+
+**Run resilience tests:**
+
+```bash
+go test -v ./test/e2e/... -ginkgo.v -ginkgo.focus="Resilience"
+```
+
+**What they cover:**
+
+| Test ID | Scenario | What is validated |
+|---------|----------|-------------------|
+| RESIL-01 | SSH connection recovery | Controller reconnects to RDS after connection drop; queued volume operations succeed after reconnect |
+| RESIL-02 | RDS unavailability handling | Volume operations return retriable errors during RDS downtime; driver recovers when RDS comes back |
+| RESIL-03 | Stale attachment cleanup | Reconciler clears VolumeAttachment for deleted node; volume is reattachable after cleanup |
+
+**Note on hardware-level validation:** The resilience regression tests use mock infrastructure with simulated failures. They cannot reproduce hardware-level behaviors such as:
+
+- Actual NVMe/TCP kernel reconnection behavior (`ctrl_loss_tmo`, `reconnect_delay`)
+- True RDS restart with Btrfs RAID6 data persistence verification
+- Real node power-off scenarios (kernel crash, power loss)
+
+For hardware-level resilience validation, use the manual test procedures documented in [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md):
+- **TC-09** — NVMe reconnect after network interruption (iptables block/restore)
+- **TC-10** — RDS restart with volume preservation verification
+- **TC-11** — Node failure stale VolumeAttachment cleanup
+
+**Resilience behavior is regression-tested:** Changes to connection manager logic (`pkg/rds/connection_manager.go`) or attachment reconciler (`pkg/attachment/reconciler.go`) must pass the resilience regression tests before merging.
 
 ### Verification Suite
 
@@ -161,6 +194,11 @@ Node service capabilities are implemented but require NVMe/TCP hardware for test
 - Sanity tests skip Node service (no NVMe/TCP mock available)
 - Node functionality tested manually with real hardware
 - E2E tests with hardware environment planned for Phase 24
+
+**Resilience testing status:**
+- SSH connection recovery and RDS unavailability: regression-tested via `resilience_test.go` (RESIL-01, RESIL-02)
+- Stale VolumeAttachment cleanup: regression-tested via `resilience_test.go` (RESIL-03)
+- Hardware-level NVMe reconnect and RDS restart: manual validation via HARDWARE_VALIDATION.md TC-09, TC-10, TC-11
 
 ## Test Infrastructure
 
