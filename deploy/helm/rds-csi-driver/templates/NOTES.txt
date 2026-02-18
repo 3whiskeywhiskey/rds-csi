@@ -123,6 +123,34 @@ To create a snapshot:
       persistentVolumeClaimName: my-pvc
 {{- end }}
 
+{{- if .Values.scheduledSnapshots.enabled }}
+================================================================================
+Scheduled Snapshots
+================================================================================
+
+Automated snapshot schedules have been configured:
+{{- range .Values.scheduledSnapshots.schedules }}
+
+- {{ .name }}:
+  PVC: {{ .pvcName }}
+  Schedule: {{ .schedule | default "0 2 * * *" }}
+  Retention: keep {{ dig "retention" "maxCount" 7 . }} snapshots, max age {{ dig "retention" "maxAge" "168h" . }}
+{{- end }}
+
+To check CronJob status:
+
+  kubectl get cronjobs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=snapshot-scheduler
+
+To view recent snapshot jobs:
+
+  kubectl get jobs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=snapshot-scheduler
+
+To view created snapshots for a schedule:
+
+  kubectl get volumesnapshot -n {{ .Release.Namespace }} -l rds-csi.srvlab.io/schedule=<schedule-name>
+
+{{- end }}
+
 {{- if .Values.monitoring.enabled }}
 ================================================================================
 Monitoring
