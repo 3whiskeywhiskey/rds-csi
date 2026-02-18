@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-17)
 
 **Core value:** Volumes remain accessible after NVMe-oF reconnections
-**Current focus:** Phase 32 - Resilience Regression Tests (v0.11.0)
+**Current focus:** Quick tasks (snapshot tech debt cleanup)
 
 ## Current Position
 
 Phase: 32 of 32 (Resilience Regression Tests) — COMPLETE
 Plan: 1 of 1 in current phase
 Status: Phase 32 complete — v0.11.0 milestone COMPLETE
-Last activity: 2026-02-18 — Phase 32 complete (resilience regression tests: RESIL-01/02/03)
+Last activity: 2026-02-18 — Quick-007 complete (snapshot tech debt cleanup: creation-time= added, dead code removed)
 
 Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [██████████] 100% (6/6 plans)
 
@@ -42,6 +42,7 @@ Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 
 | Phase 31-scheduled-snapshots P01 | 3 min | 3 tasks | 5 files |
 | Phase 32-resilience-regression-tests P02 | 8 | 2 tasks | 2 files |
 | Phase 32-resilience-regression-tests P01 | 6 | 3 tasks | 5 files |
+| Quick-007-snapshot-tech-debt | 12 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,9 @@ Recent decisions affecting current work:
 - [Phase 32-resilience-regression-tests]: SetErrorMode resets operationNum=0 on mode change to clear counter state for the new mode
 - [Phase 32-resilience-regression-tests]: RESIL-01/02 use SetErrorMode (not Stop/Start) because MockRDSServer.shutdown channel closes permanently on Stop()
 - [Phase 32-resilience-regression-tests]: RESIL-03 is a unit test in reconciler_test.go because E2E framework uses K8sClient: nil (no AttachmentManager available)
+- [Quick-007]: Dead code removal safe — GenerateSnapshotIDFromSource/ExtractSourceVolumeIDFromSnapshotID/ExtractTimestampFromSnapshotID had zero production callers after phase 29-30 format change
+- [Quick-007]: ListSnapshots fallback removed — slot UUID is name-hash (not source UUID), so ExtractSourceVolumeIDFromSnapshotID returned wrong source IDs for new-format IDs
+- [Quick-007]: creation-time= added to mock formatSnapshotDetail using strings.ToLower(t.Format("Jan/02/2006 15:04:05")) to match RouterOS lowercase month format (parseRouterOSTime title-cases internally)
 
 ### Pending Todos
 
@@ -87,6 +91,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 32-01-PLAN.md (resilience regression tests — RESIL-01/02/03)
+Stopped at: Completed Quick-007 (snapshot tech debt cleanup)
 Resume file: None
-Next action: v0.11.0 Data Protection milestone COMPLETE — all phases 29-32 done
+Next action: v0.11.0 Data Protection milestone COMPLETE — all phases 29-32 done, quick tasks 001-007 done
