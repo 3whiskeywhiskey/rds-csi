@@ -1230,6 +1230,11 @@ func TestValidateSnapshotID(t *testing.T) {
 			snapshotID:  "snap-12345678-1234-1234-1234-123456789abc-at-0",
 			expectError: false, // 0 is a valid Unix timestamp
 		},
+		{
+			name:        "deterministic hash format: snap-<uuid>-at-<10-hex>",
+			snapshotID:  "snap-12345678-1234-1234-1234-123456789abc-at-3a9f8c02d1",
+			expectError: false, // deterministic hash suffix
+		},
 	}
 
 	for _, tt := range tests {

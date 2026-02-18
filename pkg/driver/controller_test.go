@@ -2353,10 +2353,9 @@ func TestCreateSnapshot(t *testing.T) {
 			wantCode:       codes.NotFound,
 		},
 		{
-			// With timestamp-based IDs, each CreateSnapshot call generates a unique ID.
-			// The "same name" has no effect on idempotency — the snapshot name is just metadata.
-			// A second call from the same source will create a new snapshot (different timestamp).
-			name:           "success: second snapshot from same source (new timestamp ID)",
+			// With deterministic IDs, the same (name, source) pair always produces the same ID.
+			// A second call with a different name but same source creates a distinct snapshot.
+			name:           "success: second snapshot from same source (different name)",
 			snapshotName:   "test-snapshot-1-again",
 			sourceVolumeID: testVolumeID1,
 			wantErr:        false,
@@ -2411,11 +2410,79 @@ func TestCreateSnapshot(t *testing.T) {
 					t.Errorf("Expected source volume %s, got %s", tt.sourceVolumeID, resp.Snapshot.SourceVolumeId)
 				}
 				if !resp.Snapshot.ReadyToUse {
-					t.Error("Expected ReadyToUse=true for Btrfs snapshot")
+					t.Error("Expected ReadyToUse=true for CoW snapshot")
 				}
 			}
 		})
 	}
+}
+
+func TestCreateSnapshotIdempotency(t *testing.T) {
+	ctx := context.Background()
+	cs, mockRDS := testControllerServer(t)
+
+	// Add a test source volume
+	mockRDS.AddVolume(&rds.VolumeInfo{
+		Slot:          testVolumeID1,
+		FilePath:      "/storage-pool/metal-csi/" + testVolumeID1 + ".img",
+		FileSizeBytes: 10 * 1024 * 1024 * 1024,
+		NVMETCPPort:   4420,
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID1,
+	})
+
+	snapshotName := "test-idempotent-snapshot"
+
+	// First call: creates the snapshot
+	resp1, err := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           snapshotName,
+		SourceVolumeId: testVolumeID1,
+	})
+	if err != nil {
+		t.Fatalf("First CreateSnapshot failed: %v", err)
+	}
+	if resp1.Snapshot == nil {
+		t.Fatal("First CreateSnapshot returned nil snapshot")
+	}
+	snapshotID1 := resp1.Snapshot.SnapshotId
+
+	// Second call with SAME name + source: must return the same snapshot ID (idempotent)
+	resp2, err := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           snapshotName,
+		SourceVolumeId: testVolumeID1,
+	})
+	if err != nil {
+		t.Fatalf("Second CreateSnapshot (idempotent) failed: %v", err)
+	}
+	if resp2.Snapshot == nil {
+		t.Fatal("Second CreateSnapshot returned nil snapshot")
+	}
+	snapshotID2 := resp2.Snapshot.SnapshotId
+
+	if snapshotID1 != snapshotID2 {
+		t.Errorf("Idempotency violated: first call returned %s, second call returned %s", snapshotID1, snapshotID2)
+	}
+
+	// Verify expected ID format: snap-<source-uuid>-at-<hash>
+	expectedID := utils.GenerateSnapshotID(snapshotName, testVolumeID1)
+	if snapshotID1 != expectedID {
+		t.Errorf("Snapshot ID format mismatch: got %s, expected %s", snapshotID1, expectedID)
+	}
+
+	// Third call with different name but same source: creates a DIFFERENT snapshot
+	resp3, err := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           "different-snapshot-name",
+		SourceVolumeId: testVolumeID1,
+	})
+	if err != nil {
+		t.Fatalf("Third CreateSnapshot (different name) failed: %v", err)
+	}
+	if resp3.Snapshot.SnapshotId == snapshotID1 {
+		t.Errorf("Different snapshot name should produce different ID, but got same: %s", snapshotID1)
+	}
+
+	// Cleanup
+	_ = mockRDS.DeleteSnapshot(snapshotID1)
+	_ = mockRDS.DeleteSnapshot(resp3.Snapshot.SnapshotId)
 }
 
 func TestDeleteSnapshot(t *testing.T) {

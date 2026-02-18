@@ -981,7 +981,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
 
-// CreateSnapshot creates a Btrfs snapshot of a volume
+// CreateSnapshot creates a file-based CoW snapshot of a volume via /disk add copy-from.
 func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
 	klog.V(4).Infof("CreateSnapshot CSI call for name=%s source=%s", req.GetName(), req.GetSourceVolumeId())
 
@@ -1005,14 +1005,16 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Error(codes.Internal, "RDS client not initialized")
 	}
 
-	// 2. Generate snapshot ID from source volume and current timestamp (for traceability)
-	// NOTE: Phase 29 - switched from deterministic SnapshotNameToID to timestamp-based ID
-	// that embeds source volume lineage directly in the slot name.
-	snapshotID := utils.GenerateSnapshotIDFromSource(sourceVolumeID)
+	// 2. Generate deterministic snapshot ID from CSI name + source volume for idempotency.
+	// Format: snap-<source-uuid>-at-<10-char-hash-of-csi-name>
+	// The same (name, sourceVolumeID) pair always produces the same snapshot ID,
+	// satisfying CSI idempotency requirements (external-snapshotter won't re-call
+	// CreateSnapshot, but CSI sanity tests and retries need this determinism).
+	snapshotID := utils.GenerateSnapshotID(req.GetName(), sourceVolumeID)
 
-	// 3. Check idempotency: does snapshot with this ID already exist?
-	// With timestamp-based IDs, exact duplicates won't occur naturally, but we still
-	// handle the case for robustness.
+	// 3. Check idempotency: does a snapshot with this ID already exist?
+	// Since the ID is deterministic, a retry with the same (name, source) returns the same
+	// snapshot rather than creating a duplicate.
 	existingSnapshot, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
 	if err == nil {
 		// Snapshot exists -- check if same source volume (idempotent) or different (conflict)
@@ -1044,9 +1046,10 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	}
 
 	// 5. Determine base path for snapshot file storage
-	// Snapshots are stored in the same base directory as volumes
+	// Snapshots are stored in the same base directory as volumes (paramVolumePath).
+	params := req.GetParameters()
 	volumeBasePath := defaultVolumeBasePath
-	if path, ok := req.GetParameters()["basePath"]; ok && path != "" {
+	if path, ok := params[paramVolumePath]; ok && path != "" {
 		volumeBasePath = path
 	}
 
@@ -1068,8 +1071,7 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 
 	klog.V(2).Infof("Created snapshot %s from volume %s", snapshotID, sourceVolumeID)
 
-	// 7. Return response
-	// Btrfs snapshots are instant (CoW), so ready_to_use is always true
+	// 7. Return response — /disk add copy-from is atomic (CoW), so ready_to_use is always true.
 	return &csi.CreateSnapshotResponse{
 		Snapshot: &csi.Snapshot{
 			SnapshotId:     snapshotID,
@@ -1081,7 +1083,7 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	}, nil
 }
 
-// DeleteSnapshot removes a Btrfs snapshot
+// DeleteSnapshot removes a file-based CoW snapshot (disk entry + backing file)
 func (cs *ControllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
 	snapshotID := req.GetSnapshotId()
 	klog.V(4).Infof("DeleteSnapshot CSI call for %s", snapshotID)
@@ -1162,11 +1164,21 @@ func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 		return nil, status.Errorf(codes.Internal, "failed to list snapshots: %v", err)
 	}
 
-	// Filter by source volume if specified
+	// Filter by source volume if specified.
+	// The SourceVolume field is populated by the RDS layer from the snapshot name using
+	// ExtractSourceVolumeIDFromSnapshotID. As a defense-in-depth fallback, we also try
+	// extracting from the snapshot name directly if SourceVolume is empty.
 	if req.GetSourceVolumeId() != "" {
 		filtered := make([]rds.SnapshotInfo, 0)
 		for _, s := range allSnapshots {
-			if s.SourceVolume == req.GetSourceVolumeId() {
+			sourceVol := s.SourceVolume
+			if sourceVol == "" {
+				// Fallback: derive source volume from snapshot name (snap-<uuid>-at-<suffix>)
+				if derived, err := utils.ExtractSourceVolumeIDFromSnapshotID(s.Name); err == nil {
+					sourceVol = derived
+				}
+			}
+			if sourceVol == req.GetSourceVolumeId() {
 				filtered = append(filtered, s)
 			}
 		}
