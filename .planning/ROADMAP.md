@@ -12,7 +12,7 @@
 - ✅ **v0.8.0 Code Quality & Logging** - Phases 20-21 (shipped 2026-02-04)
 - ✅ **v0.9.0 Production Readiness & Test Maturity** - Phases 22-25.2 (shipped 2026-02-06)
 - ✅ **v0.10.0 Feature Enhancements** - Phases 26-28 (shipped 2026-02-06) - [Archive](.planning/milestones/v0.10.0-ROADMAP.md)
-- 🚧 **v0.11.0 Data Protection** - Phases 29-32 (in progress)
+- ✅ **v0.11.0 Data Protection** - Phases 29-32 (shipped 2026-02-18)
 
 ## Phases
 
@@ -33,14 +33,14 @@ See milestone archives in `.planning/milestones/` for complete phase details:
 
 </details>
 
-### 🚧 v0.11.0 Data Protection (In Progress)
+### ✅ v0.11.0 Data Protection (Shipped 2026-02-18)
 
 **Milestone Goal:** Fix broken snapshot implementation and ensure data safety with automated backups
 
 - [x] **Phase 29: Snapshot Implementation Fix** - Rewrite SSH snapshot commands to use `/disk add copy-from` CoW; update CSI controller RPCs ✅ 2026-02-18
 - [x] **Phase 30: Snapshot Validation** - Update mock RDS server to copy-from semantics; pass CSI sanity tests; validate against real hardware ✅ 2026-02-17
 - [x] **Phase 31: Scheduled Snapshots** - CronJob with configurable schedule and retention cleanup; Helm chart template ✅ 2026-02-18
-- [ ] **Phase 32: Resilience Regression Tests** - Validate NVMe reconnect, RDS restart, and node failure scenarios don't regress
+- [x] **Phase 32: Resilience Regression Tests** - Validate NVMe reconnect, RDS restart, and node failure scenarios don't regress ✅ 2026-02-18
 
 ## Phase Details
 
@@ -102,8 +102,8 @@ Plans:
 **Plans:** 2 plans in 1 wave
 
 Plans:
-- [ ] 32-01-PLAN.md — Automated E2E resilience regression tests using mock error injection (RESIL-01, RESIL-02, RESIL-03)
-- [ ] 32-02-PLAN.md — Hardware validation test cases TC-09, TC-10, TC-11 for manual resilience testing; update TESTING.md
+- [x] 32-01-PLAN.md — Automated E2E resilience regression tests using mock error injection (RESIL-01, RESIL-02, RESIL-03)
+- [x] 32-02-PLAN.md — Hardware validation test cases TC-09, TC-10, TC-11 for manual resilience testing; update TESTING.md
 
 ## Progress
 
@@ -114,7 +114,7 @@ Plans:
 | 29. Snapshot Implementation Fix | v0.11.0 | 2/2 | ✅ Complete | 2026-02-18 |
 | 30. Snapshot Validation | v0.11.0 | 2/2 | ✅ Complete | 2026-02-17 |
 | 31. Scheduled Snapshots | v0.11.0 | 1/1 | ✅ Complete | 2026-02-18 |
-| 32. Resilience Regression Tests | v0.11.0 | 0/2 | Not started | - |
+| 32. Resilience Regression Tests | v0.11.0 | 2/2 | ✅ Complete | 2026-02-18 |
 
 ---
-*Last updated: 2026-02-18 after Phase 32 planning*
+*Last updated: 2026-02-18 after Phase 32 execution*
