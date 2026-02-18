@@ -209,3 +209,33 @@
 **See:** `.planning/milestones/v0.1.0-ROADMAP.md`
 
 ---
+
+## v0.11.0 Data Protection (Shipped: 2026-02-18)
+
+**Delivered:** Fixed broken snapshot implementation using `/disk add copy-from` CoW, added scheduled snapshots, and resilience regression test suite
+
+**Phases completed:** 29-32 (7 plans total)
+
+**Key accomplishments:**
+- Rewrote snapshot implementation from broken Btrfs subvolume to `/disk add copy-from` CoW (independent copies, no NVMe export)
+- CSI sanity tests pass 70/70 for all snapshot operations (create, restore, delete, list) with deterministic UUID v5 snapshot IDs
+- Mock RDS server aligned with copy-from semantics — zero Btrfs references remaining
+- Helm CronJob for automated scheduled snapshots with configurable retention cleanup (MAX_COUNT + MAX_AGE)
+- Resilience regression tests: RESIL-01/02 E2E with runtime error injection, RESIL-03 unit test for stale attachment cleanup
+- Hardware validation procedures documented (TC-08 snapshots, TC-09 NVMe reconnect, TC-10 RDS restart, TC-11 node failure)
+- Quick-007: Cleaned up tech debt — removed 3 dead functions, fixed mock creation-time= emission, removed latent ListSnapshots bug
+
+**Stats:**
+- 42 files modified (+5,598 insertions, -549 deletions)
+- 46,633 lines of Go (current codebase)
+- 4 phases, 7 plans
+- 2 days timeline (2026-02-17 → 2026-02-18)
+
+**Git range:** `b64c728` (feat(29-01)) → `95b24ba` (docs(quick-007))
+
+**See:** `.planning/milestones/v0.11.0-ROADMAP.md`
+
+**What's next:** v0.12.0 — TBD (hardware validation execution, potential snapshot enhancements)
+
+---
+
