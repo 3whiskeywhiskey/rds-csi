@@ -39,7 +39,7 @@ See milestone archives in `.planning/milestones/` for complete phase details:
 
 - [x] **Phase 29: Snapshot Implementation Fix** - Rewrite SSH snapshot commands to use `/disk add copy-from` CoW; update CSI controller RPCs ✅ 2026-02-18
 - [x] **Phase 30: Snapshot Validation** - Update mock RDS server to copy-from semantics; pass CSI sanity tests; validate against real hardware ✅ 2026-02-17
-- [ ] **Phase 31: Scheduled Snapshots** - CronJob with configurable schedule and retention cleanup; Helm chart template
+- [x] **Phase 31: Scheduled Snapshots** - CronJob with configurable schedule and retention cleanup; Helm chart template ✅ 2026-02-18
 - [ ] **Phase 32: Resilience Regression Tests** - Validate NVMe reconnect, RDS restart, and node failure scenarios don't regress
 
 ## Phase Details
@@ -88,7 +88,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 31-01-PLAN.md — Add scheduledSnapshots values/schema, CronJob template with snapshot creation and retention cleanup, NOTES.txt update
+- [x] 31-01-PLAN.md — Add scheduledSnapshots values/schema, CronJob template with snapshot creation and retention cleanup, NOTES.txt update
 
 ### Phase 32: Resilience Regression Tests
 
@@ -112,8 +112,8 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 29. Snapshot Implementation Fix | v0.11.0 | 2/2 | ✅ Complete | 2026-02-18 |
 | 30. Snapshot Validation | v0.11.0 | 2/2 | ✅ Complete | 2026-02-17 |
-| 31. Scheduled Snapshots | v0.11.0 | 0/1 | Not started | - |
+| 31. Scheduled Snapshots | v0.11.0 | 1/1 | ✅ Complete | 2026-02-18 |
 | 32. Resilience Regression Tests | v0.11.0 | 0/1 | Not started | - |
 
 ---
-*Last updated: 2026-02-18 after Phase 31 planning*
+*Last updated: 2026-02-18 after Phase 31 execution*
