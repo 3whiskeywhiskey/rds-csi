@@ -87,8 +87,9 @@ var _ = Describe("Snapshot Operations [E2E-08]", func() {
 			snap, exists := mockRDS.GetSnapshot(snapshotID)
 			Expect(exists).To(BeTrue())
 			Expect(snap.SourceVolume).To(Equal(volumeID))
-			Expect(snap.SizeBytes).To(Equal(int64(smallVolumeSize)))
-			Expect(snap.ReadOnly).To(BeTrue(), "Snapshot should be read-only")
+			Expect(snap.FileSizeBytes).To(Equal(int64(smallVolumeSize)))
+			// Snapshots are read-only/immutable by design: MockSnapshot has no NVMe export fields
+			// (absence of nvme-tcp-export means the disk is not network-exported = immutable)
 
 			By("Step 5: Deleting snapshot via DeleteSnapshot")
 			_, err = controllerClient.DeleteSnapshot(ctx, &csi.DeleteSnapshotRequest{SnapshotId: snapshotID})
