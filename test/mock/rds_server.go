@@ -834,8 +834,11 @@ func (s *MockRDSServer) formatDiskDetail(vol *MockVolume) string {
 // volume ID for CSI idempotency checks (without this, the parser would fall back to
 // extracting a hashed UUID from the slot name, which doesn't match the original ID).
 func (s *MockRDSServer) formatSnapshotDetail(snap *MockSnapshot) string {
-	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d source-volume="%s" status="ready"`,
-		snap.Slot, snap.FilePath, snap.FileSizeBytes, snap.SourceVolume)
+	// Format creation time as RouterOS month/day/year format with lowercase month abbreviation.
+	// parseRouterOSTime expects e.g. "jan/02/2026 14:30:00" — title-cases the month internally.
+	creationTime := strings.ToLower(snap.CreatedAt.Format("Jan/02/2006 15:04:05"))
+	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d source-volume="%s" creation-time=%s status="ready"`,
+		snap.Slot, snap.FilePath, snap.FileSizeBytes, snap.SourceVolume, creationTime)
 }
 
 func (s *MockRDSServer) handleFilePrintDetail(command string) (string, int) {

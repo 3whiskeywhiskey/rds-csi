@@ -1128,14 +1128,10 @@ func parseSnapshotInfo(output string) (*SnapshotInfo, error) {
 		snapshot.SourceVolume = match[1]
 	}
 
-	// Extract creation time: try creation-time field first, then fall back to timestamp in slot name
+	// Extract creation time from creation-time= field in disk output.
+	// No fallback — the slot name suffix is a name-derived hash (not a Unix timestamp)
+	// for deterministic snapshot IDs, so ExtractTimestampFromSnapshotID would fail.
 	snapshot.CreatedAt = parseRouterOSTime(normalized)
-	if snapshot.CreatedAt.IsZero() && snapshot.Name != "" {
-		// Fall back: parse Unix timestamp from snap-<uuid>-at-<ts> slot name
-		if ts, err := utils.ExtractTimestampFromSnapshotID(snapshot.Name); err == nil {
-			snapshot.CreatedAt = time.Unix(ts, 0)
-		}
-	}
 
 	return snapshot, nil
 }
