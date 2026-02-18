@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 
 ## Current Position
 
-Phase: 31 of 32 (Scheduled Snapshots) — COMPLETE
+Phase: 32 of 32 (Resilience Regression Tests) — COMPLETE
 Plan: 1 of 1 in current phase
-Status: Phase 31 complete
-Last activity: 2026-02-18 — Phase 31 complete (scheduled snapshots Helm CronJob + retention cleanup)
+Status: Phase 32 complete — v0.11.0 milestone COMPLETE
+Last activity: 2026-02-18 — Phase 32 complete (resilience regression tests: RESIL-01/02/03)
 
-Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [██████████] 100% (5/6 plans → next: phase 32)
+Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [██████████] 100% (6/6 plans)
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 
 | v0.1.0-v0.8.0 | 1-21 | 79/79 | ✅ Shipped 2026-02-04 |
 | v0.9.0 Production Readiness | 22-25.2 | 17/17 | ✅ Shipped 2026-02-06 |
 | v0.10.0 Feature Enhancements | 26-28 | 19/19 | ✅ Shipped 2026-02-06 |
-| v0.11.0 Data Protection | 29-32 | 5/6 | 🚧 In progress |
+| v0.11.0 Data Protection | 29-32 | 6/6 | ✅ Shipped 2026-02-18 |
 
 *Updated: 2026-02-18*
 
@@ -41,6 +41,7 @@ Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 
 | Phase 30-snapshot-validation P02 | 35 min | 2 tasks | 6 files |
 | Phase 31-scheduled-snapshots P01 | 3 min | 3 tasks | 5 files |
 | Phase 32-resilience-regression-tests P02 | 8 | 2 tasks | 2 files |
+| Phase 32-resilience-regression-tests P01 | 6 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,9 @@ Recent decisions affecting current work:
 - [Phase 32-resilience-regression-tests]: TC-09 uses iptables OUTPUT chain on worker node to block NVMe/TCP to RDS, verifying ctrl_loss_tmo=-1 infinite retry reconnection
 - [Phase 32-resilience-regression-tests]: TC-10 includes DANGER warning: RDS restart affects ALL NVMe/TCP connections on ALL cluster nodes (maintenance window required)
 - [Phase 32-resilience-regression-tests]: TC-11 documents controller pod restart as shortcut to trigger immediate reconciliation (vs 5-minute default interval)
+- [Phase 32-resilience-regression-tests]: SetErrorMode resets operationNum=0 on mode change to clear counter state for the new mode
+- [Phase 32-resilience-regression-tests]: RESIL-01/02 use SetErrorMode (not Stop/Start) because MockRDSServer.shutdown channel closes permanently on Stop()
+- [Phase 32-resilience-regression-tests]: RESIL-03 is a unit test in reconciler_test.go because E2E framework uses K8sClient: nil (no AttachmentManager available)
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Phase 31 complete — scheduled snapshots verified (4/4 must-haves)
+Stopped at: Completed 32-01-PLAN.md (resilience regression tests — RESIL-01/02/03)
 Resume file: None
-Next action: Phase 32 — Resilience Regression Tests (plan then execute)
+Next action: v0.11.0 Data Protection milestone COMPLETE — all phases 29-32 done
