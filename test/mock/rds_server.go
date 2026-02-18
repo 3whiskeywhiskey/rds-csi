@@ -26,7 +26,7 @@ type MockRDSServer struct {
 	timing         *TimingSimulator
 	errorInjector  *ErrorInjector
 	volumes        map[string]*MockVolume   // Disk objects indexed by slot
-	snapshots      map[string]*MockSnapshot // Btrfs snapshots indexed by name
+	snapshots      map[string]*MockSnapshot // Snapshot disk entries indexed by slot
 	files          map[string]*MockFile     // Files indexed by path
 	commandHistory []CommandLog             // Command execution history for debugging
 	mu             sync.RWMutex
@@ -59,15 +59,15 @@ type MockFile struct {
 	CreatedAt string
 }
 
-// MockSnapshot represents a Btrfs snapshot on the mock RDS
+// MockSnapshot represents a copy-from snapshot disk entry on the mock RDS.
+// Snapshot disks are independent copies (not linked to source after creation)
+// and are NOT NVMe-exported (they are immutable backing files only).
 type MockSnapshot struct {
-	Name         string // Snapshot name (e.g., snap-<uuid>)
-	Parent       string // Parent volume slot or snapshot name (used by RouterOS)
-	SourceVolume string // Original source volume (for CSI tracking, not returned by RouterOS)
-	FSLabel      string // Btrfs filesystem label
-	ReadOnly     bool   // Read-only flag
-	SizeBytes    int64  // Snapshot size (copied from parent)
-	CreatedAt    time.Time
+	Slot          string    // Snapshot slot name (e.g., snap-<uuid>-at-<hash>)
+	SourceVolume  string    // Source volume slot (pvc-<uuid>) — for CSI tracking
+	FilePath      string    // Backing file path (e.g., /storage-pool/metal-csi/snap-xxx.img)
+	FileSizeBytes int64     // Size copied from source volume
+	CreatedAt     time.Time // Creation timestamp
 }
 
 // NewMockRDSServer creates a new mock RDS server for testing
@@ -185,11 +185,11 @@ func (s *MockRDSServer) ListFiles() []*MockFile {
 	return files
 }
 
-// GetSnapshot returns a snapshot by name
-func (s *MockRDSServer) GetSnapshot(name string) (*MockSnapshot, bool) {
+// GetSnapshot returns a snapshot by slot name
+func (s *MockRDSServer) GetSnapshot(slot string) (*MockSnapshot, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	snap, ok := s.snapshots[name]
+	snap, ok := s.snapshots[slot]
 	return snap, ok
 }
 
@@ -401,22 +401,6 @@ func (s *MockRDSServer) executeCommand(command string) (string, int) {
 		// Parse /file remove command
 		output, exitCode = s.handleFileRemove(command)
 		klog.V(3).Infof("Mock RDS /file remove returned code %d", exitCode)
-	} else if strings.HasPrefix(command, "/disk/btrfs/subvolume/add") {
-		// Parse Btrfs snapshot create command
-		output, exitCode = s.handleBtrfsSubvolumeAdd(command)
-		klog.V(3).Infof("Mock RDS /disk/btrfs/subvolume/add returned code %d", exitCode)
-	} else if strings.HasPrefix(command, "/disk/btrfs/subvolume/remove") {
-		// Parse Btrfs snapshot delete command
-		output, exitCode = s.handleBtrfsSubvolumeRemove(command)
-		klog.V(3).Infof("Mock RDS /disk/btrfs/subvolume/remove returned code %d", exitCode)
-	} else if strings.HasPrefix(command, "/disk/btrfs/subvolume/print detail") {
-		// Parse Btrfs snapshot get detail command
-		output, exitCode = s.handleBtrfsSubvolumePrintDetail(command)
-		klog.V(3).Infof("Mock RDS /disk/btrfs/subvolume/print detail returned code %d", exitCode)
-	} else if strings.HasPrefix(command, "/disk/btrfs/subvolume/print") {
-		// Parse Btrfs snapshot list command (no detail)
-		output, exitCode = s.handleBtrfsSubvolumePrint(command)
-		klog.V(3).Infof("Mock RDS /disk/btrfs/subvolume/print returned code %d", exitCode)
 	} else {
 		klog.Warningf("Mock RDS: Unrecognized command: %s", command)
 		output = fmt.Sprintf("bad command name %s\n", command)
@@ -458,7 +442,12 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 		return errMsg, 1
 	}
 
-	// Parse parameters from command
+	// Detect copy-from parameter — route to snapshot/restore creation logic
+	if strings.Contains(command, "copy-from=") {
+		return s.handleDiskAddCopyFrom(command)
+	}
+
+	// Regular volume creation
 	// Example: /disk add type=file file-path=/storage/vol.img file-size=1G slot=pvc-123 nvme-tcp-export=yes nvme-tcp-server-port=4420 nvme-tcp-server-nqn=nqn.2025-01.io.srvlab.rds:pvc-123
 
 	slot := extractParam(command, "slot")
@@ -514,6 +503,116 @@ func (s *MockRDSServer) handleDiskAdd(command string) (string, int) {
 	}
 
 	klog.V(2).Infof("Mock RDS: Created volume %s with backing file %s", slot, filePath)
+	return "", 0
+}
+
+// handleDiskAddCopyFrom handles /disk add copy-from= commands for snapshot creation and restore.
+//
+// Two use cases:
+//  1. Snapshot creation: copy-from present, nvme-tcp-export absent → creates entry in s.snapshots
+//  2. Volume restore: copy-from present, nvme-tcp-export=yes present → creates entry in s.volumes
+//
+// The copy-from source is looked up first in s.volumes, then s.snapshots.
+func (s *MockRDSServer) handleDiskAddCopyFrom(command string) (string, int) {
+	// Parse copy-from=[find slot=<name>] to extract source slot name
+	copyFromRe := regexp.MustCompile(`copy-from=\[find slot=([^\]]+)\]`)
+	copyFromMatches := copyFromRe.FindStringSubmatch(command)
+	if len(copyFromMatches) < 2 {
+		return "failure: invalid copy-from format\n", 1
+	}
+	sourceSlot := copyFromMatches[1]
+
+	slot := extractParam(command, "slot")
+	filePath := extractParam(command, "file-path")
+
+	if slot == "" || filePath == "" {
+		return "failure: missing required parameters\n", 1
+	}
+
+	// Simulate disk operation delay BEFORE state modification
+	s.timing.SimulateDiskOperation("add")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Look up source size: check volumes first, then snapshots
+	var sourceSize int64
+	if sourceVol, ok := s.volumes[sourceSlot]; ok {
+		sourceSize = sourceVol.FileSizeBytes
+	} else if sourceSnap, ok := s.snapshots[sourceSlot]; ok {
+		sourceSize = sourceSnap.FileSizeBytes
+	} else {
+		return "failure: no such item\n", 1
+	}
+
+	// Determine if this is a restore operation (nvme-tcp-export=yes present)
+	isRestore := strings.Contains(command, "nvme-tcp-export=yes")
+
+	if isRestore {
+		// RestoreSnapshot path: create an NVMe-exported volume from snapshot
+		fileSizeStr := extractParam(command, "file-size")
+		fileSize := sourceSize
+		if fileSizeStr != "" {
+			if parsed, err := parseSize(fileSizeStr); err == nil {
+				fileSize = parsed
+			}
+		}
+
+		nvmePortStr := extractParam(command, "nvme-tcp-server-port")
+		nqn := extractParam(command, "nvme-tcp-server-nqn")
+
+		var nvmePort int
+		if nvmePortStr != "" {
+			_, _ = fmt.Sscanf(nvmePortStr, "%d", &nvmePort)
+		} else {
+			nvmePort = 4420
+		}
+
+		if _, exists := s.volumes[slot]; exists {
+			return "failure: volume already exists\n", 1
+		}
+
+		s.volumes[slot] = &MockVolume{
+			Slot:          slot,
+			FilePath:      filePath,
+			FileSizeBytes: fileSize,
+			NVMETCPPort:   nvmePort,
+			NVMETCPNQN:    nqn,
+			Exported:      true,
+		}
+		s.files[filePath] = &MockFile{
+			Path:      filePath,
+			SizeBytes: fileSize,
+			Type:      ".img",
+			CreatedAt: "2025-11-11 12:00:00",
+		}
+
+		klog.V(2).Infof("Mock RDS: Restored snapshot %s to new volume %s", sourceSlot, slot)
+		return "", 0
+	}
+
+	// Snapshot creation path: create independent snapshot disk entry (NOT NVMe-exported)
+	if _, exists := s.snapshots[slot]; exists {
+		return "failure: snapshot already exists\n", 1
+	}
+
+	s.snapshots[slot] = &MockSnapshot{
+		Slot:          slot,
+		SourceVolume:  sourceSlot,
+		FilePath:      filePath,
+		FileSizeBytes: sourceSize,
+		CreatedAt:     time.Now(),
+	}
+
+	// Also create backing file entry
+	s.files[filePath] = &MockFile{
+		Path:      filePath,
+		SizeBytes: sourceSize,
+		Type:      ".img",
+		CreatedAt: "2025-11-11 12:00:00",
+	}
+
+	klog.V(2).Infof("Mock RDS: Created snapshot %s from volume %s (size=%d)", slot, sourceSlot, sourceSize)
 	return "", 0
 }
 
@@ -588,25 +687,37 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	vol, exists := s.volumes[slot]
-	if !exists {
-		// Idempotent - not an error if volume doesn't exist
+	// Check volumes map first
+	if vol, exists := s.volumes[slot]; exists {
+		delete(s.volumes, slot)
+
+		// Also delete the backing file (simulating normal RDS behavior)
+		// Note: In some failure scenarios, the file might remain (orphaned)
+		// Tests can use DeleteFile() separately to simulate this
+		if vol.FilePath != "" {
+			delete(s.files, vol.FilePath)
+			klog.V(2).Infof("Mock RDS: Deleted volume %s and backing file %s", slot, vol.FilePath)
+		} else {
+			klog.V(2).Infof("Mock RDS: Deleted volume %s (no backing file)", slot)
+		}
 		return "", 0
 	}
 
-	// Delete the disk object
-	delete(s.volumes, slot)
+	// Check snapshots map
+	if snap, exists := s.snapshots[slot]; exists {
+		delete(s.snapshots, slot)
 
-	// Also delete the backing file (simulating normal RDS behavior)
-	// Note: In some failure scenarios, the file might remain (orphaned)
-	// Tests can use DeleteFile() separately to simulate this
-	if vol.FilePath != "" {
-		delete(s.files, vol.FilePath)
-		klog.V(2).Infof("Mock RDS: Deleted volume %s and backing file %s", slot, vol.FilePath)
-	} else {
-		klog.V(2).Infof("Mock RDS: Deleted volume %s (no backing file)", slot)
+		// Also delete the backing file
+		if snap.FilePath != "" {
+			delete(s.files, snap.FilePath)
+			klog.V(2).Infof("Mock RDS: Deleted snapshot %s and backing file %s", slot, snap.FilePath)
+		} else {
+			klog.V(2).Infof("Mock RDS: Deleted snapshot %s (no backing file)", slot)
+		}
+		return "", 0
 	}
 
+	// Idempotent - not an error if slot exists in neither volumes nor snapshots
 	return "", 0
 }
 
@@ -633,20 +744,27 @@ func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
 	defer s.mu.RUnlock()
 
 	if slot != "" {
-		// Return specific volume
-		vol, exists := s.volumes[slot]
-		if !exists {
-			return "", 0 // No output if not found
+		// Check volumes first
+		if vol, exists := s.volumes[slot]; exists {
+			return s.formatDiskDetail(vol), 0
 		}
-		return s.formatDiskDetail(vol), 0
+		// Check snapshots
+		if snap, exists := s.snapshots[slot]; exists {
+			return s.formatSnapshotDetail(snap), 0
+		}
+		return "", 0 // No output if not found
 	}
 
-	// Return all volumes (with line numbers for proper RouterOS format)
+	// Return all volumes and snapshots (with line numbers for proper RouterOS format)
 	var output strings.Builder
 	i := 0
 	for _, vol := range s.volumes {
 		// RouterOS formats list output with line numbers
 		output.WriteString(fmt.Sprintf("%2d %s\n", i, s.formatDiskDetail(vol)))
+		i++
+	}
+	for _, snap := range s.snapshots {
+		output.WriteString(fmt.Sprintf("%2d %s\n", i, s.formatSnapshotDetail(snap)))
 		i++
 	}
 	return output.String(), 0
@@ -661,6 +779,14 @@ func (s *MockRDSServer) formatDiskDetail(vol *MockVolume) string {
 	// Format as RouterOS key="value" pairs on a single line
 	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d nvme-tcp-export=%s nvme-tcp-server-port=%d nvme-tcp-server-nqn="%s" status="ready"`,
 		vol.Slot, vol.FilePath, vol.FileSizeBytes, exported, vol.NVMETCPPort, vol.NVMETCPNQN)
+}
+
+// formatSnapshotDetail formats a snapshot disk entry for /disk print detail output.
+// Snapshots are NOT NVMe-exported — nvme-tcp-export, nvme-tcp-server-port, and
+// nvme-tcp-server-nqn fields are intentionally omitted.
+func (s *MockRDSServer) formatSnapshotDetail(snap *MockSnapshot) string {
+	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d status="ready"`,
+		snap.Slot, snap.FilePath, snap.FileSizeBytes)
 }
 
 func (s *MockRDSServer) handleFilePrintDetail(command string) (string, int) {
@@ -836,167 +962,4 @@ func generateHostKey() (ssh.Signer, error) {
 	}
 
 	return signer, nil
-}
-
-// handleBtrfsSubvolumeAdd handles Btrfs snapshot creation commands
-// Example: /disk/btrfs/subvolume/add read-only=yes parent=pvc-123 fs=storage-pool name=snap-456
-func (s *MockRDSServer) handleBtrfsSubvolumeAdd(command string) (string, int) {
-	name := extractParam(command, "name")
-	parent := extractParam(command, "parent")
-	fsLabel := extractParam(command, "fs")
-	readOnly := extractParam(command, "read-only") == "yes"
-
-	if name == "" || parent == "" || fsLabel == "" {
-		return "failure: missing required parameters (name, parent, fs)\n", 1
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check if snapshot already exists (idempotency check)
-	if _, exists := s.snapshots[name]; exists {
-		return "failure: snapshot already exists\n", 1
-	}
-
-	// Determine parent size (from volume or snapshot)
-	var parentSize int64
-	if vol, ok := s.volumes[parent]; ok {
-		parentSize = vol.FileSizeBytes
-	} else if snap, ok := s.snapshots[parent]; ok {
-		parentSize = snap.SizeBytes
-	} else {
-		return "failure: parent volume/snapshot not found\n", 1
-	}
-
-	// Determine source volume (for CSI tracking)
-	// If parent is a volume, source is parent
-	// If parent is a snapshot, source is that snapshot's source
-	sourceVolume := parent
-	if parentSnap, ok := s.snapshots[parent]; ok {
-		sourceVolume = parentSnap.SourceVolume
-	}
-
-	// Create snapshot
-	s.snapshots[name] = &MockSnapshot{
-		Name:         name,
-		Parent:       parent,
-		SourceVolume: sourceVolume,
-		FSLabel:      fsLabel,
-		ReadOnly:     readOnly,
-		SizeBytes:    parentSize,
-		CreatedAt:    time.Now(),
-	}
-
-	klog.V(2).Infof("Mock RDS: Created snapshot %s from parent %s (source: %s)", name, parent, sourceVolume)
-	return "", 0
-}
-
-// handleBtrfsSubvolumeRemove handles Btrfs snapshot deletion commands
-// Example: /disk/btrfs/subvolume/remove [find where name=snap-456]
-func (s *MockRDSServer) handleBtrfsSubvolumeRemove(command string) (string, int) {
-	re := regexp.MustCompile(`name=([^\s\]]+)`)
-	matches := re.FindStringSubmatch(command)
-
-	if len(matches) < 2 {
-		return "failure: invalid command format\n", 1
-	}
-
-	name := matches[1]
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Idempotent - not found is success
-	if _, exists := s.snapshots[name]; !exists {
-		klog.V(2).Infof("Mock RDS: Snapshot %s not found, returning success (idempotent)", name)
-		return "", 0
-	}
-
-	delete(s.snapshots, name)
-	klog.V(2).Infof("Mock RDS: Deleted snapshot %s", name)
-	return "", 0
-}
-
-// handleBtrfsSubvolumePrintDetail handles detailed snapshot query commands
-// Example: /disk/btrfs/subvolume/print detail where name=snap-456
-func (s *MockRDSServer) handleBtrfsSubvolumePrintDetail(command string) (string, int) {
-	re := regexp.MustCompile(`name=([^\s\]]+)`)
-	matches := re.FindStringSubmatch(command)
-
-	if len(matches) < 2 {
-		return "failure: invalid command format\n", 1
-	}
-
-	name := matches[1]
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	snap, exists := s.snapshots[name]
-	if !exists {
-		return "", 0 // Empty output, exit code 0
-	}
-
-	// Format output to match RouterOS style (name=value format, with indentation)
-	// Parser expects: name, read-only, fs (not fs-label), file-size
-	// NOTE: Real RouterOS doesn't return source-volume, but mock does for testing
-	readOnlyStr := "no"
-	if snap.ReadOnly {
-		readOnlyStr = "yes"
-	}
-
-	output := fmt.Sprintf(`        name=%s
-      parent=%s
-source-volume=%s
-          fs=%s
-   read-only=%s
-   file-size=%d
-creation-time=%s
-
-`, snap.Name, snap.Parent, snap.SourceVolume, snap.FSLabel, readOnlyStr, snap.SizeBytes, snap.CreatedAt.Format(time.RFC3339))
-
-	return output, 0
-}
-
-// handleBtrfsSubvolumePrint handles snapshot list commands
-// Example: /disk/btrfs/subvolume/print where name~"snap-"
-func (s *MockRDSServer) handleBtrfsSubvolumePrint(command string) (string, int) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// Parse filter if present (e.g., name~"snap-")
-	var filter string
-	if strings.Contains(command, "name~") {
-		re := regexp.MustCompile(`name~"([^"]+)"`)
-		matches := re.FindStringSubmatch(command)
-		if len(matches) >= 2 {
-			filter = matches[1]
-		}
-	}
-
-	// Build output with entry numbers (RouterOS list format)
-	var output strings.Builder
-	entryNum := 0
-	for _, snap := range s.snapshots {
-		// Apply filter if present
-		if filter != "" && !strings.Contains(snap.Name, filter) {
-			continue
-		}
-
-		readOnlyStr := "no"
-		if snap.ReadOnly {
-			readOnlyStr = "yes"
-		}
-
-		// Add entry number for RouterOS list format parsing
-		output.WriteString(fmt.Sprintf(" %d         name=%s\n", entryNum, snap.Name))
-		output.WriteString(fmt.Sprintf("      parent=%s\n", snap.Parent))
-		output.WriteString(fmt.Sprintf("source-volume=%s\n", snap.SourceVolume))
-		output.WriteString(fmt.Sprintf("          fs=%s\n", snap.FSLabel))
-		output.WriteString(fmt.Sprintf("   read-only=%s\n", readOnlyStr))
-		output.WriteString(fmt.Sprintf("   file-size=%d\n\n", snap.SizeBytes))
-		entryNum++
-	}
-
-	return output.String(), 0
 }
