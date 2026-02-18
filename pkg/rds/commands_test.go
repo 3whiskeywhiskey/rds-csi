@@ -817,12 +817,14 @@ func TestParseSnapshotInfo(t *testing.T) {
 		{
 			name: "valid snapshot with /disk print format - all fields",
 			// /disk print detail output format (same key=value format as volumes)
-			// Snapshots have NO nvme-tcp-export fields
+			// Snapshots have NO nvme-tcp-export fields.
+			// NOTE: Real RouterOS does not emit source-volume; SourceVolume will be empty
+			// without the source-volume field. Source volume is tracked by the controller.
 			output: `type=file slot="snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000"
                     file-path=/storage-pool/metal-csi/snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000.img
                     file-size=50.0GiB`,
 			expectName:         "snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000",
-			expectSourceVolume: "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			expectSourceVolume: "", // No source-volume field in output; slot name UUID no longer encodes source
 			expectFilePath:     "/storage-pool/metal-csi/snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000.img",
 			expectSizeBytes:    50 * 1024 * 1024 * 1024,
 		},
@@ -844,7 +846,7 @@ func TestParseSnapshotInfo(t *testing.T) {
                     file-path="/storage-pool/metal-csi/snap-11111111-2222-3333-4444-555555555555-at-1700000000.img"
                     file-size=100.0GiB`,
 			expectName:         "snap-11111111-2222-3333-4444-555555555555-at-1700000000",
-			expectSourceVolume: "pvc-11111111-2222-3333-4444-555555555555",
+			expectSourceVolume: "", // No source-volume field; slot UUID no longer encodes source
 			expectFilePath:     "/storage-pool/metal-csi/snap-11111111-2222-3333-4444-555555555555-at-1700000000.img",
 			expectSizeBytes:    100 * 1024 * 1024 * 1024,
 		},
@@ -859,7 +861,7 @@ func TestParseSnapshotInfo(t *testing.T) {
 			output: `type=file slot="snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000"
                     file-path=/storage-pool/metal-csi/snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000.img`,
 			expectName:         "snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000",
-			expectSourceVolume: "pvc-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			expectSourceVolume: "", // No source-volume field; slot UUID no longer encodes source
 			expectFilePath:     "/storage-pool/metal-csi/snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000.img",
 			expectSizeBytes:    0, // Missing, expected zero
 		},

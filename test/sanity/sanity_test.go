@@ -201,10 +201,8 @@ func TestCSISanity(t *testing.T) {
 	}
 
 	// Snapshot test parameters (enables snapshot sanity test suite)
-	config.TestSnapshotParameters = map[string]string{
-		// No special parameters needed for Btrfs snapshots
-		// btrfsFSLabel is resolved to default "storage-pool" by the controller
-	}
+	// copy-from approach needs no special StorageClass parameters
+	config.TestSnapshotParameters = map[string]string{}
 
 	// Staging/target paths (not used for controller-only tests, but required by config)
 	config.TargetPath = "/tmp/csi-target"

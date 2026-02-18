@@ -88,7 +88,7 @@ func NewMockRDSServer(port int) (*MockRDSServer, error) {
 	sshConfig.AddHostKey(hostKey)
 
 	server := &MockRDSServer{
-		address:        "localhost",
+		address:        "127.0.0.1",
 		port:           port,
 		sshConfig:      sshConfig,
 		config:         config,
@@ -737,7 +737,7 @@ func (s *MockRDSServer) handleDiskRemove(command string) (string, int) {
 }
 
 func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
-	// Parse: /disk print detail where slot=pvc-123 OR mount-point="storage-pool"
+	// Parse: /disk print detail where slot=pvc-123 OR slot~"snap-" OR mount-point="storage-pool"
 
 	// Check for mount-point query (capacity query)
 	if strings.Contains(command, "mount-point=") {
@@ -745,7 +745,34 @@ func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
 		return s.formatMountPointCapacity(), 0
 	}
 
-	// Check for slot query
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check for slot~ pattern query (prefix/substring match, RouterOS wildcard syntax)
+	// Format: slot~"prefix" — matches slots that contain the pattern
+	if strings.Contains(command, "slot~") {
+		slotPatternRe := regexp.MustCompile(`slot~"([^"]+)"`)
+		if matches := slotPatternRe.FindStringSubmatch(command); len(matches) >= 2 {
+			pattern := matches[1]
+			var output strings.Builder
+			i := 0
+			for _, vol := range s.volumes {
+				if strings.Contains(vol.Slot, pattern) {
+					output.WriteString(fmt.Sprintf("%2d %s\n", i, s.formatDiskDetail(vol)))
+					i++
+				}
+			}
+			for _, snap := range s.snapshots {
+				if strings.Contains(snap.Slot, pattern) {
+					output.WriteString(fmt.Sprintf("%2d %s\n", i, s.formatSnapshotDetail(snap)))
+					i++
+				}
+			}
+			return output.String(), 0
+		}
+	}
+
+	// Check for exact slot= query
 	slot := ""
 	if strings.Contains(command, "slot=") {
 		re := regexp.MustCompile(`slot=([^\s]+)`)
@@ -754,9 +781,6 @@ func (s *MockRDSServer) handleDiskPrintDetail(command string) (string, int) {
 			slot = matches[1]
 		}
 	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	if slot != "" {
 		// Check volumes first
@@ -799,9 +823,12 @@ func (s *MockRDSServer) formatDiskDetail(vol *MockVolume) string {
 // formatSnapshotDetail formats a snapshot disk entry for /disk print detail output.
 // Snapshots are NOT NVMe-exported — nvme-tcp-export, nvme-tcp-server-port, and
 // nvme-tcp-server-nqn fields are intentionally omitted.
+// source-volume is included so that parseSnapshotInfo can recover the original source
+// volume ID for CSI idempotency checks (without this, the parser would fall back to
+// extracting a hashed UUID from the slot name, which doesn't match the original ID).
 func (s *MockRDSServer) formatSnapshotDetail(snap *MockSnapshot) string {
-	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d status="ready"`,
-		snap.Slot, snap.FilePath, snap.FileSizeBytes)
+	return fmt.Sprintf(`slot="%s" type="file" file-path="%s" file-size=%d source-volume="%s" status="ready"`,
+		snap.Slot, snap.FilePath, snap.FileSizeBytes, snap.SourceVolume)
 }
 
 func (s *MockRDSServer) handleFilePrintDetail(command string) (string, int) {

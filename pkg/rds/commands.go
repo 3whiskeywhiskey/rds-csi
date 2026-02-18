@@ -1117,19 +1117,15 @@ func parseSnapshotInfo(output string) (*SnapshotInfo, error) {
 		}
 	}
 
-	// Extract source-volume if present (mock server provides this for testing)
-	// Real RouterOS /disk print does not emit a source-volume field for copy-from entries.
+	// Extract source-volume if present in the output.
+	// The mock server always emits this field; real RouterOS /disk print does not.
+	// NOTE: The snapshot slot name (snap-<uuid5-of-csiName>-at-<suffix>) no longer embeds
+	// the source volume UUID — the UUID is derived from the CSI name, not the source.
+	// Therefore the slot name cannot be used to recover the source volume ID.
 	if match := regexp.MustCompile(`source-volume="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		snapshot.SourceVolume = match[1]
 	} else if match := regexp.MustCompile(`source-volume=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
 		snapshot.SourceVolume = match[1]
-	}
-
-	// If source-volume not in output, attempt to extract from slot name (snap-<uuid>-at-<ts> format)
-	if snapshot.SourceVolume == "" && snapshot.Name != "" {
-		if sourceVolID, err := utils.ExtractSourceVolumeIDFromSnapshotID(snapshot.Name); err == nil {
-			snapshot.SourceVolume = sourceVolID
-		}
 	}
 
 	// Extract creation time: try creation-time field first, then fall back to timestamp in slot name

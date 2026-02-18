@@ -30,29 +30,32 @@ var (
 	snapshotIDLegacyPattern = regexp.MustCompile(`^snap-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 )
 
-// GenerateSnapshotID generates a deterministic snapshot ID from the CSI snapshot name
-// and source volume ID, satisfying CSI idempotency requirements.
+// GenerateSnapshotID generates a deterministic snapshot ID from the CSI snapshot name,
+// satisfying CSI idempotency and uniqueness requirements.
 //
-// Format: snap-<source-uuid>-at-<10-hex-hash>
+// Format: snap-<uuid5-of-name>-at-<first10hex>
 // Example: snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-3a9f8c02d1
 //
-// The suffix is a deterministic 10-character hex hash derived from the CSI snapshot name
-// using UUID v5. This ensures the same (name, sourceVolumeID) pair always produces the
-// same snapshot ID, satisfying CSI idempotency while embedding source lineage for tracking.
+// The snapshot ID is derived solely from the CSI snapshot name (not the source volume).
+// This is required by the CSI spec: snapshot names are the unique identity — the same
+// CSI name MUST produce the same snapshot ID regardless of the source volume. This
+// allows the controller to detect "same name, different source" conflicts by looking up
+// the ID and comparing the stored source volume.
+//
+// The sourceVolumeID parameter is accepted for backward compatibility but not used in
+// ID generation. Source volume verification is the caller's responsibility.
 //
 // Use this function in CreateSnapshot to generate stable, idempotent snapshot IDs.
 func GenerateSnapshotID(csiName string, sourceVolumeID string) string {
-	// Strip the "pvc-" prefix to get the UUID part of the source volume
-	sourceUUID := strings.TrimPrefix(sourceVolumeID, VolumeIDPrefix)
-
-	// Generate a deterministic UUID from the CSI snapshot name using UUID v5 (SHA1)
-	hashUUID := uuid.NewSHA1(volumeNamespace, []byte(csiName))
+	// Generate a deterministic UUID from the CSI snapshot name using UUID v5 (SHA1).
+	// The snapshot ID is based only on the CSI name per CSI spec requirements.
+	nameUUID := uuid.NewSHA1(volumeNamespace, []byte(csiName))
 
 	// Take the first 10 hex characters of the UUID (strip dashes, take prefix)
-	hashHex := strings.ReplaceAll(hashUUID.String(), "-", "")
-	suffix := hashHex[:10]
+	nameHex := strings.ReplaceAll(nameUUID.String(), "-", "")
+	suffix := nameHex[:10]
 
-	return fmt.Sprintf("snap-%s-at-%s", sourceUUID, suffix)
+	return fmt.Sprintf("snap-%s-at-%s", nameUUID.String(), suffix)
 }
 
 // GenerateSnapshotIDFromSource generates a snapshot ID embedding the source volume UUID
@@ -72,8 +75,14 @@ func GenerateSnapshotIDFromSource(sourceVolumeID string) string {
 }
 
 // ExtractSourceVolumeIDFromSnapshotID parses a snapshot ID and returns the source volume ID.
-// Snapshot ID format: snap-<source-uuid>-at-<suffix>
-// Returns: pvc-<source-uuid>
+//
+// Deprecated: As of the name-based snapshot ID generation change, the UUID portion of the
+// snapshot ID is no longer the source volume UUID — it is derived from the CSI snapshot name.
+// This function is kept for backward compatibility but should NOT be used to recover source
+// volume information. Use the source-volume field from the snapshot disk entry instead.
+//
+// Snapshot ID format: snap-<uuid5-of-name>-at-<suffix>
+// Returns an error if the ID doesn't match the expected format.
 func ExtractSourceVolumeIDFromSnapshotID(snapshotID string) (string, error) {
 	// Must start with "snap-"
 	if !strings.HasPrefix(snapshotID, SnapshotIDPrefix) {
