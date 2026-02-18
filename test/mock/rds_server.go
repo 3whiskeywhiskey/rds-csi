@@ -522,7 +522,22 @@ func (s *MockRDSServer) handleDiskAddCopyFrom(command string) (string, int) {
 	}
 	sourceSlot := copyFromMatches[1]
 
-	slot := extractParam(command, "slot")
+	// Extract the destination slot — must NOT match the slot inside copy-from=[find slot=...]
+	// Use a regex that anchors to whitespace before "slot=" (avoids matching inside copy-from).
+	destSlotRe := regexp.MustCompile(`(?:^|\s)slot=([^\s\]]+)`)
+	destSlotMatches := destSlotRe.FindAllStringSubmatch(command, -1)
+	// The last match is the destination slot (the one outside copy-from)
+	var slot string
+	for _, m := range destSlotMatches {
+		if len(m) >= 2 {
+			candidate := m[1]
+			// Skip if candidate is the source slot (same value, or part of copy-from construct)
+			if candidate != sourceSlot {
+				slot = candidate
+			}
+		}
+	}
+
 	filePath := extractParam(command, "file-path")
 
 	if slot == "" || filePath == "" {

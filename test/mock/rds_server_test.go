@@ -1,9 +1,14 @@
 package mock
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/rds"
+	"git.srvlab.io/whiskey/rds-csi-driver/pkg/utils"
 )
 
 // TestLoadConfigFromEnv_Defaults validates default configuration values when no env vars are set
@@ -391,4 +396,368 @@ func TestErrorInjector_SSHTimeout(t *testing.T) {
 	if !shouldFail {
 		t.Error("second SSH connection should fail")
 	}
+}
+
+// setupSnapshotTestClient creates a mock server and rds.RDSClient for snapshot tests.
+// The returned cleanup function should be deferred.
+func setupSnapshotTestClient(t *testing.T) (*MockRDSServer, rds.RDSClient, func()) {
+	t.Helper()
+
+	// Configure allowed base paths for testing
+	utils.ResetAllowedBasePaths()
+	if err := utils.SetAllowedBasePath("/storage-pool/metal-csi"); err != nil {
+		t.Fatalf("failed to set base path: %v", err)
+	}
+
+	server, err := NewMockRDSServer(0)
+	if err != nil {
+		t.Fatalf("failed to create mock server: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start mock server: %v", err)
+	}
+
+	client, err := rds.NewClient(rds.ClientConfig{
+		Address:            server.Address(),
+		Port:               server.Port(),
+		User:               "admin",
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		_ = server.Stop()
+		t.Fatalf("failed to create rds client: %v", err)
+	}
+	if err := client.Connect(); err != nil {
+		_ = server.Stop()
+		t.Fatalf("failed to connect rds client: %v", err)
+	}
+
+	cleanup := func() {
+		_ = client.Close()
+		_ = server.Stop()
+		utils.ResetAllowedBasePaths()
+	}
+	return server, client, cleanup
+}
+
+// TestMockRDS_SnapshotCopyFrom tests the copy-from snapshot semantics in the mock RDS server.
+func TestMockRDS_SnapshotCopyFrom(t *testing.T) {
+	// Use a fixed source volume UUID so generated snapshot IDs are deterministic.
+	// Format: pvc-<uuid>
+	const sourceUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+	t.Run("create snapshot via copy-from", func(t *testing.T) {
+		server, client, cleanup := setupSnapshotTestClient(t)
+		defer cleanup()
+
+		// Create source volume with known UUID
+		sourceSlot := "pvc-" + sourceUUID
+		snapName := utils.GenerateSnapshotID("test-snap-copy-1", sourceSlot)
+
+		err := client.CreateVolume(rds.CreateVolumeOptions{
+			Slot:          sourceSlot,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", sourceSlot),
+			FileSizeBytes: 10 * 1024 * 1024 * 1024, // 10 GiB
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", sourceSlot),
+		})
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		// Create snapshot from source volume via CreateSnapshot
+		snapOpts := rds.CreateSnapshotOptions{
+			Name:         snapName,
+			SourceVolume: sourceSlot,
+			BasePath:     "/storage-pool/metal-csi",
+		}
+		snap, err := client.CreateSnapshot(snapOpts)
+		if err != nil {
+			t.Fatalf("CreateSnapshot failed: %v", err)
+		}
+
+		// Verify snapshot state in server
+		mockSnap, ok := server.GetSnapshot(snapName)
+		if !ok {
+			t.Fatalf("snapshot %s not found in server state after creation", snapOpts.Name)
+		}
+
+		// Snapshot should reference source volume
+		if mockSnap.SourceVolume != sourceSlot {
+			t.Errorf("expected SourceVolume=%s, got %s", sourceSlot, mockSnap.SourceVolume)
+		}
+
+		// Snapshot should have file path set
+		if mockSnap.FilePath == "" {
+			t.Error("snapshot FilePath should not be empty")
+		}
+
+		// Snapshot size should equal source volume size
+		if mockSnap.FileSizeBytes != 10*1024*1024*1024 {
+			t.Errorf("expected snapshot size 10GiB, got %d", mockSnap.FileSizeBytes)
+		}
+
+		// Snapshot must NOT be in volumes (not an NVMe-exported volume)
+		if _, ok := server.GetVolume(snapName); ok {
+			t.Error("snapshot should NOT be in volumes map (it is not an NVMe-exported volume)")
+		}
+
+		// Return value from CreateSnapshot should have name set
+		if snap.Name == "" {
+			t.Error("CreateSnapshot return value should have Name set")
+		}
+	})
+
+	t.Run("snapshot independent of source", func(t *testing.T) {
+		server, client, cleanup := setupSnapshotTestClient(t)
+		defer cleanup()
+
+		// Create source volume
+		sourceSlot := "pvc-" + sourceUUID
+		snapName := utils.GenerateSnapshotID("test-snap-independent-1", sourceSlot)
+
+		err := client.CreateVolume(rds.CreateVolumeOptions{
+			Slot:          sourceSlot,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", sourceSlot),
+			FileSizeBytes: 5 * 1024 * 1024 * 1024, // 5 GiB
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", sourceSlot),
+		})
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		// Create snapshot
+		snapOpts := rds.CreateSnapshotOptions{
+			Name:         snapName,
+			SourceVolume: sourceSlot,
+			BasePath:     "/storage-pool/metal-csi",
+		}
+		_, err = client.CreateSnapshot(snapOpts)
+		if err != nil {
+			t.Fatalf("CreateSnapshot failed: %v", err)
+		}
+
+		// Delete source volume
+		if err := client.DeleteVolume(sourceSlot); err != nil {
+			t.Fatalf("DeleteVolume failed: %v", err)
+		}
+
+		// Snapshot must still exist (independent copy semantics)
+		if _, ok := server.GetSnapshot(snapName); !ok {
+			t.Errorf("snapshot %s should still exist after source volume deletion", snapName)
+		}
+
+		// Source volume should be gone
+		if _, ok := server.GetVolume(sourceSlot); ok {
+			t.Error("source volume should have been deleted")
+		}
+	})
+
+	t.Run("query snapshot via disk print detail", func(t *testing.T) {
+		server, client, cleanup := setupSnapshotTestClient(t)
+		defer cleanup()
+
+		// Create source volume
+		sourceSlot := "pvc-" + sourceUUID
+		const volSize = 8 * 1024 * 1024 * 1024 // 8 GiB
+		snapName := utils.GenerateSnapshotID("test-snap-query-1", sourceSlot)
+
+		err := client.CreateVolume(rds.CreateVolumeOptions{
+			Slot:          sourceSlot,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", sourceSlot),
+			FileSizeBytes: volSize,
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", sourceSlot),
+		})
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		// Create snapshot
+		snapOpts := rds.CreateSnapshotOptions{
+			Name:         snapName,
+			SourceVolume: sourceSlot,
+			BasePath:     "/storage-pool/metal-csi",
+		}
+		_, err = client.CreateSnapshot(snapOpts)
+		if err != nil {
+			t.Fatalf("CreateSnapshot failed: %v", err)
+		}
+
+		// Query snapshot via GetSnapshot (uses /disk print detail where slot=...)
+		snap, err := client.GetSnapshot(snapName)
+		if err != nil {
+			t.Fatalf("GetSnapshot failed: %v", err)
+		}
+
+		// Verify output fields
+		if snap.Name != snapName {
+			t.Errorf("expected Name=%s, got %s", snapName, snap.Name)
+		}
+		if snap.FilePath == "" {
+			t.Error("FilePath should not be empty in GetSnapshot result")
+		}
+		if snap.FileSizeBytes == 0 {
+			t.Error("FileSizeBytes should not be 0 in GetSnapshot result")
+		}
+
+		// Verify output does NOT include nvme-tcp-export (use server state directly)
+		mockSnap, ok := server.GetSnapshot(snapName)
+		if !ok {
+			t.Fatalf("snapshot not found in server state")
+		}
+		// Format the output and check it doesn't have NVMe export fields
+		output := server.formatSnapshotDetail(mockSnap)
+		if strings.Contains(output, "nvme-tcp-export") {
+			t.Errorf("snapshot disk print output should NOT contain nvme-tcp-export, got: %s", output)
+		}
+		if strings.Contains(output, "nvme-tcp-server-port") {
+			t.Errorf("snapshot disk print output should NOT contain nvme-tcp-server-port, got: %s", output)
+		}
+		if strings.Contains(output, "nvme-tcp-server-nqn") {
+			t.Errorf("snapshot disk print output should NOT contain nvme-tcp-server-nqn, got: %s", output)
+		}
+	})
+
+	t.Run("delete snapshot via disk remove", func(t *testing.T) {
+		server, client, cleanup := setupSnapshotTestClient(t)
+		defer cleanup()
+
+		// Create source volume
+		sourceSlot := "pvc-" + sourceUUID
+		snapName := utils.GenerateSnapshotID("test-snap-delete-1", sourceSlot)
+
+		err := client.CreateVolume(rds.CreateVolumeOptions{
+			Slot:          sourceSlot,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", sourceSlot),
+			FileSizeBytes: 10 * 1024 * 1024 * 1024,
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", sourceSlot),
+		})
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		// Create snapshot
+		snapOpts := rds.CreateSnapshotOptions{
+			Name:         snapName,
+			SourceVolume: sourceSlot,
+			BasePath:     "/storage-pool/metal-csi",
+		}
+		snap, err := client.CreateSnapshot(snapOpts)
+		if err != nil {
+			t.Fatalf("CreateSnapshot failed: %v", err)
+		}
+
+		snapFilePath := snap.FilePath
+		if snapFilePath == "" {
+			t.Fatal("snapshot FilePath should not be empty")
+		}
+
+		// Delete snapshot via DeleteSnapshot
+		if err := client.DeleteSnapshot(snapName); err != nil {
+			t.Fatalf("DeleteSnapshot failed: %v", err)
+		}
+
+		// Snapshot should be removed from server state
+		if _, ok := server.GetSnapshot(snapName); ok {
+			t.Errorf("snapshot %s should have been removed from server state", snapName)
+		}
+
+		// Backing file should also be removed
+		if _, ok := server.GetFile(snapFilePath); ok {
+			t.Errorf("backing file %s should have been removed with snapshot", snapFilePath)
+		}
+	})
+
+	t.Run("copy-from nonexistent source fails", func(t *testing.T) {
+		_, client, cleanup := setupSnapshotTestClient(t)
+		defer cleanup()
+
+		// Use a valid snapshot ID (with proper UUID format) but nonexistent source
+		nonexistentSource := "pvc-" + sourceUUID
+		snapName := utils.GenerateSnapshotID("test-snap-fail-1", nonexistentSource)
+
+		// Attempt to create snapshot from nonexistent source (never created the volume)
+		snapOpts := rds.CreateSnapshotOptions{
+			Name:         snapName,
+			SourceVolume: nonexistentSource,
+			BasePath:     "/storage-pool/metal-csi",
+		}
+		_, err := client.CreateSnapshot(snapOpts)
+		if err == nil {
+			t.Fatal("expected CreateSnapshot to fail when source volume does not exist")
+		}
+
+		// Error should mention not found or failure
+		if !strings.Contains(err.Error(), "no such item") &&
+			!strings.Contains(err.Error(), "not found") &&
+			!strings.Contains(err.Error(), "failed") {
+			t.Errorf("expected error mentioning failure, got: %v", err)
+		}
+	})
+
+	t.Run("restore from snapshot creates NVMe volume", func(t *testing.T) {
+		server, client, cleanup := setupSnapshotTestClient(t)
+		defer cleanup()
+
+		// Create source volume
+		sourceSlot := "pvc-" + sourceUUID
+		const volSize = 10 * 1024 * 1024 * 1024 // 10 GiB
+		snapName := utils.GenerateSnapshotID("test-snap-restore-1", sourceSlot)
+
+		err := client.CreateVolume(rds.CreateVolumeOptions{
+			Slot:          sourceSlot,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", sourceSlot),
+			FileSizeBytes: volSize,
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", sourceSlot),
+		})
+		if err != nil {
+			t.Fatalf("CreateVolume failed: %v", err)
+		}
+
+		// Create snapshot
+		snapOpts := rds.CreateSnapshotOptions{
+			Name:         snapName,
+			SourceVolume: sourceSlot,
+			BasePath:     "/storage-pool/metal-csi",
+		}
+		_, err = client.CreateSnapshot(snapOpts)
+		if err != nil {
+			t.Fatalf("CreateSnapshot failed: %v", err)
+		}
+
+		// Restore snapshot to a new volume — use a different UUID for the restored volume
+		const restoredUUID = "b2c3d4e5-f6a7-8901-bcde-f01234567891"
+		restoredSlot := "pvc-" + restoredUUID
+		restoreOpts := rds.CreateVolumeOptions{
+			Slot:          restoredSlot,
+			FilePath:      fmt.Sprintf("/storage-pool/metal-csi/%s.img", restoredSlot),
+			FileSizeBytes: volSize,
+			NVMETCPPort:   4420,
+			NVMETCPNQN:    fmt.Sprintf("nqn.2000-02.com.mikrotik:%s", restoredSlot),
+		}
+		if err := client.RestoreSnapshot(snapName, restoreOpts); err != nil {
+			t.Fatalf("RestoreSnapshot failed: %v", err)
+		}
+
+		// Restored volume must be in volumes map (NVMe-exported)
+		restoredVol, ok := server.GetVolume(restoredSlot)
+		if !ok {
+			t.Fatalf("restored volume %s not found in server volumes", restoredSlot)
+		}
+		if !restoredVol.Exported {
+			t.Error("restored volume should have NVMe export enabled")
+		}
+		if restoredVol.Slot != restoredSlot {
+			t.Errorf("expected Slot=%s, got %s", restoredSlot, restoredVol.Slot)
+		}
+
+		// Original snapshot should still exist (restore is non-destructive)
+		if _, ok := server.GetSnapshot(snapName); !ok {
+			t.Errorf("original snapshot %s should still exist after restore", snapName)
+		}
+	})
 }
