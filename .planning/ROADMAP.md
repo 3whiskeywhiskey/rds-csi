@@ -85,10 +85,10 @@ Plans:
   1. A CronJob configured via Helm creates a VolumeSnapshot for a target PVC on the configured schedule (e.g., daily at 02:00)
   2. The cleanup script deletes VolumeSnapshots older than the configured retention age, keeping the N most recent
   3. `helm install` with scheduled snapshot values enabled deploys the CronJob; `helm uninstall` removes it cleanly
-**Plans:** TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 31-01: Implement scheduled snapshot CronJob manifest (job template, schedule, retention cleanup script) as Helm chart template
+- [ ] 31-01-PLAN.md — Add scheduledSnapshots values/schema, CronJob template with snapshot creation and retention cleanup, NOTES.txt update
 
 ### Phase 32: Resilience Regression Tests
 
@@ -116,4 +116,4 @@ Plans:
 | 32. Resilience Regression Tests | v0.11.0 | 0/1 | Not started | - |
 
 ---
-*Last updated: 2026-02-17 after Phase 30 execution*
+*Last updated: 2026-02-18 after Phase 31 planning*
