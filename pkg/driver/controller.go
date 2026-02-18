@@ -1005,10 +1005,14 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Error(codes.Internal, "RDS client not initialized")
 	}
 
-	// 2. Generate deterministic snapshot ID from name (for idempotency)
-	snapshotID := utils.SnapshotNameToID(req.GetName())
+	// 2. Generate snapshot ID from source volume and current timestamp (for traceability)
+	// NOTE: Phase 29 - switched from deterministic SnapshotNameToID to timestamp-based ID
+	// that embeds source volume lineage directly in the slot name.
+	snapshotID := utils.GenerateSnapshotIDFromSource(sourceVolumeID)
 
 	// 3. Check idempotency: does snapshot with this ID already exist?
+	// With timestamp-based IDs, exact duplicates won't occur naturally, but we still
+	// handle the case for robustness.
 	existingSnapshot, err := cs.driver.rdsClient.GetSnapshot(snapshotID)
 	if err == nil {
 		// Snapshot exists -- check if same source volume (idempotent) or different (conflict)
@@ -1039,17 +1043,18 @@ func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Errorf(codes.Internal, "failed to get source volume: %v", err)
 	}
 
-	// 5. Determine Btrfs filesystem label
-	// Use the StorageClass parameter or derive from volume base path
-	// The FSLabel needs to be discoverable -- for now use a configurable approach
-	// Default: extract from volume path or use StorageClass parameter
-	fsLabel := cs.getBtrfsFSLabel(req.GetParameters())
+	// 5. Determine base path for snapshot file storage
+	// Snapshots are stored in the same base directory as volumes
+	volumeBasePath := defaultVolumeBasePath
+	if path, ok := req.GetParameters()["basePath"]; ok && path != "" {
+		volumeBasePath = path
+	}
 
-	// 6. Create snapshot via RDS
+	// 6. Create snapshot via RDS using /disk add copy-from
 	createOpts := rds.CreateSnapshotOptions{
 		Name:         snapshotID,
 		SourceVolume: sourceVolumeID,
-		FSLabel:      fsLabel,
+		BasePath:     volumeBasePath,
 	}
 
 	snapshotInfo, err := cs.driver.rdsClient.CreateSnapshot(createOpts)
@@ -1397,15 +1402,3 @@ func (cs *ControllerServer) getNVMEAddress(params map[string]string) string {
 	return cs.getRDSAddress(params)
 }
 
-// getBtrfsFSLabel determines the Btrfs filesystem label for snapshot operations.
-// Checks snapshot parameters first, then falls back to extracting from volume base path.
-func (cs *ControllerServer) getBtrfsFSLabel(params map[string]string) string {
-	// Check for explicit parameter
-	if label, ok := params["btrfsFSLabel"]; ok && label != "" {
-		return label
-	}
-	// Default: use "storage-pool" derived from the volume base path
-	// The base path is typically /storage-pool/metal-csi, and the Btrfs FS label
-	// corresponds to the mount point name
-	return "storage-pool"
-}

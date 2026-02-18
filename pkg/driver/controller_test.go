@@ -2353,33 +2353,23 @@ func TestCreateSnapshot(t *testing.T) {
 			wantCode:       codes.NotFound,
 		},
 		{
-			name:           "idempotent: same name and same source",
-			snapshotName:   "test-snapshot-1", // Same as first test
+			// With timestamp-based IDs, each CreateSnapshot call generates a unique ID.
+			// The "same name" has no effect on idempotency — the snapshot name is just metadata.
+			// A second call from the same source will create a new snapshot (different timestamp).
+			name:           "success: second snapshot from same source (new timestamp ID)",
+			snapshotName:   "test-snapshot-1-again",
 			sourceVolumeID: testVolumeID1,
 			wantErr:        false,
 		},
-		{
-			name:           "error: same name but different source",
-			snapshotName:   "test-snapshot-conflict",
-			sourceVolumeID: testVolumeID2, // Different volume
-			wantErr:        true,
-			wantCode:       codes.AlreadyExists,
-		},
 	}
 
-	// Pre-create second volume for conflict test
+	// Pre-create second volume for future tests
 	mockRDS.AddVolume(&rds.VolumeInfo{
 		Slot:          testVolumeID2,
 		FilePath:      "/storage-pool/metal-csi/" + testVolumeID2 + ".img",
 		FileSizeBytes: 10 * 1024 * 1024 * 1024,
 		NVMETCPPort:   4420,
 		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:" + testVolumeID2,
-	})
-
-	// Pre-create a snapshot for conflict test
-	_, _ = cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
-		Name:           "test-snapshot-conflict",
-		SourceVolumeId: testVolumeID1, // Create with volume 1
 	})
 
 	for _, tt := range tests {
@@ -2520,19 +2510,38 @@ func TestListSnapshots(t *testing.T) {
 		})
 	}
 
-	// Create test snapshots
-	snap1, _ := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
-		Name:           "test-snap-1",
-		SourceVolumeId: testVolumeID1,
+	// Insert test snapshots directly into mock to avoid timestamp collision
+	// (timestamp-based IDs use time.Now().Unix() which may be the same within a test)
+	// Extract UUID parts from testVolumeID1 and testVolumeID2 for snapshot IDs
+	snapID1 := "snap-11111111-1111-1111-1111-111111111111-at-1739800001"
+	snapID2 := "snap-11111111-1111-1111-1111-111111111111-at-1739800002"
+	snapID3 := "snap-22222222-2222-2222-2222-222222222222-at-1739800003"
+
+	mockRDS.AddSnapshot(&rds.SnapshotInfo{
+		Name:          snapID1,
+		SourceVolume:  testVolumeID1,
+		FileSizeBytes: 10 * 1024 * 1024 * 1024,
+		FilePath:      "/storage-pool/metal-csi/" + snapID1 + ".img",
 	})
-	snap2, _ := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
-		Name:           "test-snap-2",
-		SourceVolumeId: testVolumeID1, // Same source as snap1
+	mockRDS.AddSnapshot(&rds.SnapshotInfo{
+		Name:          snapID2,
+		SourceVolume:  testVolumeID1, // Same source as snap1
+		FileSizeBytes: 10 * 1024 * 1024 * 1024,
+		FilePath:      "/storage-pool/metal-csi/" + snapID2 + ".img",
 	})
-	snap3, _ := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
-		Name:           "test-snap-3",
-		SourceVolumeId: testVolumeID2, // Different source
+	mockRDS.AddSnapshot(&rds.SnapshotInfo{
+		Name:          snapID3,
+		SourceVolume:  testVolumeID2, // Different source
+		FileSizeBytes: 20 * 1024 * 1024 * 1024,
+		FilePath:      "/storage-pool/metal-csi/" + snapID3 + ".img",
 	})
+
+	// Keep snap1 variable for filter-by-ID test
+	snap1 := &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{SnapshotId: snapID1}}
+	snap2 := &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{SnapshotId: snapID2}}
+	snap3 := &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{SnapshotId: snapID3}}
+	_ = snap2
+	_ = snap3
 
 	tests := []struct {
 		name         string

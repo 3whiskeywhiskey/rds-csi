@@ -736,7 +736,8 @@ func parseRouterOSTime(normalized string) time.Time {
 
 // Snapshot operations
 
-// CreateSnapshot creates a read-only Btrfs snapshot via RouterOS SSH
+// CreateSnapshot creates a CoW copy of a volume disk entry on RDS using /disk add copy-from.
+// The snapshot disk is NOT NVMe-exported (snapshots are immutable backing files only).
 func (c *sshClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, error) {
 	// Validate options
 	if err := utils.ValidateSnapshotID(opts.Name); err != nil {
@@ -745,85 +746,108 @@ func (c *sshClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, e
 	if err := validateSlotName(opts.SourceVolume); err != nil {
 		return nil, fmt.Errorf("invalid source volume: %w", err)
 	}
-	if opts.FSLabel == "" {
-		return nil, fmt.Errorf("filesystem label is required")
+	if opts.BasePath == "" {
+		return nil, fmt.Errorf("base path is required for snapshot file placement")
 	}
 
-	// Build /disk/btrfs/subvolume/add command with read-only=yes for snapshots
+	// Get source volume info to verify it exists and determine file size
+	sourceVol, err := c.GetVolume(opts.SourceVolume)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source volume %s: %w", opts.SourceVolume, err)
+	}
+
+	// Build snapshot file path: <basePath>/<snapshot-name>.img
+	snapFilePath := fmt.Sprintf("%s/%s.img", opts.BasePath, opts.Name)
+
+	// Build /disk add copy-from command.
+	// - Reference source by slot name using [find slot=<name>] (slot is unique and validated).
+	// - Omit file-size: copy-from determines size from source automatically.
+	// - NO nvme-tcp-export, nvme-tcp-server-port, nvme-tcp-server-nqn (snapshots not NVMe-exported).
 	cmd := fmt.Sprintf(
-		`/disk/btrfs/subvolume/add read-only=yes parent=%s fs=%s name=%s`,
+		`/disk add type=file copy-from=[find slot=%s] file-path=%s slot=%s`,
 		opts.SourceVolume,
-		opts.FSLabel,
+		snapFilePath,
 		opts.Name,
 	)
 
 	// Execute command with retry
-	_, err := c.runCommandWithRetry(cmd, 3)
+	_, err = c.runCommandWithRetry(cmd, 3)
 	if err != nil {
-		// Cleanup attempt: remove partial snapshot if creation failed
-		cleanupCmd := fmt.Sprintf(`/disk/btrfs/subvolume/remove [find where name=%s]`, opts.Name)
-		if _, cleanupErr := c.runCommand(cleanupCmd); cleanupErr != nil {
-			klog.Warningf("Failed to cleanup partial snapshot %s: %v", opts.Name, cleanupErr)
-		}
 		return nil, fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	// Verify snapshot was created
+	// Verify snapshot was created by retrieving it
 	snapshot, err := c.GetSnapshot(opts.Name)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot creation verification failed: %w", err)
 	}
 
-	// NOTE: SourceVolume should be populated by parseSnapshotInfo if the backend provides it
-	// (mock server does for testing, real RouterOS may not - tracked by Kubernetes instead)
-	// If not populated, set it manually from opts for testing compatibility
+	// Ensure SourceVolume is populated (RDS may not echo it back)
 	if snapshot.SourceVolume == "" {
 		snapshot.SourceVolume = opts.SourceVolume
 	}
 
+	// Ensure FileSizeBytes is populated (use source volume size as ground truth)
+	if snapshot.FileSizeBytes == 0 {
+		snapshot.FileSizeBytes = sourceVol.FileSizeBytes
+	}
+
 	klog.V(2).Infof("Created snapshot %s from volume %s", opts.Name, opts.SourceVolume)
-	klog.V(4).Infof("Created snapshot %s (source=%s, fs=%s)", opts.Name, opts.SourceVolume, opts.FSLabel)
+	klog.V(4).Infof("Created snapshot %s (source=%s, file=%s, size=%d)", opts.Name, opts.SourceVolume, snapFilePath, snapshot.FileSizeBytes)
 	return snapshot, nil
 }
 
-// DeleteSnapshot removes a Btrfs snapshot from RDS
-// Idempotent: returns nil if snapshot does not exist (per CSI spec)
+// DeleteSnapshot removes a snapshot disk entry and its backing file from RDS.
+// Idempotent: returns nil if snapshot does not exist (per CSI spec).
+// Belt-and-suspenders: removes both the /disk entry AND the backing .img file.
 func (c *sshClient) DeleteSnapshot(snapshotID string) error {
 	// Validate snapshot ID
 	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
 		return err
 	}
 
-	// Check if snapshot exists (for idempotency)
-	_, err := c.GetSnapshot(snapshotID)
+	// Get snapshot info to find the backing file path (for file cleanup)
+	snapshot, err := c.GetSnapshot(snapshotID)
 	if err != nil {
 		var notFoundErr *SnapshotNotFoundError
 		if errors.As(err, &notFoundErr) {
-			klog.V(4).Infof("Snapshot %s already deleted", snapshotID)
+			klog.V(4).Infof("Snapshot %s already deleted (not found)", snapshotID)
 			return nil // Idempotent: not found = success
 		}
 		return fmt.Errorf("failed to check snapshot existence: %w", err)
 	}
 
-	// Build /disk/btrfs/subvolume/remove command
-	cmd := fmt.Sprintf(`/disk/btrfs/subvolume/remove [find where name=%s]`, snapshotID)
+	filePath := snapshot.FilePath
 
-	// Execute command with retry
+	// Step 1: Remove the disk entry
+	cmd := fmt.Sprintf(`/disk remove [find slot=%s]`, snapshotID)
 	_, err = c.runCommandWithRetry(cmd, 3)
 	if err != nil {
 		// Idempotent: treat "no such item" as success
 		if strings.Contains(err.Error(), "no such item") {
-			klog.V(4).Infof("Snapshot %s does not exist, treating as success", snapshotID)
-			return nil
+			klog.V(4).Infof("Snapshot %s disk entry does not exist, continuing to file cleanup", snapshotID)
+		} else {
+			return fmt.Errorf("failed to remove snapshot disk entry: %w", err)
 		}
-		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+	klog.V(4).Infof("Removed disk entry for snapshot %s", snapshotID)
+
+	// Step 2: Delete the backing file (belt and suspenders)
+	if filePath != "" {
+		if err := c.DeleteFile(filePath); err != nil {
+			// Log warning but don't fail - disk slot is already removed
+			// Orphan reconciler can clean up the file later if needed
+			klog.Warningf("Failed to delete backing file %s for snapshot %s: %v", filePath, snapshotID, err)
+		} else {
+			klog.V(4).Infof("Deleted backing file %s for snapshot %s", filePath, snapshotID)
+		}
 	}
 
 	klog.V(2).Infof("Deleted snapshot %s", snapshotID)
 	return nil
 }
 
-// GetSnapshot retrieves information about a specific snapshot
+// GetSnapshot retrieves information about a specific snapshot using /disk print.
 func (c *sshClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
 	klog.V(4).Infof("Getting snapshot info for %s", snapshotID)
 
@@ -832,8 +856,8 @@ func (c *sshClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
 		return nil, err
 	}
 
-	// Build /disk/btrfs/subvolume/print detail command
-	cmd := fmt.Sprintf(`/disk/btrfs/subvolume/print detail where name=%s`, snapshotID)
+	// Build /disk print command (same format as GetVolume, but for snapshots)
+	cmd := fmt.Sprintf(`/disk print detail where slot=%s`, snapshotID)
 
 	// Execute command
 	output, err := c.runCommand(cmd)
@@ -841,13 +865,13 @@ func (c *sshClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
 		return nil, fmt.Errorf("failed to get snapshot info: %w", err)
 	}
 
-	// Check if snapshot exists
+	// Normalize output and check if snapshot exists
 	normalized := normalizeRouterOSOutput(output)
 	if strings.TrimSpace(normalized) == "" {
 		return nil, &SnapshotNotFoundError{Name: snapshotID}
 	}
 
-	// Parse snapshot info
+	// Parse snapshot info using /disk print output format
 	snapshot, err := parseSnapshotInfo(output)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse snapshot info: %w", err)
@@ -861,12 +885,13 @@ func (c *sshClient) GetSnapshot(snapshotID string) (*SnapshotInfo, error) {
 	return snapshot, nil
 }
 
-// ListSnapshots lists all CSI-managed snapshots (snap-* prefix) on RDS
+// ListSnapshots lists all CSI-managed snapshots (snap-* prefix) on RDS.
+// Uses /disk print with slot prefix filter to enumerate snapshot disk entries.
 func (c *sshClient) ListSnapshots() ([]SnapshotInfo, error) {
 	klog.V(4).Info("Listing all snapshots")
 
-	// Build /disk/btrfs/subvolume/print command with snap- filter
-	cmd := `/disk/btrfs/subvolume/print where name~"snap-"`
+	// Use slot~ prefix match to find all snap-* entries
+	cmd := `/disk print detail where slot~"snap-"`
 
 	// Execute command
 	output, err := c.runCommand(cmd)
@@ -883,8 +908,8 @@ func (c *sshClient) ListSnapshots() ([]SnapshotInfo, error) {
 	return snapshots, nil
 }
 
-// RestoreSnapshot creates a new volume from a snapshot
-// Uses Btrfs snapshot-of-snapshot (writable clone) for efficient restore
+// RestoreSnapshot creates a new NVMe-exported volume from a snapshot using /disk add copy-from.
+// The restored volume is an independent writable copy — modifying it does not affect the snapshot.
 func (c *sshClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolumeOptions) error {
 	// Validate snapshot ID
 	if err := utils.ValidateSnapshotID(snapshotID); err != nil {
@@ -897,36 +922,20 @@ func (c *sshClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolum
 	}
 
 	// Verify snapshot exists
-	snapshot, err := c.GetSnapshot(snapshotID)
+	_, err := c.GetSnapshot(snapshotID)
 	if err != nil {
 		return fmt.Errorf("snapshot not found: %w", err)
 	}
 
-	fsLabel := snapshot.FSLabel
-	klog.V(4).Infof("Restoring snapshot %s to new volume %s (fs=%s)", snapshotID, newVolumeOpts.Slot, fsLabel)
+	klog.V(4).Infof("Restoring snapshot %s to new volume %s", snapshotID, newVolumeOpts.Slot)
 
-	// Step 1: Create writable snapshot-of-snapshot (Btrfs clone)
-	// NOTE: NO read-only=yes flag -- this creates a writable subvolume from the read-only snapshot
-	cloneCmd := fmt.Sprintf(
-		`/disk/btrfs/subvolume/add parent=%s fs=%s name=%s`,
-		snapshotID,
-		fsLabel,
-		newVolumeOpts.Slot,
-	)
-
-	_, err = c.runCommandWithRetry(cloneCmd, 3)
-	if err != nil {
-		return fmt.Errorf("failed to create writable clone from snapshot: %w", err)
-	}
-	klog.V(4).Infof("Created writable clone %s from snapshot %s", newVolumeOpts.Slot, snapshotID)
-
-	// Step 2: Create /disk entry for NVMe/TCP export
-	// NOTE: This is the expected flow based on RouterOS documentation.
-	// The exact relationship between Btrfs subvolumes and /disk entries may need
-	// adjustment during hardware validation (see RESEARCH.md Open Question 1).
+	// Create new NVMe-exported volume using /disk add copy-from.
+	// This is essentially CreateVolume but with copy-from to populate data from the snapshot.
+	// file-size is included to allow larger-than-snapshot restores (per CSI spec).
 	sizeStr := formatBytes(newVolumeOpts.FileSizeBytes)
-	diskCmd := fmt.Sprintf(
-		`/disk add type=file file-path=%s file-size=%s slot=%s nvme-tcp-export=yes nvme-tcp-server-port=%d nvme-tcp-server-nqn=%s`,
+	cmd := fmt.Sprintf(
+		`/disk add type=file copy-from=[find slot=%s] file-path=%s file-size=%s slot=%s nvme-tcp-export=yes nvme-tcp-server-port=%d nvme-tcp-server-nqn=%s`,
+		snapshotID,
 		newVolumeOpts.FilePath,
 		sizeStr,
 		newVolumeOpts.Slot,
@@ -934,14 +943,14 @@ func (c *sshClient) RestoreSnapshot(snapshotID string, newVolumeOpts CreateVolum
 		newVolumeOpts.NVMETCPNQN,
 	)
 
-	_, err = c.runCommandWithRetry(diskCmd, 3)
+	_, err = c.runCommandWithRetry(cmd, 3)
 	if err != nil {
-		// Cleanup: remove the Btrfs subvolume clone
-		cleanupCmd := fmt.Sprintf(`/disk/btrfs/subvolume/remove [find where name=%s]`, newVolumeOpts.Slot)
-		if _, cleanupErr := c.runCommand(cleanupCmd); cleanupErr != nil {
-			klog.Warningf("Failed to cleanup Btrfs clone %s after disk creation failure: %v", newVolumeOpts.Slot, cleanupErr)
-		}
-		return fmt.Errorf("failed to create disk entry for restored volume: %w", err)
+		return fmt.Errorf("failed to restore snapshot to new volume: %w", err)
+	}
+
+	// Verify restored volume exists
+	if err := c.VerifyVolumeExists(newVolumeOpts.Slot); err != nil {
+		return fmt.Errorf("restore verification failed: %w", err)
 	}
 
 	klog.V(2).Infof("Restored snapshot %s to new volume %s", snapshotID, newVolumeOpts.Slot)
@@ -1064,71 +1073,83 @@ func convertRateToBytesPerSec(value float64, unit string) float64 {
 	}
 }
 
-// parseSnapshotInfo parses RouterOS Btrfs subvolume output for a single snapshot
-// TODO: RouterOS output format for /disk/btrfs/subvolume needs hardware validation.
-// Expected format is similar to /disk print detail with key=value pairs.
+// parseSnapshotInfo parses RouterOS /disk print detail output for a single snapshot entry.
+// Snapshot entries have the same key=value format as volume entries but WITHOUT nvme-tcp-export
+// fields (snapshots are not NVMe-exported). Source volume lineage is recovered from the slot name.
 func parseSnapshotInfo(output string) (*SnapshotInfo, error) {
 	snapshot := &SnapshotInfo{}
 
-	// Normalize multi-line output
+	// Normalize multi-line output (same as parseVolumeInfo)
 	normalized := normalizeRouterOSOutput(output)
 
-	// Extract name
-	if match := regexp.MustCompile(`name="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+	// Extract slot name (used as snapshot Name)
+	if match := regexp.MustCompile(`slot="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		snapshot.Name = match[1]
-	} else if match := regexp.MustCompile(`name=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
+	} else if match := regexp.MustCompile(`slot=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
 		snapshot.Name = match[1]
 	}
 
-	// Extract read-only flag
-	if match := regexp.MustCompile(`read-only=(yes|no)`).FindStringSubmatch(normalized); len(match) > 1 {
-		snapshot.ReadOnly = match[1] == "yes"
+	// Extract file-path (backing file on RDS)
+	if match := regexp.MustCompile(`file-path="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.FilePath = match[1]
+	} else if match := regexp.MustCompile(`file-path=(\S+\.img)`).FindStringSubmatch(normalized); len(match) > 1 {
+		snapshot.FilePath = match[1]
+	} else if match := regexp.MustCompile(`file-path=(\S+\s+\S+\.img)`).FindStringSubmatch(normalized); len(match) > 1 {
+		// Path was split across lines and joined with space after normalization
+		snapshot.FilePath = strings.ReplaceAll(match[1], " ", "")
+	}
+	// Normalize to absolute path
+	if snapshot.FilePath != "" && !strings.HasPrefix(snapshot.FilePath, "/") {
+		snapshot.FilePath = "/" + snapshot.FilePath
 	}
 
-	// Extract filesystem label
-	// TODO: Verify RouterOS field name during hardware validation (may be "fs" or "filesystem")
-	if match := regexp.MustCompile(`fs="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
-		snapshot.FSLabel = match[1]
-	} else if match := regexp.MustCompile(`fs=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
-		snapshot.FSLabel = match[1]
+	// Extract file-size (human-readable format like "50.0GiB")
+	if match := regexp.MustCompile(`file-size=([\d.]+)\s*([KMGT]i?B)`).FindStringSubmatch(normalized); len(match) > 2 {
+		if bytes, err := parseSize(match[1], match[2]); err == nil {
+			snapshot.FileSizeBytes = bytes
+		}
+	} else {
+		// Fallback: try raw size field (with spaces removed)
+		if match := regexp.MustCompile(`file-size=(\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
+			if size, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+				snapshot.FileSizeBytes = size
+			}
+		}
 	}
 
-	// Extract source volume if present (mock server provides this for testing, real RouterOS doesn't)
-	// NOTE: Real RouterOS may not return source volume or creation time in subvolume output.
-	// These fields are tracked by the CSI controller layer in VolumeSnapshotContent annotations.
-	// The mock server provides source-volume for testing idempotency without Kubernetes.
+	// Extract source-volume if present (mock server provides this for testing)
+	// Real RouterOS /disk print does not emit a source-volume field for copy-from entries.
 	if match := regexp.MustCompile(`source-volume="([^"]+)"`).FindStringSubmatch(normalized); len(match) > 1 {
 		snapshot.SourceVolume = match[1]
 	} else if match := regexp.MustCompile(`source-volume=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
 		snapshot.SourceVolume = match[1]
 	}
 
-	// Extract file size if present (mock server provides this)
-	if match := regexp.MustCompile(`file-size=(\d+)`).FindStringSubmatch(normalized); len(match) > 1 {
-		if size, err := strconv.ParseInt(match[1], 10, 64); err == nil {
-			snapshot.FileSizeBytes = size
+	// If source-volume not in output, attempt to extract from slot name (snap-<uuid>-at-<ts> format)
+	if snapshot.SourceVolume == "" && snapshot.Name != "" {
+		if sourceVolID, err := utils.ExtractSourceVolumeIDFromSnapshotID(snapshot.Name); err == nil {
+			snapshot.SourceVolume = sourceVolID
 		}
 	}
 
-	// Extract creation time if present (mock server provides this for testing)
-	// In production, creation time comes from VolumeSnapshotContent annotations managed by external-snapshotter
-	if match := regexp.MustCompile(`creation-time=([^\s]+)`).FindStringSubmatch(normalized); len(match) > 1 {
-		if t, err := time.Parse(time.RFC3339, match[1]); err == nil {
-			snapshot.CreatedAt = t
+	// Extract creation time: try creation-time field first, then fall back to timestamp in slot name
+	snapshot.CreatedAt = parseRouterOSTime(normalized)
+	if snapshot.CreatedAt.IsZero() && snapshot.Name != "" {
+		// Fall back: parse Unix timestamp from snap-<uuid>-at-<ts> slot name
+		if ts, err := utils.ExtractTimestampFromSnapshotID(snapshot.Name); err == nil {
+			snapshot.CreatedAt = time.Unix(ts, 0)
 		}
 	}
-
-	// If no creation time was provided, use zero time (production RDS doesn't track this)
-	// The CSI controller will get creation time from VolumeSnapshotContent annotations
 
 	return snapshot, nil
 }
 
-// parseSnapshotList parses RouterOS Btrfs subvolume output for multiple snapshots
+// parseSnapshotList parses RouterOS /disk print detail output for multiple snapshot entries.
+// Only entries with slot names starting with "snap-" are included in the result.
 func parseSnapshotList(output string) ([]SnapshotInfo, error) {
 	var snapshots []SnapshotInfo
 
-	// Split by snapshot entries (each starts with a number)
+	// Split by disk entries (each starts with a number like "0  " or " 1  ")
 	entries := regexp.MustCompile(`(?m)^\s*\d+\s+`).Split(output, -1)
 
 	for _, entry := range entries {
@@ -1142,7 +1163,7 @@ func parseSnapshotList(output string) ([]SnapshotInfo, error) {
 			continue
 		}
 
-		// Only include snapshots with snap- prefix (filter at parse level)
+		// Only include entries with snap- prefix (filter out non-snapshot disk entries)
 		if strings.HasPrefix(snapshot.Name, utils.SnapshotIDPrefix) {
 			snapshots = append(snapshots, *snapshot)
 		}

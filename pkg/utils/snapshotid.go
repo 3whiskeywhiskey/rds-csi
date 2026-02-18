@@ -3,7 +3,9 @@ package utils
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -14,38 +16,106 @@ const (
 )
 
 var (
-	// snapshotIDPattern matches strict UUID format with snap- prefix
-	// Format: snap-<lowercase-uuid>
-	// Example: snap-12345678-1234-1234-1234-123456789abc
-	snapshotIDPattern = regexp.MustCompile(`^snap-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+	// snapshotIDPattern matches the new timestamp-based format:
+	// snap-<lowercase-uuid>-at-<unix-timestamp>
+	// Example: snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000
+	snapshotIDPattern = regexp.MustCompile(`^snap-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}-at-\d+$`)
+
+	// snapshotIDLegacyPattern matches the old format (snap-<uuid> without -at-<timestamp>)
+	// kept for backward compatibility validation during migration
+	snapshotIDLegacyPattern = regexp.MustCompile(`^snap-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 )
 
-// GenerateSnapshotID generates a new unique snapshot ID
-func GenerateSnapshotID() string {
-	return SnapshotIDPrefix + uuid.New().String()
+// GenerateSnapshotIDFromSource generates a snapshot ID embedding the source volume UUID
+// and the current Unix timestamp, producing a unique, traceable snapshot ID.
+//
+// Format: snap-<source-uuid>-at-<unix-timestamp>
+// Example: snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000
+//
+// Input: sourceVolumeID in pvc-<uuid> format
+// Output: snap-<uuid>-at-<timestamp>
+func GenerateSnapshotIDFromSource(sourceVolumeID string) string {
+	// Strip the "pvc-" prefix to get the UUID part
+	sourceUUID := strings.TrimPrefix(sourceVolumeID, VolumeIDPrefix)
+	timestamp := time.Now().Unix()
+	return fmt.Sprintf("snap-%s-at-%d", sourceUUID, timestamp)
 }
 
-// SnapshotNameToID generates a deterministic snapshot ID from a snapshot name
-// This ensures the same name always produces the same ID (for idempotency)
-func SnapshotNameToID(name string) string {
-	// Use UUID v5 (SHA-1 based) to generate deterministic UUID from name
-	// Reuse volumeNamespace since volume names and snapshot names are inherently different strings
-	id := uuid.NewSHA1(volumeNamespace, []byte(name))
-	return SnapshotIDPrefix + id.String()
+// ExtractSourceVolumeIDFromSnapshotID parses a snapshot ID and returns the source volume ID.
+// Snapshot ID format: snap-<source-uuid>-at-<unix-timestamp>
+// Returns: pvc-<source-uuid>
+func ExtractSourceVolumeIDFromSnapshotID(snapshotID string) (string, error) {
+	// Must start with "snap-"
+	if !strings.HasPrefix(snapshotID, SnapshotIDPrefix) {
+		return "", fmt.Errorf("snapshot ID %q does not have snap- prefix", snapshotID)
+	}
+
+	// Strip "snap-" prefix → "<uuid>-at-<timestamp>"
+	rest := strings.TrimPrefix(snapshotID, SnapshotIDPrefix)
+
+	// UUID part is exactly 36 chars: 8-4-4-4-12 = 32 hex + 4 hyphens
+	const uuidLen = 36
+	if len(rest) <= uuidLen+4 { // 4 = len("-at-")
+		return "", fmt.Errorf("snapshot ID %q does not match expected format snap-<uuid>-at-<timestamp>", snapshotID)
+	}
+
+	separator := rest[uuidLen:]
+	if !strings.HasPrefix(separator, "-at-") {
+		return "", fmt.Errorf("snapshot ID %q does not contain -at- separator after UUID", snapshotID)
+	}
+
+	sourceUUID := rest[:uuidLen]
+	// Validate UUID portion
+	uuidPattern := regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+	if !uuidPattern.MatchString(sourceUUID) {
+		return "", fmt.Errorf("snapshot ID %q contains invalid UUID portion: %q", snapshotID, sourceUUID)
+	}
+
+	return VolumeIDPrefix + sourceUUID, nil
 }
 
-// ValidateSnapshotID validates that a snapshot ID is safe for use in commands
-// For production snapshot IDs: must match "snap-<lowercase-uuid>" format
-// For CSI sanity tests: accepts alphanumeric with hyphens (safe pattern) but not UUID-like strings
-// SECURITY: Prevents command injection by restricting to safe characters only
+// ExtractTimestampFromSnapshotID parses the -at-<timestamp> suffix from a snapshot ID.
+// Returns the Unix timestamp as int64.
+func ExtractTimestampFromSnapshotID(snapshotID string) (int64, error) {
+	atIdx := strings.LastIndex(snapshotID, "-at-")
+	if atIdx < 0 {
+		return 0, fmt.Errorf("snapshot ID %q does not contain -at- suffix", snapshotID)
+	}
+
+	timestampStr := snapshotID[atIdx+4:] // +4 to skip "-at-"
+	if timestampStr == "" {
+		return 0, fmt.Errorf("snapshot ID %q has empty timestamp after -at-", snapshotID)
+	}
+
+	ts, err := strconv.ParseInt(timestampStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("snapshot ID %q has non-numeric timestamp %q: %w", snapshotID, timestampStr, err)
+	}
+
+	return ts, nil
+}
+
+// ValidateSnapshotID validates that a snapshot ID is safe for use in commands.
+//
+// Accepted formats:
+//  1. Production format:  snap-<lowercase-uuid>-at-<unix-timestamp>
+//  2. Legacy format:      snap-<lowercase-uuid>  (for backward compatibility)
+//  3. CSI sanity test IDs: alphanumeric + hyphens, no snap- prefix
+//
+// SECURITY: Prevents command injection by restricting to safe characters only.
 func ValidateSnapshotID(snapshotID string) error {
 	if snapshotID == "" {
 		return fmt.Errorf("snapshot ID cannot be empty")
 	}
 
-	// Check if it matches strict UUID pattern (production snapshot IDs)
+	// Check new timestamp-based format (primary production format)
 	if snapshotIDPattern.MatchString(snapshotID) {
-		return nil // Valid production snapshot ID
+		return nil // Valid new-format snapshot ID
+	}
+
+	// Check legacy format (snap-<uuid> without timestamp, for backward compat)
+	if snapshotIDLegacyPattern.MatchString(snapshotID) {
+		return nil // Valid legacy snapshot ID
 	}
 
 	// For safety, reject anything with special characters first
@@ -53,14 +123,12 @@ func ValidateSnapshotID(snapshotID string) error {
 		return fmt.Errorf("invalid snapshot ID format: %s (only alphanumeric and hyphen allowed)", snapshotID)
 	}
 
-	// Reject if it starts with "snap-" but doesn't match UUID format
-	// This catches malformed production IDs like "snap-invalid" or "snap-UPPERCASE"
+	// Reject if it starts with "snap-" but doesn't match either known format
 	if strings.HasPrefix(snapshotID, SnapshotIDPrefix) {
-		return fmt.Errorf("invalid snapshot ID format: %s (expected snap-<lowercase-uuid>)", snapshotID)
+		return fmt.Errorf("invalid snapshot ID format: %s (expected snap-<lowercase-uuid>-at-<timestamp>)", snapshotID)
 	}
 
 	// Reject UUID-like strings without proper prefix (e.g., "12345678-1234-...")
-	// This pattern detects UUID format without "snap-" prefix
 	uuidLikePattern := regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 	if uuidLikePattern.MatchString(snapshotID) {
 		return fmt.Errorf("invalid snapshot ID format: %s (missing snap- prefix)", snapshotID)
@@ -72,4 +140,20 @@ func ValidateSnapshotID(snapshotID string) error {
 	}
 
 	return nil // Valid CSI sanity test ID (alphanumeric, no snap-, not UUID-like)
+}
+
+// GenerateSnapshotID generates a new unique snapshot ID.
+// Deprecated: Use GenerateSnapshotIDFromSource for new code.
+// Kept for backward compatibility.
+func GenerateSnapshotID() string {
+	return SnapshotIDPrefix + uuid.New().String()
+}
+
+// SnapshotNameToID generates a deterministic snapshot ID from a snapshot name.
+// Deprecated: The new approach (GenerateSnapshotIDFromSource) embeds source volume ID
+// and timestamp directly. This function is kept for backward compatibility with the
+// CSI controller until Phase 29 Plan 02 updates it.
+func SnapshotNameToID(name string) string {
+	id := uuid.NewSHA1(volumeNamespace, []byte(name))
+	return SnapshotIDPrefix + id.String()
 }

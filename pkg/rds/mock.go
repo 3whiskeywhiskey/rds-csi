@@ -303,13 +303,16 @@ func (m *MockClient) CreateSnapshot(opts CreateSnapshotOptions) (*SnapshotInfo, 
 	sourceVol := m.volumes[opts.SourceVolume]
 
 	// Create snapshot
+	filePath := ""
+	if opts.BasePath != "" {
+		filePath = opts.BasePath + "/" + opts.Name + ".img"
+	}
 	snapshot := &SnapshotInfo{
 		Name:          opts.Name,
 		SourceVolume:  opts.SourceVolume,
 		FileSizeBytes: sourceVol.FileSizeBytes,
 		CreatedAt:     time.Now(),
-		ReadOnly:      true,
-		FSLabel:       opts.FSLabel,
+		FilePath:      filePath,
 	}
 	m.snapshots[opts.Name] = snapshot
 

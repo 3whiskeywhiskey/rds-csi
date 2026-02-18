@@ -52,21 +52,20 @@ func (e *VolumeNotFoundError) Error() string {
 	return fmt.Sprintf("volume not found: %s", e.Slot)
 }
 
-// SnapshotInfo represents an RDS Btrfs snapshot
+// SnapshotInfo represents an RDS disk snapshot created via /disk add copy-from
 type SnapshotInfo struct {
-	Name          string    // Snapshot name (snap-<uuid>)
+	Name          string    // Snapshot slot name (snap-<source-uuid>-at-<timestamp>)
 	SourceVolume  string    // Source volume slot (pvc-<uuid>)
-	FileSizeBytes int64     // Size of snapshot (same as source volume)
-	CreatedAt     time.Time // Creation timestamp
-	ReadOnly      bool      // Should always be true for snapshots
-	FSLabel       string    // Btrfs filesystem label
+	FileSizeBytes int64     // Size of snapshot (copied from source volume)
+	CreatedAt     time.Time // Creation timestamp (parsed from slot name or RDS output)
+	FilePath      string    // Backing file path on RDS (e.g., /storage-pool/metal-csi/snap-xxx.img)
 }
 
 // CreateSnapshotOptions contains parameters for creating a snapshot
 type CreateSnapshotOptions struct {
-	Name         string // snap-<uuid>
-	SourceVolume string // pvc-<uuid> (parent subvolume)
-	FSLabel      string // Btrfs filesystem label
+	Name         string // snap-<source-uuid>-at-<timestamp>
+	SourceVolume string // pvc-<uuid> (source volume slot)
+	BasePath     string // Base directory for snapshot files (e.g., /storage-pool/metal-csi)
 }
 
 // SnapshotNotFoundError is returned when a snapshot is not found

@@ -806,36 +806,47 @@ func TestNormalizeRouterOSOutputEdgeCases(t *testing.T) {
 
 func TestParseSnapshotInfo(t *testing.T) {
 	tests := []struct {
-		name        string
-		output      string
-		expectName  string
-		expectRO    bool
-		expectFS    string
-		expectError bool
+		name               string
+		output             string
+		expectName         string
+		expectSourceVolume string
+		expectFilePath     string
+		expectSizeBytes    int64
+		expectError        bool
 	}{
 		{
-			name: "valid snapshot with all fields",
-			output: `name=snap-12345678-1234-1234-1234-123456789abc read-only=yes fs=storage-pool
-                    parent=pvc-test-volume`,
-			expectName: "snap-12345678-1234-1234-1234-123456789abc",
-			expectRO:   true,
-			expectFS:   "storage-pool",
+			name: "valid snapshot with /disk print format - all fields",
+			// /disk print detail output format (same key=value format as volumes)
+			// Snapshots have NO nvme-tcp-export fields
+			output: `type=file slot="snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000"
+                    file-path=/storage-pool/metal-csi/snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000.img
+                    file-size=50.0GiB`,
+			expectName:         "snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000",
+			expectSourceVolume: "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			expectFilePath:     "/storage-pool/metal-csi/snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000.img",
+			expectSizeBytes:    50 * 1024 * 1024 * 1024,
 		},
 		{
-			name: "snapshot with read-only=no (writable clone)",
-			output: `name=snap-test-123 read-only=no fs=storage-pool
-                    parent=snap-original`,
-			expectName: "snap-test-123",
-			expectRO:   false,
-			expectFS:   "storage-pool",
+			name: "snapshot with mock source-volume field",
+			// Mock server provides source-volume for testing without real RouterOS
+			output: `type=file slot="snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000"
+                    file-path=/storage-pool/metal-csi/snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000.img
+                    file-size=50.0GiB
+                    source-volume=pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890`,
+			expectName:         "snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000",
+			expectSourceVolume: "pvc-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			expectFilePath:     "/storage-pool/metal-csi/snap-a1b2c3d4-e5f6-7890-abcd-ef1234567890-at-1739800000.img",
+			expectSizeBytes:    50 * 1024 * 1024 * 1024,
 		},
 		{
-			name: "snapshot with quoted name",
-			output: `name="snap-quoted-name" read-only=yes fs="storage-pool"
-                    parent="pvc-test"`,
-			expectName: "snap-quoted-name",
-			expectRO:   true,
-			expectFS:   "storage-pool",
+			name: "snapshot with quoted slot name",
+			output: `type=file slot="snap-11111111-2222-3333-4444-555555555555-at-1700000000"
+                    file-path="/storage-pool/metal-csi/snap-11111111-2222-3333-4444-555555555555-at-1700000000.img"
+                    file-size=100.0GiB`,
+			expectName:         "snap-11111111-2222-3333-4444-555555555555-at-1700000000",
+			expectSourceVolume: "pvc-11111111-2222-3333-4444-555555555555",
+			expectFilePath:     "/storage-pool/metal-csi/snap-11111111-2222-3333-4444-555555555555-at-1700000000.img",
+			expectSizeBytes:    100 * 1024 * 1024 * 1024,
 		},
 		{
 			name:        "empty output",
@@ -843,11 +854,14 @@ func TestParseSnapshotInfo(t *testing.T) {
 			expectError: false, // parseSnapshotInfo returns empty SnapshotInfo, not error
 		},
 		{
-			name:       "partial output (missing optional fields)",
-			output:     `name=snap-partial read-only=yes`,
-			expectName: "snap-partial",
-			expectRO:   true,
-			expectFS:   "", // FS label missing
+			name: "partial output (missing file-size)",
+			// Missing file-size is OK - will be zero
+			output: `type=file slot="snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000"
+                    file-path=/storage-pool/metal-csi/snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000.img`,
+			expectName:         "snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000",
+			expectSourceVolume: "pvc-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			expectFilePath:     "/storage-pool/metal-csi/snap-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-at-1739900000.img",
+			expectSizeBytes:    0, // Missing, expected zero
 		},
 	}
 
@@ -870,12 +884,23 @@ func TestParseSnapshotInfo(t *testing.T) {
 				t.Errorf("Expected name %q, got %q", tt.expectName, snapshot.Name)
 			}
 
-			if snapshot.ReadOnly != tt.expectRO {
-				t.Errorf("Expected read-only %v, got %v", tt.expectRO, snapshot.ReadOnly)
+			if tt.expectSourceVolume != "" && snapshot.SourceVolume != tt.expectSourceVolume {
+				t.Errorf("Expected source volume %q, got %q", tt.expectSourceVolume, snapshot.SourceVolume)
 			}
 
-			if snapshot.FSLabel != tt.expectFS {
-				t.Errorf("Expected fs %q, got %q", tt.expectFS, snapshot.FSLabel)
+			if tt.expectFilePath != "" && snapshot.FilePath != tt.expectFilePath {
+				t.Errorf("Expected file path %q, got %q", tt.expectFilePath, snapshot.FilePath)
+			}
+
+			if tt.expectSizeBytes > 0 {
+				// Allow 1 MB tolerance for floating point
+				diff := snapshot.FileSizeBytes - tt.expectSizeBytes
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > 1024*1024 {
+					t.Errorf("Expected size %d bytes, got %d bytes", tt.expectSizeBytes, snapshot.FileSizeBytes)
+				}
 			}
 		})
 	}
@@ -890,14 +915,22 @@ func TestParseSnapshotList(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name: "multiple snapshots",
-			output: `0  name=snap-12345678-1234-1234-1234-123456789abc read-only=yes fs=storage-pool
-1  name=snap-abcdef12-3456-7890-abcd-ef1234567890 read-only=yes fs=storage-pool
-2  name=snap-test-sanity read-only=yes fs=storage-pool`,
+			name: "multiple snapshots in /disk print format",
+			output: ` 0  type=file slot="snap-12345678-1234-1234-1234-123456789abc-at-1739800000"
+                    file-path=/storage-pool/metal-csi/snap-12345678-1234-1234-1234-123456789abc-at-1739800000.img
+                    file-size=50.0GiB
+
+ 1  type=file slot="snap-abcdef12-3456-7890-abcd-ef1234567890-at-1739900000"
+                    file-path=/storage-pool/metal-csi/snap-abcdef12-3456-7890-abcd-ef1234567890-at-1739900000.img
+                    file-size=100.0GiB
+
+ 2  type=file slot="snap-test-sanity"
+                    file-path=/storage-pool/metal-csi/snap-test-sanity.img
+                    file-size=10.0GiB`,
 			expectCount: 3,
 			expectNames: []string{
-				"snap-12345678-1234-1234-1234-123456789abc",
-				"snap-abcdef12-3456-7890-abcd-ef1234567890",
+				"snap-12345678-1234-1234-1234-123456789abc-at-1739800000",
+				"snap-abcdef12-3456-7890-abcd-ef1234567890-at-1739900000",
 				"snap-test-sanity",
 			},
 		},
@@ -909,19 +942,34 @@ func TestParseSnapshotList(t *testing.T) {
 		},
 		{
 			name: "mixed snap- and non-snap entries (should filter)",
-			output: `0  name=snap-12345678-1234-1234-1234-123456789abc read-only=yes fs=storage-pool
-1  name=backup-volume read-only=yes fs=storage-pool
-2  name=snap-test-123 read-only=yes fs=storage-pool`,
+			// The ListSnapshots command uses where slot~"snap-" so this case is rare
+			// but parseSnapshotList also filters at parse level
+			output: ` 0  type=file slot="snap-12345678-1234-1234-1234-123456789abc-at-1739800000"
+                    file-path=/storage-pool/metal-csi/snap-12345678-1234-1234-1234-123456789abc-at-1739800000.img
+                    file-size=50.0GiB
+
+ 1  type=file slot="pvc-not-a-snapshot"
+                    file-path=/storage-pool/metal-csi/pvc-not-a-snapshot.img
+                    file-size=50.0GiB nvme-tcp-export=yes
+
+ 2  type=file slot="snap-test-123"
+                    file-path=/storage-pool/metal-csi/snap-test-123.img
+                    file-size=50.0GiB`,
 			expectCount: 2, // Only snap-* entries
 			expectNames: []string{
-				"snap-12345678-1234-1234-1234-123456789abc",
+				"snap-12345678-1234-1234-1234-123456789abc-at-1739800000",
 				"snap-test-123",
 			},
 		},
 		{
 			name: "no snap- prefix (all filtered out)",
-			output: `0  name=backup-volume read-only=yes fs=storage-pool
-1  name=clone-volume read-only=no fs=storage-pool`,
+			output: ` 0  type=file slot="pvc-backup-volume"
+                    file-path=/storage-pool/metal-csi/pvc-backup-volume.img
+                    file-size=50.0GiB nvme-tcp-export=yes
+
+ 1  type=file slot="pvc-clone-volume"
+                    file-path=/storage-pool/metal-csi/pvc-clone-volume.img
+                    file-size=50.0GiB nvme-tcp-export=yes`,
 			expectCount: 0,
 			expectNames: []string{},
 		},
@@ -974,21 +1022,21 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 
 	// Create a test volume first
 	volOpts := CreateVolumeOptions{
-		Slot:          "pvc-test-volume",
-		FilePath:      "/storage-pool/test-vol.img",
+		Slot:          "pvc-aabbccdd-eeff-0011-2233-445566778899",
+		FilePath:      "/storage-pool/metal-csi/pvc-aabbccdd-eeff-0011-2233-445566778899.img",
 		FileSizeBytes: 10 * 1024 * 1024 * 1024, // 10GB
 		NVMETCPPort:   4420,
-		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:pvc-test-volume",
+		NVMETCPNQN:    "nqn.2000-02.com.mikrotik:pvc-aabbccdd-eeff-0011-2233-445566778899",
 	}
 	if err := mock.CreateVolume(volOpts); err != nil {
 		t.Fatalf("Failed to create test volume: %v", err)
 	}
 
-	// Test 1: Create snapshot from volume
+	// Test 1: Create snapshot from volume using new BasePath-based options
 	snapOpts := CreateSnapshotOptions{
-		Name:         "snap-test-123",
-		SourceVolume: "pvc-test-volume",
-		FSLabel:      "storage-pool",
+		Name:         "snap-aabbccdd-eeff-0011-2233-445566778899-at-1739800000",
+		SourceVolume: "pvc-aabbccdd-eeff-0011-2233-445566778899",
+		BasePath:     "/storage-pool/metal-csi",
 	}
 
 	snapshot, err := mock.CreateSnapshot(snapOpts)
@@ -996,21 +1044,25 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 		t.Fatalf("CreateSnapshot failed: %v", err)
 	}
 
-	if snapshot.Name != "snap-test-123" {
-		t.Errorf("Expected snapshot name snap-test-123, got %s", snapshot.Name)
+	if snapshot.Name != snapOpts.Name {
+		t.Errorf("Expected snapshot name %s, got %s", snapOpts.Name, snapshot.Name)
 	}
-	if snapshot.SourceVolume != "pvc-test-volume" {
-		t.Errorf("Expected source volume pvc-test-volume, got %s", snapshot.SourceVolume)
+	if snapshot.SourceVolume != "pvc-aabbccdd-eeff-0011-2233-445566778899" {
+		t.Errorf("Expected source volume pvc-aabbccdd-eeff-0011-2233-445566778899, got %s", snapshot.SourceVolume)
 	}
-	if !snapshot.ReadOnly {
-		t.Error("Expected snapshot to be read-only")
+	// Snapshots are NOT ReadOnly field anymore - no NVMe export, just a backing file
+	// Verify FilePath is set correctly
+	expectedFilePath := "/storage-pool/metal-csi/" + snapOpts.Name + ".img"
+	if snapshot.FilePath != expectedFilePath {
+		t.Errorf("Expected file path %s, got %s", expectedFilePath, snapshot.FilePath)
 	}
-	if snapshot.FSLabel != "storage-pool" {
-		t.Errorf("Expected fs label storage-pool, got %s", snapshot.FSLabel)
+	// Verify size was copied from source volume
+	if snapshot.FileSizeBytes != volOpts.FileSizeBytes {
+		t.Errorf("Expected size %d (from source), got %d", volOpts.FileSizeBytes, snapshot.FileSizeBytes)
 	}
 
 	// Test 2: GetSnapshot returns correct snapshot
-	retrieved, err := mock.GetSnapshot("snap-test-123")
+	retrieved, err := mock.GetSnapshot(snapOpts.Name)
 	if err != nil {
 		t.Fatalf("GetSnapshot failed: %v", err)
 	}
@@ -1029,9 +1081,9 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 
 	// Test 4: Create duplicate snapshot with same name but different source (error)
 	badOpts := CreateSnapshotOptions{
-		Name:         "snap-test-123",
+		Name:         snapOpts.Name,
 		SourceVolume: "pvc-different-volume",
-		FSLabel:      "storage-pool",
+		BasePath:     "/storage-pool/metal-csi",
 	}
 	_, err = mock.CreateSnapshot(badOpts)
 	if err == nil {
@@ -1041,9 +1093,9 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	// Test 5: ListSnapshots returns all snapshots
 	// Create another snapshot first
 	snapOpts2 := CreateSnapshotOptions{
-		Name:         "snap-test-456",
-		SourceVolume: "pvc-test-volume",
-		FSLabel:      "storage-pool",
+		Name:         "snap-aabbccdd-eeff-0011-2233-445566778899-at-1739900000",
+		SourceVolume: "pvc-aabbccdd-eeff-0011-2233-445566778899",
+		BasePath:     "/storage-pool/metal-csi",
 	}
 	if _, err := mock.CreateSnapshot(snapOpts2); err != nil {
 		t.Fatalf("Failed to create second snapshot: %v", err)
@@ -1058,12 +1110,12 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 	}
 
 	// Test 6: DeleteSnapshot removes snapshot
-	if err := mock.DeleteSnapshot("snap-test-123"); err != nil {
+	if err := mock.DeleteSnapshot(snapOpts.Name); err != nil {
 		t.Fatalf("DeleteSnapshot failed: %v", err)
 	}
 
 	// Verify snapshot is gone
-	_, err = mock.GetSnapshot("snap-test-123")
+	_, err = mock.GetSnapshot(snapOpts.Name)
 	if err == nil {
 		t.Error("Expected SnapshotNotFoundError after deletion")
 	}
@@ -1089,7 +1141,7 @@ func TestMockClientSnapshotOperations(t *testing.T) {
 
 	// Test 9: ListSnapshots with no snapshots returns empty slice
 	// Delete remaining snapshot
-	if err := mock.DeleteSnapshot("snap-test-456"); err != nil {
+	if err := mock.DeleteSnapshot(snapOpts2.Name); err != nil {
 		t.Fatalf("Failed to delete second snapshot: %v", err)
 	}
 
@@ -1114,7 +1166,12 @@ func TestValidateSnapshotID(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:        "valid snap-<uuid> format",
+			name:        "valid new format: snap-<uuid>-at-<timestamp>",
+			snapshotID:  "snap-12345678-1234-1234-1234-123456789abc-at-1739800000",
+			expectError: false,
+		},
+		{
+			name:        "valid legacy format: snap-<uuid>",
 			snapshotID:  "snap-12345678-1234-1234-1234-123456789abc",
 			expectError: false,
 		},
@@ -1149,7 +1206,7 @@ func TestValidateSnapshotID(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "snap- prefix with invalid UUID",
+			name:        "snap- prefix with invalid format (not uuid, not uuid-at-ts)",
 			snapshotID:  "snap-INVALID",
 			expectError: true,
 		},
@@ -1167,6 +1224,11 @@ func TestValidateSnapshotID(t *testing.T) {
 			name:        "too long (>250 chars)",
 			snapshotID:  "snap-" + strings.Repeat("a", 250),
 			expectError: true,
+		},
+		{
+			name:        "new format with timestamp zero",
+			snapshotID:  "snap-12345678-1234-1234-1234-123456789abc-at-0",
+			expectError: false, // 0 is a valid Unix timestamp
 		},
 	}
 
