@@ -1282,9 +1282,9 @@ ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-aaaa|pvc-bbbb|pvc-cccc"
 
 ---
 
-### TC-08: Volume Snapshot Operations
+### TC-08: Volume Snapshot Operations (copy-from)
 
-**Objective:** Validate Btrfs snapshot create/restore/delete via CSI driver
+**Objective:** Validate volume snapshot create/restore/delete via CSI driver using copy-from CoW copies
 
 **Estimated Time:** 10 minutes
 
@@ -1292,7 +1292,7 @@ ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-aaaa|pvc-bbbb|pvc-cccc"
 - VolumeSnapshotClass `rds-csi-snapclass` exists (deployed with v0.10.0+)
 - VolumeSnapshot CRDs installed (`kubectl get crd volumesnapshots.snapshot.storage.k8s.io`)
 - snapshot-controller running in cluster
-- At least 10GB free space on RDS (5Gi source + 5Gi restored)
+- At least 10GB free space on RDS (5Gi source + 5Gi snapshot CoW copy)
 
 **Steps:**
 
@@ -1396,23 +1396,19 @@ kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=3
 #### 4. Verify Snapshot on RDS via SSH
 
 ```bash
-# Get the snapshot ID from VolumeSnapshotContent
-SNAPSHOT_ID=$(kubectl get volumesnapshot test-hw-snapshot-08 -o jsonpath='{.status.boundVolumeSnapshotContentName}' | sed 's/snapcontent-/snap-/')
-
-# Check snapshot exists on RDS
+# Check snapshot exists on RDS using slot prefix filter
 ssh admin@10.42.241.3 "/disk print detail where slot~\"snap-\""
 ```
 
-**Expected:** Snapshot visible on RDS with `type=snapshot` and `read-only=yes`
+**Expected:** Snapshot visible on RDS as a standard file-backed disk with no NVMe export flags
 
 ```
-Flags: I
- 0   slot="snap-12345678-1234-1234-1234-123456789abc"
-     type=snapshot
-     snapshot-of="pvc-12345678-1234-1234-1234-123456789abc.img"
-     read-only=yes
-     nvme-tcp-export=no
+slot="snap-<uuid>-at-<hash>" type="file" file-path="/storage-pool/metal-csi/snap-<uuid>-at-<hash>.img" file-size=5368709120 status="ready"
 ```
+
+**Note:** Snapshot disks are standard file-backed disks created via `/disk add copy-from=`. They have NO nvme-tcp-export, nvme-tcp-server-port, or nvme-tcp-server-nqn fields (not network-exported). The absence of NVMe flags is what makes them immutable backups — they cannot be accessed directly from hosts.
+
+The snapshot slot name uses the format `snap-<uuid5-of-csi-name>-at-<suffix>` — the UUID is derived from the CSI snapshot name (not the source volume UUID).
 
 #### 5. Restore from Snapshot (Create PVC from Snapshot)
 
@@ -1517,13 +1513,15 @@ kubectl get volumesnapshot test-hw-snapshot-08
 Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "test-hw-snapshot-08" not found
 ```
 
-**Verify snapshot removed from RDS:**
+**Verify snapshot disk entry and backing file removed from RDS:**
 
 ```bash
 ssh admin@10.42.241.3 "/disk print detail where slot~\"snap-\""
 ```
 
-**Expected:** No snapshots found (snapshot deleted from RDS)
+**Expected:** No snapshots found (both disk entry and backing .img file removed from RDS)
+
+Note: The driver uses belt-and-suspenders cleanup — it removes both the `/disk` entry via `/disk remove` AND the backing `.img` file via `/file remove`.
 
 **Verify restored volume still accessible:**
 
@@ -1556,18 +1554,24 @@ ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-"'
 
 **Success Criteria:**
 - ✅ VolumeSnapshot created and becomes ReadyToUse within 15 seconds
-- ✅ Snapshot visible on RDS with correct attributes (type=snapshot, read-only=yes)
+- ✅ Snapshot visible on RDS as file-backed disk with no NVMe export flags (type="file", no nvme-tcp-export)
 - ✅ Restored PVC created from snapshot successfully
 - ✅ Restored volume data matches source volume exactly
-- ✅ Snapshot deletion removes from RDS but doesn't affect restored volume
+- ✅ Snapshot deletion removes both disk entry and backing .img file from RDS
+- ✅ Snapshot deletion does not affect the independently restored volume
 - ✅ All resources cleaned up after test
 
 **Troubleshooting:**
 - **Snapshot stuck in non-ready state:** Check controller logs for CreateSnapshot errors, verify snapshot-controller running
 - **VolumeSnapshot CRD not found:** Install snapshot CRDs: `kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.2.0/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml`
 - **Restore fails:** Verify VolumeSnapshotClass exists, check source snapshot is ReadyToUse
-- **Data mismatch:** Indicates Btrfs snapshot corruption or incorrect snapshot-of reference, verify RDS Btrfs pool health
-- **Snapshot not deleted from RDS:** Check controller logs for DeleteSnapshot errors, may need manual cleanup
+- **copy-from failure:** Verify source volume exists on RDS with correct slot name (`/disk print detail where slot~"pvc-"`). Check that RDS has sufficient free space for the CoW copy (copy-from creates an independent full copy)
+- **Data mismatch after restore:** copy-from creates an independent copy at snapshot time; verify RDS had sufficient space to complete the full copy before any subsequent writes to the source
+- **Snapshot not deleted from RDS:** Check controller logs for DeleteSnapshot errors. The driver removes both the disk entry and backing file; verify both are cleaned up: `ssh admin@10.42.241.3 '/disk print detail where slot~"snap-"'` and `ssh admin@10.42.241.3 '/file print detail where name~"snap-"'`
+
+### Execution
+
+This test case is designed for manual execution against real RDS hardware. After automated sanity tests pass (Phase 30), execute TC-08 steps manually against the RDS at 10.42.241.3 and record results in the Results Template below. Document execution outcome in the phase SUMMARY.md.
 
 ---
 
@@ -1825,7 +1829,7 @@ Use this table to record test results for your environment:
 | TC-05: Pod Reattachment | ☐ Pass / ☐ Fail | ___ min | |
 | TC-06: Connection Resilience | ☐ Pass / ☐ Fail | ___ min | |
 | TC-07: Concurrent Operations | ☐ Pass / ☐ Fail | ___ min | |
-| TC-08: Snapshot Operations | ☐ Pass / ☐ Fail | ___ min | |
+| TC-08: Snapshot Operations (copy-from) | ☐ Pass / ☐ Fail | ___ min | |
 
 **Environment Details:**
 - RDS Hardware: _______________
@@ -1889,6 +1893,6 @@ ssh admin@10.42.241.3 '/disk print brief where slot~"test-hw"'
 
 ---
 
-**Last Updated:** 2026-02-06
+**Last Updated:** 2026-02-18
 **Maintained By:** RDS CSI Driver Team
 **Feedback:** Report issues or suggest improvements via GitHub Issues
