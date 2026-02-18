@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 ## Current Position
 
 Phase: 31 of 32 (Hardware Validation)
-Plan: 0 of TBD in current phase
-Status: Phase 30 complete
-Last activity: 2026-02-18 — Phase 30 Plan 02 complete (CSI sanity tests 70/70, TC-08 updated for copy-from)
+Plan: 1 of TBD in current phase
+Status: Phase 31 Plan 01 complete
+Last activity: 2026-02-18 — Phase 31 Plan 01 complete (scheduled snapshots Helm CronJob template)
 
-Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [█████░░░░░] 67% (4/6 plans)
+Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 [██████░░░░] 83% (5/6 plans)
 
 ## Performance Metrics
 
@@ -39,6 +39,7 @@ Progress: v0.10.0 [██████████] 100% (19/19 plans) | v0.11.0 
 | Phase 29-snapshot-implementation-fix P02 | 10 min | 2 tasks | 4 files |
 | Phase 30-snapshot-validation P01 | 7 min | 2 tasks | 2 files |
 | Phase 30-snapshot-validation P02 | 35 min | 2 tasks | 6 files |
+| Phase 31-scheduled-snapshots P01 | 3 min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,9 @@ Recent decisions affecting current work:
 - [Phase 30-snapshot-validation P02]: GenerateSnapshotID bases ID only on CSI snapshot name (UUID v5), NOT source volume — CSI spec requires same name always yields same ID regardless of source
 - [Phase 30-snapshot-validation P02]: source-volume field added to mock formatSnapshotDetail output; parseSnapshotInfo reads it directly (fallback extraction via ExtractSourceVolumeIDFromSnapshotID removed — slot UUID is now name-hash not source UUID)
 - [Phase 30-snapshot-validation P02]: TC-08 SSH verification changed to /disk print detail where slot~"snap-" (copy-from file-backed disk, not Btrfs subvolume)
+- [Phase 31-scheduled-snapshots P01]: dig helper for nil-safe retention value access in Helm template (avoids nil pointer on --set without retention sub-object)
+- [Phase 31-scheduled-snapshots P01]: Temp file at /tmp/snapshots.txt for retention while loop to avoid pipe subshell DELETED counter bug
+- [Phase 31-scheduled-snapshots P01]: Namespaced Role (not ClusterRole) for snapshot-scheduler since VolumeSnapshots are namespace-scoped
 
 ### Pending Todos
 
@@ -75,6 +79,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 30-02-PLAN.md — CSI sanity snapshot tests (70/70 pass), TC-08 hardware validation updated
+Stopped at: Completed 31-01-PLAN.md — Helm scheduled snapshots CronJob template with retention cleanup
 Resume file: None
-Next action: Phase 31 — manual hardware validation execution against real RDS hardware.
+Next action: Phase 31 remaining plans — hardware validation execution against real RDS hardware.
