@@ -55,11 +55,11 @@ See milestone archives in `.planning/milestones/` for complete phase details:
   3. `kubectl get volumesnapshot` returns snapshot metadata including source volume, creation time, and size
   4. Creating a PVC from a snapshot source provisions a new writable volume restored from the snapshot CoW copy
   5. Deleting a VolumeSnapshot removes both the disk entry and the underlying file from RDS storage
-**Plans:** TBD
+**Plans:** 2 plans in 2 waves
 
 Plans:
-- [ ] 29-01: Rewrite SSH snapshot commands in pkg/rds/commands.go to use `/disk add copy-from` instead of Btrfs subvolume operations
-- [ ] 29-02: Update CSI controller snapshot RPCs (CreateSnapshot, DeleteSnapshot, ListSnapshots, CreateVolume from snapshot) to use new SSH backend
+- [ ] 29-01-PLAN.md — Rewrite SSH snapshot commands (types, ID generation, /disk add copy-from) in pkg/rds/
+- [ ] 29-02-PLAN.md — Update CSI controller snapshot RPCs to use new SSH backend
 
 ### Phase 30: Snapshot Validation
 
