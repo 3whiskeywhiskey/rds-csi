@@ -115,3 +115,13 @@ func (e *ErrorInjector) Reset() {
 	defer e.mu.Unlock()
 	e.operationNum = 0
 }
+
+// SetErrorMode changes the error mode at runtime.
+// This allows tests to dynamically inject and clear errors without restarting the mock server.
+// Thread-safe: can be called concurrently with ShouldFail* methods.
+func (e *ErrorInjector) SetErrorMode(mode ErrorMode) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.mode = mode
+	e.operationNum = 0 // Reset counter when mode changes
+}

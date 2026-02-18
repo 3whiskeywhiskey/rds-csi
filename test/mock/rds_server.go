@@ -264,6 +264,13 @@ func (s *MockRDSServer) ResetErrorInjector() {
 	s.errorInjector.Reset()
 }
 
+// SetErrorMode changes the error injection mode at runtime.
+// Use ErrorModeNone to clear errors, ErrorModeCommandFail to simulate failures.
+// This is the primary API for resilience tests to inject/clear errors dynamically.
+func (s *MockRDSServer) SetErrorMode(mode ErrorMode) {
+	s.errorInjector.SetErrorMode(mode)
+}
+
 func (s *MockRDSServer) acceptConnections() {
 	for {
 		select {
