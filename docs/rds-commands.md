@@ -37,7 +37,7 @@ The RDS CSI Driver interacts with the RDS via **SSH** using RouterOS command-lin
 
 **Example**:
 ```bash
-ssh admin@10.42.68.1 '/disk add \
+ssh admin@192.0.2.11 '/disk add \
   type=file \
   file-path=/storage-pool/kubernetes-volumes/pvc-abc123.img \
   file-size=50G \
@@ -96,7 +96,7 @@ ssh admin@10.42.68.1 '/disk add \
 
 **Example**:
 ```bash
-ssh admin@10.42.68.1 '/disk remove [find slot=pvc-abc123]'
+ssh admin@192.0.2.11 '/disk remove [find slot=pvc-abc123]'
 ```
 
 **Expected Output** (on success):
@@ -245,7 +245,7 @@ version: "7.16 (stable)"
 ### Basic Connection Test
 
 ```bash
-ssh admin@10.42.68.1 '/system identity print'
+ssh admin@192.0.2.11 '/system identity print'
 ```
 
 **Expected Output**:
@@ -258,7 +258,7 @@ name: rds
 ### Authenticating with SSH Key
 
 ```bash
-ssh -i /path/to/rds-key admin@10.42.68.1 '/disk print'
+ssh -i /path/to/rds-key admin@192.0.2.11 '/disk print'
 ```
 
 ---
@@ -266,7 +266,7 @@ ssh -i /path/to/rds-key admin@10.42.68.1 '/disk print'
 ### Connection with Timeout
 
 ```bash
-ssh -o ConnectTimeout=10 admin@10.42.68.1 '/disk print'
+ssh -o ConnectTimeout=10 admin@192.0.2.11 '/disk print'
 ```
 
 **Use Case**: Prevent indefinite hanging if RDS is unreachable
@@ -277,14 +277,14 @@ ssh -o ConnectTimeout=10 admin@10.42.68.1 '/disk print'
 
 **Successful Command** (exit code 0):
 ```bash
-$ ssh admin@10.42.68.1 '/disk print'
+$ ssh admin@192.0.2.11 '/disk print'
 $ echo $?
 0
 ```
 
 **Failed Command** (exit code != 0):
 ```bash
-$ ssh admin@10.42.68.1 '/disk remove [find slot=nonexistent]'
+$ ssh admin@192.0.2.11 '/disk remove [find slot=nonexistent]'
 failure: no such item
 $ echo $?
 1
@@ -449,9 +449,10 @@ ssh-keygen -t ed25519 -f rds-csi-key -N "" -C "rds-csi-driver"
 
 **Key Storage in Kubernetes**:
 ```bash
-kubectl create secret generic rds-ssh-key \
-  --from-file=id_ed25519=rds-csi-key \
-  --namespace kube-system
+kubectl create secret generic rds-csi-secret \
+  --from-file=rds-private-key=rds-csi-key \
+  --from-file=rds-host-key=/path/to/verified-rds-host-key.pub \
+  --namespace rds-csi
 ```
 
 ---
@@ -484,7 +485,7 @@ cmd := fmt.Sprintf("/disk remove [find slot=%s]", volumeID)
 ### Create Test Volume
 
 ```bash
-ssh admin@10.42.68.1 '
+ssh admin@192.0.2.11 '
 /disk add \
   type=file \
   file-path=/storage-pool/test/test-volume.img \
@@ -502,10 +503,10 @@ ssh admin@10.42.68.1 '
 
 ```bash
 # Discover target
-nvme discover -t tcp -a 10.42.68.1 -s 4420
+nvme discover -t tcp -a 192.0.2.11 -s 4420
 
 # Connect
-nvme connect -t tcp -a 10.42.68.1 -s 4420 \
+nvme connect -t tcp -a 192.0.2.11 -s 4420 \
   -n nqn.2000-02.com.mikrotik:test-volume
 
 # Verify device appeared
@@ -520,7 +521,7 @@ nvme disconnect -n nqn.2000-02.com.mikrotik:test-volume
 ### Delete Test Volume
 
 ```bash
-ssh admin@10.42.68.1 '/disk remove [find slot=test-volume]'
+ssh admin@192.0.2.11 '/disk remove [find slot=test-volume]'
 ```
 
 ---

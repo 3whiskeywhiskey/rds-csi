@@ -431,7 +431,7 @@ func TestValidateIPAddress(t *testing.T) {
 		},
 		{
 			name:      "valid IPv4 10.x",
-			address:   "10.42.68.1",
+			address:   "192.0.2.11",
 			expectErr: false,
 		},
 		// Valid IPv6
@@ -624,7 +624,7 @@ func TestValidateNVMEAddress(t *testing.T) {
 	}{
 		{
 			name:      "valid NVMe address",
-			address:   "10.42.68.1",
+			address:   "192.0.2.11",
 			port:      4420,
 			expectErr: false,
 		},
@@ -642,7 +642,7 @@ func TestValidateNVMEAddress(t *testing.T) {
 		},
 		{
 			name:      "invalid port",
-			address:   "10.42.68.1",
+			address:   "192.0.2.11",
 			port:      0,
 			expectErr: true,
 		},
@@ -670,7 +670,7 @@ func TestValidateNVMETargetContext(t *testing.T) {
 		{
 			name:            "valid without expected address",
 			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
-			address:         "10.42.68.1",
+			address:         "192.0.2.11",
 			port:            4420,
 			expectedAddress: "",
 			expectErr:       false,
@@ -678,15 +678,15 @@ func TestValidateNVMETargetContext(t *testing.T) {
 		{
 			name:            "valid with matching expected address",
 			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
-			address:         "10.42.68.1",
+			address:         "192.0.2.11",
 			port:            4420,
-			expectedAddress: "10.42.68.1",
+			expectedAddress: "192.0.2.11",
 			expectErr:       false,
 		},
 		{
 			name:            "mismatched expected address",
 			nqn:             "nqn.2000-02.com.mikrotik:pvc-123",
-			address:         "10.42.68.1",
+			address:         "192.0.2.11",
 			port:            4420,
 			expectedAddress: "10.42.68.2",
 			expectErr:       true,
@@ -694,7 +694,7 @@ func TestValidateNVMETargetContext(t *testing.T) {
 		{
 			name:            "empty NQN",
 			nqn:             "",
-			address:         "10.42.68.1",
+			address:         "192.0.2.11",
 			port:            4420,
 			expectedAddress: "",
 			expectErr:       true,
@@ -736,7 +736,7 @@ func BenchmarkValidateNQNMalicious(b *testing.B) {
 
 func BenchmarkValidateIPAddress(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_ = ValidateIPAddress("10.42.68.1")
+		_ = ValidateIPAddress("192.0.2.11")
 	}
 }
 
@@ -748,6 +748,6 @@ func BenchmarkValidatePort(b *testing.B) {
 
 func BenchmarkValidateNVMETargetContext(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_ = ValidateNVMETargetContext("nqn.2000-02.com.mikrotik:pvc-123", "10.42.68.1", 4420, "")
+		_ = ValidateNVMETargetContext("nqn.2000-02.com.mikrotik:pvc-123", "192.0.2.11", 4420, "")
 	}
 }

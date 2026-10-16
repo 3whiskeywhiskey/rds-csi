@@ -39,15 +39,25 @@ fi
 
 # Warn about configuration
 echo ""
-echo -e "${YELLOW}⚠ Important:${NC} Make sure you have updated the following in controller.yaml:"
-echo "  1. RDS SSH private key in the Secret"
-echo "  2. RDS address in the ConfigMap"
-echo "  3. RDS user and volume base path"
+echo -e "${YELLOW}⚠ Important:${NC} Before deploying:"
+echo "  1. Create rds-csi-secret in the rds-csi namespace outside this repository"
+echo "  2. Set your RDS address in the ConfigMap in controller.yaml"
+echo "  3. Set your RDS user and volume base path"
 echo ""
 read -p "Have you updated the configuration? (yes/no): " confirm
 
 if [ "$confirm" != "yes" ]; then
     echo -e "${YELLOW}Please update deploy/kubernetes/controller.yaml before deploying${NC}"
+    exit 1
+fi
+
+if ! kubectl get secret rds-csi-secret -n rds-csi &> /dev/null; then
+    echo -e "${RED}Error: rds-csi-secret is missing in namespace rds-csi${NC}"
+    exit 1
+fi
+
+if grep -q '192.0.2.10' deploy/kubernetes/controller.yaml; then
+    echo -e "${RED}Error: replace the documentation RDS address in controller.yaml${NC}"
     exit 1
 fi
 
@@ -83,11 +93,11 @@ echo -e "${GREEN}✓${NC} StorageClass created"
 # Wait for controller to be ready
 echo ""
 echo "Waiting for controller to be ready..."
-kubectl wait --for=condition=Ready pod -l app=rds-csi-controller -n kube-system --timeout=60s || true
+kubectl wait --for=condition=Ready pod -l app=rds-csi-controller -n rds-csi --timeout=60s || true
 
 # Wait for at least one node pod to be ready
 echo "Waiting for node pods to be ready..."
-kubectl wait --for=condition=Ready pod -l app=rds-csi-node -n kube-system --timeout=60s || true
+kubectl wait --for=condition=Ready pod -l app=rds-csi-node -n rds-csi --timeout=60s || true
 
 # Show deployment status
 echo ""
@@ -97,11 +107,11 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 
 echo "Controller Pods:"
-kubectl get pods -n kube-system -l app=rds-csi-controller
+kubectl get pods -n rds-csi -l app=rds-csi-controller
 echo ""
 
 echo "Node Pods:"
-kubectl get pods -n kube-system -l app=rds-csi-node
+kubectl get pods -n rds-csi -l app=rds-csi-node
 echo ""
 
 echo "CSI Driver:"
@@ -123,6 +133,6 @@ echo ""
 echo "Next steps:"
 echo "  1. Create a PVC: kubectl apply -f examples/pvc.yaml"
 echo "  2. Create a Pod: kubectl apply -f examples/pod.yaml"
-echo "  3. Check logs: kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-driver"
+echo "  3. Check logs: kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-driver"
 echo ""
 echo "For detailed documentation, see: docs/kubernetes-setup.md"

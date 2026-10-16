@@ -68,12 +68,12 @@ If the node plugin fails to start or mount operations fail:
 
 1. **Check pod logs**:
    ```bash
-   kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-driver
+   kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-driver
    ```
 
 2. **Check for permission errors**:
    ```bash
-   kubectl describe pod -n kube-system -l app=rds-csi-node
+   kubectl describe pod -n rds-csi -l app=rds-csi-node
    ```
 
 3. **Verify capabilities**:
@@ -84,12 +84,12 @@ If the node plugin fails to start or mount operations fail:
 
 4. **Check seccomp profile**:
    ```bash
-   kubectl get pod -n kube-system <pod-name> -o json | jq '.spec.securityContext.seccompProfile'
+   kubectl get pod -n rds-csi <pod-name> -o json | jq '.spec.securityContext.seccompProfile'
    ```
 
 5. **Test mount operations manually**:
    ```bash
-   kubectl exec -n kube-system <pod-name> -c rds-csi-driver -- mount
+   kubectl exec -n rds-csi <pod-name> -c rds-csi-driver -- mount
    ```
 
 #### Fallback Option

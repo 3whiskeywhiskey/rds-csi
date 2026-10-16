@@ -58,32 +58,7 @@ which mkfs.ext4 mkfs.xfs blkid findmnt
 
 ## Quick Start
 
-For a quick deployment using default settings:
-
-```bash
-# Clone the repository
-git clone https://git.srvlab.io/whiskey/rds-csi-driver.git
-cd rds-csi-driver
-
-# Edit RDS credentials and address
-vi deploy/kubernetes/controller.yaml
-# Update the Secret and ConfigMap sections
-
-# Deploy the driver
-kubectl apply -f deploy/kubernetes/rbac.yaml
-kubectl apply -f deploy/kubernetes/csidriver.yaml
-kubectl apply -f deploy/kubernetes/controller.yaml
-kubectl apply -f deploy/kubernetes/node.yaml
-
-# Create StorageClass
-kubectl apply -f examples/storageclass.yaml
-
-# Verify deployment
-kubectl get pods -n kube-system -l app=rds-csi-controller
-kubectl get pods -n kube-system -l app=rds-csi-node
-kubectl get csidrivers
-kubectl get storageclass rds-nvme
-```
+Use the [Helm chart quick start](../deploy/helm/rds-csi-driver/README.md#quick-start). Create the `rds-csi-secret` Secret separately from the repository and provide your own RDS addresses, SSH username, and volume base path. The raw manifests below are an alternative for operators who maintain their own overlays.
 
 ## Detailed Installation
 
@@ -97,7 +72,7 @@ ssh-keygen -t ed25519 -f rds-csi-key -C "rds-csi-driver"
 
 # Copy public key to RDS
 # Log in to RouterOS and add the public key:
-# /user ssh-keys import public-key-file=rds-csi-key.pub user=metal-csi
+# /user ssh-keys import public-key-file=rds-csi-key.pub user=rds-csi
 ```
 
 ### Step 1.5: Get RDS SSH Host Key (IMPORTANT for Security)
@@ -105,8 +80,8 @@ ssh-keygen -t ed25519 -f rds-csi-key -C "rds-csi-driver"
 **SECURITY:** The CSI driver requires the RDS SSH host key for verification to prevent man-in-the-middle attacks.
 
 ```bash
-# Get the RDS host public key (replace 10.42.241.3 with your RDS IP)
-ssh-keyscan -t ed25519 10.42.241.3 2>/dev/null | cut -d' ' -f2- > rds-host-key.pub
+# Get the RDS host public key (replace 192.0.2.10 with your RDS IP)
+ssh-keyscan -t ed25519 192.0.2.10 2>/dev/null | cut -d' ' -f2- > rds-host-key.pub
 
 # Verify the fingerprint matches your RDS server
 # On your RDS (RouterOS), run:
@@ -115,7 +90,7 @@ ssh-keyscan -t ed25519 10.42.241.3 2>/dev/null | cut -d' ' -f2- > rds-host-key.p
 ssh-keygen -lf rds-host-key.pub
 
 # The fingerprint should match what you see when you first SSH to the RDS:
-ssh 10.42.241.3
+ssh 192.0.2.10
 # It will show: "ED25519 key fingerprint is SHA256:xxxx..."
 ```
 
@@ -123,7 +98,7 @@ ssh 10.42.241.3
 
 ```bash
 # If you've already connected to the RDS, get the key from known_hosts
-ssh-keygen -H -F 10.42.241.3 | grep "^[^#]" | cut -d' ' -f2- > rds-host-key.pub
+ssh-keygen -H -F 192.0.2.10 | grep "^[^#]" | cut -d' ' -f2- > rds-host-key.pub
 ```
 
 **IMPORTANT:** Verify the host key fingerprint before deployment to ensure you have the correct key!
@@ -134,52 +109,27 @@ On your MikroTik RouterOS device:
 
 ```routeros
 # Create dedicated user for CSI driver
-/user add name=metal-csi group=full
+/user add name=rds-csi group=full
 
 # Import SSH public key
-/user ssh-keys import public-key-file=rds-csi-key.pub user=metal-csi
+/user ssh-keys import public-key-file=rds-csi-key.pub user=rds-csi
 
 # Create base directory for volumes
-/file add type=directory name=storage-pool/metal-csi/volumes
+/file add type=directory name=storage-pool/rds-csi/volumes
 ```
 
-### Step 3: Update Kubernetes Manifests
+### Step 3: Configure Kubernetes Credentials and Manifests
 
-Edit `deploy/kubernetes/controller.yaml`:
+Create `rds-csi-secret` in the `rds-csi` namespace from files stored outside this repository:
 
-```yaml
-# Update Secret with your private key AND host key
-apiVersion: v1
-kind: Secret
-metadata:
-  name: rds-csi-secret
-stringData:
-  rds-private-key: |
-    -----BEGIN OPENSSH PRIVATE KEY-----
-    # Paste your private key here (from rds-csi-key)
-    -----END OPENSSH PRIVATE KEY-----
-  rds-host-key: |
-    # Paste your RDS host public key here (from rds-host-key.pub)
-    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIxxx...
-
----
-# Update ConfigMap with your RDS settings
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: rds-csi-config
-data:
-  rds-address: "10.42.241.3"  # Your RDS IP
-  rds-port: "22"
-  rds-user: "metal-csi"
-  rds-volume-base-path: "/storage-pool/metal-csi/volumes"
+```bash
+kubectl create namespace rds-csi
+kubectl create secret generic rds-csi-secret -n rds-csi \
+  --from-file=rds-private-key=/path/to/rds-csi-key \
+  --from-file=rds-host-key=/path/to/verified-rds-host-key.pub
 ```
 
-**SECURITY NOTE:** If you need to skip host key verification for testing (NOT RECOMMENDED), you can add this arg to the controller container:
-```yaml
-- "-rds-insecure-skip-verify=true"
-```
-**WARNING:** This is INSECURE and should NEVER be used in production! Always use proper host key verification.
+Verify the host key fingerprint through a trusted channel first. Then edit the `rds-csi-config` ConfigMap in `deploy/kubernetes/controller.yaml`, or use a Kustomize overlay, to set your RDS management address, username, and volume base path. Do not paste a private key into a tracked manifest.
 
 ### Step 4: Deploy RBAC
 
@@ -213,8 +163,8 @@ This deploys:
 Verify:
 
 ```bash
-kubectl get pods -n kube-system -l app=rds-csi-controller
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-driver
+kubectl get pods -n rds-csi -l app=rds-csi-controller
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-driver
 ```
 
 ### Step 7: Deploy Node DaemonSet
@@ -230,7 +180,7 @@ This deploys:
 Verify:
 
 ```bash
-kubectl get pods -n kube-system -l app=rds-csi-node
+kubectl get pods -n rds-csi -l app=rds-csi-node
 kubectl get csinodes  # Should show all nodes with rds.csi.srvlab.io driver
 ```
 
@@ -402,12 +352,12 @@ spec:
 
 ```bash
 # Check controller pod
-kubectl get pods -n kube-system -l app=rds-csi-controller
-kubectl describe pod -n kube-system -l app=rds-csi-controller
+kubectl get pods -n rds-csi -l app=rds-csi-controller
+kubectl describe pod -n rds-csi -l app=rds-csi-controller
 
 # Check node pods
-kubectl get pods -n kube-system -l app=rds-csi-node -o wide
-kubectl describe pod -n kube-system -l app=rds-csi-node
+kubectl get pods -n rds-csi -l app=rds-csi-node -o wide
+kubectl describe pod -n rds-csi -l app=rds-csi-node
 
 # Check CSI driver registration
 kubectl get csidrivers
@@ -439,13 +389,13 @@ kubectl describe pv <pv-name>
 
 ```bash
 # Controller logs
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-driver --tail=100 -f
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-driver --tail=100 -f
 
 # Node logs
-kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-driver --tail=100 -f
+kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-driver --tail=100 -f
 
 # Provisioner logs
-kubectl logs -n kube-system -l app=rds-csi-controller -c csi-provisioner --tail=100 -f
+kubectl logs -n rds-csi -l app=rds-csi-controller -c csi-provisioner --tail=100 -f
 ```
 
 ## Troubleshooting
@@ -456,7 +406,7 @@ kubectl logs -n kube-system -l app=rds-csi-controller -c csi-provisioner --tail=
 
 **Check**:
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-driver
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-driver
 ```
 
 **Common Causes**:
@@ -474,7 +424,7 @@ kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-driver
 **Check**:
 ```bash
 kubectl describe pvc <pvc-name>
-kubectl logs -n kube-system -l app=rds-csi-controller -c csi-provisioner
+kubectl logs -n rds-csi -l app=rds-csi-controller -c csi-provisioner
 ```
 
 **Common Causes**:
@@ -492,7 +442,7 @@ kubectl logs -n kube-system -l app=rds-csi-controller -c csi-provisioner
 **Check**:
 ```bash
 kubectl describe pod <pod-name>
-kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-driver
+kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-driver
 ```
 
 **Common Causes**:
@@ -526,11 +476,11 @@ Enable debug logging:
 
 ```bash
 # Edit controller deployment
-kubectl edit deployment -n kube-system rds-csi-controller
+kubectl edit deployment -n rds-csi rds-csi-controller
 # Change --v=5 to --v=9
 
 # Edit node daemonset
-kubectl edit daemonset -n kube-system rds-csi-node
+kubectl edit daemonset -n rds-csi rds-csi-node
 # Change --v=5 to --v=9
 ```
 
@@ -554,7 +504,7 @@ kubectl get pv
 kubectl delete -f deploy/kubernetes/node.yaml
 
 # Wait for all node pods to terminate
-kubectl get pods -n kube-system -l app=rds-csi-node -w
+kubectl get pods -n rds-csi -l app=rds-csi-node -w
 
 # Delete controller
 kubectl delete -f deploy/kubernetes/controller.yaml

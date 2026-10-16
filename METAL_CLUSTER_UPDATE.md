@@ -1,5 +1,7 @@
 # Metal Cluster: csi-attacher Deployment Fix
 
+> **Historical cluster note:** Addresses shown here are documentation examples. This records an earlier deployment and is not a current setup guide.
+
 ## What Was Fixed
 
 Added the `csi-attacher` sidecar to the controller deployment in `deploy/kubernetes/controller.yaml`.
@@ -69,7 +71,7 @@ kubectl delete pvc test-migration-pvc -n default
 SSH to RDS and confirm the test volume is removed:
 
 ```bash
-ssh metal-csi@10.42.241.3
+ssh metal-csi@192.0.2.10
 /disk print detail where slot~"test-migration"
 ```
 

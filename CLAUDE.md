@@ -127,7 +127,7 @@ Use the Gitea MCP tools to interact with this repository's issues, PRs, etc. The
 └─────────────────┼──────────────────────────────────────────┘
                   │
 ┌─────────────────▼──────────────────────────────────────────┐
-│ MikroTik RDS (10.42.68.1)                                  │
+│ MikroTik RDS (192.0.2.11)                                  │
 │ - SSH CLI: /disk add, /disk remove                         │
 │ - NVMe/TCP: file-backed volumes on Btrfs RAID6            │
 └────────────────────────────────────────────────────────────┘

@@ -62,7 +62,7 @@
 
 **Environment Variables:**
 - `CSI_ENDPOINT` - Unix socket path for CSI communication (default: `unix:///var/lib/kubelet/plugins/rds.csi.srvlab.io/csi.sock`)
-- `RDS_ADDRESS` - RDS server IP for SSH management (e.g., `10.42.241.3`)
+- `RDS_ADDRESS` - RDS server IP for SSH management (e.g., `192.0.2.10`)
 - `RDS_PORT` - SSH port (default: 22)
 - `RDS_USER` - SSH username (default: `admin`)
 - `RDS_HOST_KEY` - Path to SSH host public key for verification

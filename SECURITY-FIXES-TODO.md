@@ -1,5 +1,8 @@
 # Security Fixes - Action Items
 
+> **Historical record:** This document describes the 2025 review and remediation work at that time. It is not a current security assessment. Check the current source and deployment manifests before treating a finding or checkbox as open or resolved.
+
+
 This document tracks the security issues identified in the comprehensive security audit and their remediation status.
 
 ## Critical Priority (Fix Immediately)

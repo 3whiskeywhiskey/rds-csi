@@ -1,4 +1,7 @@
 # Security Audit Report
+
+> **Historical record:** This document describes the 2025 review and remediation work at that time. It is not a current security assessment. Check the current source and deployment manifests before treating a finding or checkbox as open or resolved.
+
 ## RDS CSI Driver - Comprehensive Security Review
 
 **Audit Date:** 2025-11-06

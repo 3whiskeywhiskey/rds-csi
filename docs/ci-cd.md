@@ -1,5 +1,7 @@
 # CI/CD Documentation
 
+> **Historical document:** GitHub and Gitea workflow files for this repository have been retired. The instructions below describe the former v1 automation and should not be used as current release guidance.
+
 ## Overview
 
 The RDS CSI Driver uses GitHub Actions for continuous integration and deployment. The workflows are designed to:

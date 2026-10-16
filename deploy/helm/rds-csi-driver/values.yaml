@@ -9,10 +9,10 @@ fullnameOverride: ""
 # RDS connection configuration
 rds:
   # Management interface IP (SSH control plane)
-  managementIP: "10.42.241.3"
+  managementIP: "192.0.2.10" # Documentation address; override for your RDS
 
   # Storage interface IP (NVMe/TCP data plane)
-  storageIP: "10.42.68.1"
+  storageIP: "192.0.2.11" # Documentation address; override for your RDS
 
   # SSH port for RouterOS CLI
   sshPort: 22
@@ -21,10 +21,10 @@ rds:
   nvmePort: 4420
 
   # SSH username on RouterOS
-  sshUser: "metal-csi"
+  sshUser: "rds-csi"
 
   # Base path for volumes on RDS
-  basePath: "/storage-pool/metal-csi"
+  basePath: "/storage-pool/rds-csi"
 
   # Kubernetes Secret containing RDS credentials
   # Secret must contain keys:
@@ -273,8 +273,12 @@ monitoring:
 
   # RDS health and performance monitoring (SSH + SNMP)
   rdsMonitoring:
-    # Enable RDS disk and hardware metrics
+    # Enable optional SNMP hardware monitoring when snmpEnabled is also true.
     enabled: true
+    # SNMP target for hardware metrics. Empty disables hardware metrics.
+    snmpHost: ""
+    # Set true only when the Secret has a snmp-community key.
+    snmpEnabled: false
 
 # StorageClass configuration
 storageClasses:

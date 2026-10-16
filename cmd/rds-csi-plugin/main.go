@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,7 +63,9 @@ var (
 	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not specified)")
 
 	// Metrics configuration
-	metricsAddr = flag.String("metrics-address", ":9809", "Address for Prometheus metrics endpoint (empty to disable)")
+	metricsAddr       = flag.String("metrics-address", ":9809", "Address for Prometheus metrics endpoint (empty to disable)")
+	snmpHost          = flag.String("rds-snmp-host", "", "RDS SNMP address for hardware metrics (optional)")
+	snmpCommunityFile = flag.String("rds-snmp-community-file", "", "Path to SNMP community file for hardware metrics (optional)")
 
 	// Version flag
 	version = flag.Bool("version", false, "Print version and exit")
@@ -90,6 +93,20 @@ func main() {
 
 	if *nodeMode && *nodeID == "" {
 		klog.Fatal("--node-id is required in node mode")
+	}
+	if (*snmpHost == "") != (*snmpCommunityFile == "") {
+		klog.Fatal("--rds-snmp-host and --rds-snmp-community-file must be set together")
+	}
+	var snmpCommunity string
+	if *snmpCommunityFile != "" {
+		community, err := os.ReadFile(*snmpCommunityFile)
+		if err != nil {
+			klog.Fatalf("Failed to read SNMP community file: %v", err)
+		}
+		snmpCommunity = strings.TrimSpace(string(community))
+		if snmpCommunity == "" {
+			klog.Fatal("SNMP community file is empty")
+		}
 	}
 
 	// Read SSH private key and host key if controller mode
@@ -145,6 +162,8 @@ func main() {
 		DriverName:                  *driverName,
 		NodeID:                      *nodeID,
 		RDSAddress:                  *rdsAddress,
+		RDSSNMPHost:                 *snmpHost,
+		RDSSNMPCommunity:            snmpCommunity,
 		RDSPort:                     *rdsPort,
 		RDSUser:                     *rdsUser,
 		RDSPrivateKey:               privateKey,

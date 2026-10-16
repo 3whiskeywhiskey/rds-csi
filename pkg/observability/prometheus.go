@@ -509,7 +509,15 @@ func (m *Metrics) SetRDSMonitoring(slot string, snmpHost string, snmpCommunity s
 			Help:        "Disk active/busy time in milliseconds from /disk monitor-traffic (SSH)",
 			ConstLabels: diskLabels,
 		}, func() float64 { return getDiskSnapshot().ActiveTimeMs }),
+	)
 
+	// SNMP is optional. Do not publish hardware gauges with misleading zero values
+	// when no community has been configured.
+	if hardwareMetricsFunc == nil {
+		return
+	}
+
+	m.registry.MustRegister(
 		// === Hardware Health Metrics (10 metrics via SNMP) ===
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Namespace: "rds", Subsystem: "hardware",

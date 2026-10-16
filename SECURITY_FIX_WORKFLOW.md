@@ -1,5 +1,8 @@
 # Security Fix Merge Workflow
 
+> **Historical record:** This document describes the 2025 review and remediation work at that time. It is not a current security assessment. Check the current source and deployment manifests before treating a finding or checkbox as open or resolved.
+
+
 This document tracks the systematic merging and testing of security fixes into the dev branch.
 
 ## Overview

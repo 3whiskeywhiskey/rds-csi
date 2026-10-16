@@ -28,7 +28,7 @@ func TestNewSSHClient(t *testing.T) {
 		{
 			name: "valid config with all fields",
 			config: ClientConfig{
-				Address:            "10.42.68.1",
+				Address:            "192.0.2.11",
 				Port:               22,
 				User:               "admin",
 				PrivateKey:         []byte("test-key"),
@@ -50,7 +50,7 @@ func TestNewSSHClient(t *testing.T) {
 		{
 			name: "missing user returns error",
 			config: ClientConfig{
-				Address:    "10.42.68.1",
+				Address:    "192.0.2.11",
 				PrivateKey: []byte("test-key"),
 			},
 			expectErr: true,
@@ -59,7 +59,7 @@ func TestNewSSHClient(t *testing.T) {
 		{
 			name: "default port when not specified",
 			config: ClientConfig{
-				Address:            "10.42.68.1",
+				Address:            "192.0.2.11",
 				User:               "admin",
 				InsecureSkipVerify: true,
 			},
@@ -68,7 +68,7 @@ func TestNewSSHClient(t *testing.T) {
 		{
 			name: "default timeout when not specified",
 			config: ClientConfig{
-				Address:            "10.42.68.1",
+				Address:            "192.0.2.11",
 				User:               "admin",
 				InsecureSkipVerify: true,
 			},
@@ -77,7 +77,7 @@ func TestNewSSHClient(t *testing.T) {
 		{
 			name: "invalid HostKeyCallback type returns error",
 			config: ClientConfig{
-				Address:         "10.42.68.1",
+				Address:         "192.0.2.11",
 				User:            "admin",
 				HostKeyCallback: "not-a-callback", // Wrong type
 			},
@@ -87,7 +87,7 @@ func TestNewSSHClient(t *testing.T) {
 		{
 			name: "custom HostKeyCallback is used",
 			config: ClientConfig{
-				Address: "10.42.68.1",
+				Address: "192.0.2.11",
 				User:    "admin",
 				HostKeyCallback: ssh.HostKeyCallback(func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 					return nil
@@ -671,7 +671,7 @@ func TestSSHClientRunCommandWithRetry(t *testing.T) {
 
 func TestSSHClientNotConnected(t *testing.T) {
 	client := &sshClient{
-		address: "10.42.68.1",
+		address: "192.0.2.11",
 		port:    22,
 		user:    "admin",
 	}

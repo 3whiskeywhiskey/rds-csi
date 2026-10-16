@@ -61,7 +61,7 @@ All security logs follow a structured format:
 |-------|-------------|---------|
 | `username` | SSH username | `admin` |
 | `source_ip` | Source IP address | `10.0.0.1` |
-| `target_ip` | Target IP address | `10.42.68.1` |
+| `target_ip` | Target IP address | `192.0.2.11` |
 | `node_id` | Kubernetes node ID | `worker-node-1` |
 | `namespace` | Kubernetes namespace | `default` |
 | `pod_name` | Pod name | `my-app-pod-abc123` |
@@ -608,7 +608,7 @@ For regulated environments:
 
 1. Check pod logs are being collected:
    ```bash
-   kubectl logs -n kube-system -l app=rds-csi-controller
+   kubectl logs -n rds-csi -l app=rds-csi-controller
    ```
 
 2. Verify log collector is running:

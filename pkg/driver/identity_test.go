@@ -263,6 +263,6 @@ func TestProbeNoPanicWhenMetricsNil(t *testing.T) {
 func newTestMockClient(connected bool) *rds.MockClient {
 	mockClient := rds.NewMockClient()
 	mockClient.SetConnected(connected)
-	mockClient.SetAddress("10.42.68.1")
+	mockClient.SetAddress("192.0.2.11")
 	return mockClient
 }

@@ -30,7 +30,7 @@ Prometheus --> /metrics endpoint (controller pod)
         +------------------------+
                     |
             MikroTik RDS
-          10.42.68.1 (storage VLAN)
+          192.0.2.11 (storage VLAN)
 ```
 
 **Key design decisions:**
@@ -44,7 +44,7 @@ Prometheus --> /metrics endpoint (controller pod)
   (19 total time series). Per-PVC monitoring deferred to future phase if needed.
 - **Error tolerance:** SSH/SNMP failures return 0 for all metrics (no scrape failure). Transient network
   issues don't break Prometheus alerting rules.
-- **Same network as storage:** Uses 10.42.68.1 (storage VLAN) for both SSH and SNMP. CSI controller
+- **Same network as storage:** Uses 192.0.2.11 (storage VLAN) for both SSH and SNMP. CSI controller
   runs in environment with access to storage network, same IP used for volume operations.
 
 ## Metrics Catalog
@@ -163,8 +163,8 @@ rds_hardware_disk_pool_used_bytes 1.6e+12
 
 ## Configuration
 
-Currently hardcoded to monitor `storage-pool` slot via SSH and SNMP at 10.42.68.1 (storage VLAN).
-SSH uses mgmt VRF 10.42.241.3 for connection. Future Helm chart values:
+Currently hardcoded to monitor `storage-pool` slot via SSH and SNMP at 192.0.2.11 (storage VLAN).
+SSH uses mgmt VRF 192.0.2.10 for connection. Future Helm chart values:
 
 ```yaml
 monitoring:
@@ -172,7 +172,7 @@ monitoring:
   ssh:
     diskSlot: "storage-pool"  # Disk slot to monitor via SSH
   snmp:
-    host: "10.42.68.1"        # SNMP target (storage VLAN, same as volume operations)
+    host: "192.0.2.11"        # SNMP target (storage VLAN, same as volume operations)
     community: "public"        # SNMP community string (should be secret in production)
   # Per-PVC monitoring (future, opt-in)
   perPVCEnabled: false
@@ -190,7 +190,7 @@ monitoring:
 4. **SSH overhead:** Each scrape triggers one SSH command (~50-100ms). At 30s scrape interval,
    this is negligible but should be monitored if polling frequency increases.
 5. **SNMP overhead:** Each scrape triggers one SNMP query (~10-20ms). Negligible at standard intervals.
-6. **Network access required:** Both SSH and SNMP use storage VLAN IP (10.42.68.1). CSI controller
+6. **Network access required:** Both SSH and SNMP use storage VLAN IP (192.0.2.11). CSI controller
    must run in environment with access to storage network (same requirement as volume operations).
 
 ## Implementation Details
@@ -198,10 +198,10 @@ monitoring:
 ### SSH Command Format
 ```bash
 # Correct format (no user prefix, use mgmt IP)
-ssh 10.42.241.3 '/disk monitor-traffic storage-pool once'
+ssh 192.0.2.10 '/disk monitor-traffic storage-pool once'
 
 # Incorrect (user prefix causes issues)
-ssh admin@10.42.68.1 '/disk monitor-traffic storage-pool once'
+ssh admin@192.0.2.11 '/disk monitor-traffic storage-pool once'
 ```
 
 ### SNMP Configuration
@@ -211,7 +211,7 @@ import "github.com/gosnmp/gosnmp"
 
 // Connection parameters (use storage VLAN IP, same as SSH operations)
 snmp := &gosnmp.GoSNMP{
-    Target:    "10.42.68.1",
+    Target:    "192.0.2.11",
     Port:      161,
     Community: "public",
     Version:   gosnmp.Version2c,

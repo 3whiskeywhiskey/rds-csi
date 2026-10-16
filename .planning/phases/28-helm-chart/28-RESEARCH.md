@@ -102,8 +102,8 @@ node:
     - operator: Exists  # Run on all nodes
 
 rds:
-  managementIP: "10.42.241.3"
-  storageIP: "10.42.68.1"
+  managementIP: "192.0.2.10"
+  storageIP: "192.0.2.11"
   sshPort: 22
   nvmePort: 4420
   sshUser: "metal-csi"

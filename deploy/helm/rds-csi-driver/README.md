@@ -20,12 +20,9 @@ This Helm chart is distributed via the git repository only. To use it:
    cd rds-csi
    ```
 
-2. Install directly from the local path:
-   ```bash
-   helm install rds-csi ./deploy/helm/rds-csi-driver --namespace rds-csi --create-namespace
-   ```
+2. Create the credential Secret and install from the local path using the [Quick Start](#quick-start) steps below.
 
-There is no OCI registry or Helm repository hosting at this time.
+There is no OCI registry or Helm repository hosting at this time. The default 192.0.2.x addresses are documentation examples; set both RDS addresses and the SSH username for your device.
 
 ## Quick Start
 
@@ -60,8 +57,8 @@ data:
   # Base64-encoded SSH host public key (from RDS /ip/ssh/print)
   rds-host-key: c3NoLXJzYSBBQUFBQjNOemFDMXljMkVBQUFBREFRQUJBQUFCZ1FD...
 
-  # Base64-encoded SNMP community string (optional)
-  snmp-community: cHVibGlj
+  # Optional: supply snmp-community only when SNMP monitoring is enabled.
+  # Do not commit a real community value to this repository.
 ```
 
 **Create from files:**
@@ -70,8 +67,8 @@ data:
 kubectl create secret generic rds-csi-secret \
   -n rds-csi \
   --from-file=rds-private-key=/path/to/ssh-key \
-  --from-file=rds-host-key=/path/to/host-key \
-  --from-file=snmp-community=<(echo -n "public")
+  --from-file=rds-host-key=/path/to/host-key
+# Add --from-file=snmp-community=/path/to/snmp-community when enabling SNMP.
 ```
 
 ### 3. Install Chart
@@ -79,8 +76,9 @@ kubectl create secret generic rds-csi-secret \
 ```bash
 helm install rds-csi ./deploy/helm/rds-csi-driver \
   --namespace rds-csi \
-  --set rds.managementIP=10.42.241.3 \
-  --set rds.storageIP=10.42.68.1
+  --set-string rds.managementIP="$RDS_MANAGEMENT_IP" \
+  --set-string rds.storageIP="$RDS_STORAGE_IP" \
+  --set-string rds.sshUser="$RDS_SSH_USER"
 ```
 
 ### 4. Verify Installation
@@ -104,12 +102,12 @@ All configuration is done via the `values.yaml` file or `--set` flags during ins
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `rds.managementIP` | Management interface IP (SSH control plane) | `10.42.241.3` |
-| `rds.storageIP` | Storage interface IP (NVMe/TCP data plane) | `10.42.68.1` |
+| `rds.managementIP` | Management interface IP (SSH control plane) | `192.0.2.10` |
+| `rds.storageIP` | Storage interface IP (NVMe/TCP data plane) | `192.0.2.11` |
 | `rds.sshPort` | SSH port for RouterOS CLI | `22` |
 | `rds.nvmePort` | NVMe/TCP port for storage connections | `4420` |
-| `rds.sshUser` | SSH username on RouterOS | `metal-csi` |
-| `rds.basePath` | Base path for volumes on RDS | `/storage-pool/metal-csi` |
+| `rds.sshUser` | SSH username on RouterOS | `rds-csi` |
+| `rds.basePath` | Base path for volumes on RDS | `/storage-pool/rds-csi` |
 | `rds.secretName` | Kubernetes Secret containing RDS credentials | `rds-csi-secret` |
 | `rds.insecureSkipVerify` | Skip SSH host key verification (INSECURE - testing only) | `false` |
 | `rds.nqnPrefix` | NQN prefix for CSI-managed volumes | `nqn.2000-02.com.mikrotik:pvc-` |
@@ -183,7 +181,9 @@ All configuration is done via the `values.yaml` file or `--set` flags during ins
 | `monitoring.serviceMonitor.forceEnable` | Force ServiceMonitor creation (skip CRD detection) | `false` |
 | `monitoring.serviceMonitor.interval` | Prometheus scrape interval | `30s` |
 | `monitoring.serviceMonitor.labels` | Additional labels for ServiceMonitor | `{}` |
-| `monitoring.rdsMonitoring.enabled` | Enable RDS disk and hardware metrics | `true` |
+| `monitoring.rdsMonitoring.enabled` | Allow optional SNMP hardware metrics | `true` |
+| `monitoring.rdsMonitoring.snmpEnabled` | Enable hardware metrics via SNMP (requires Secret key `snmp-community`) | `false` |
+| `monitoring.rdsMonitoring.snmpHost` | SNMP target address | `""` |
 
 ### StorageClass Settings
 
@@ -239,9 +239,8 @@ data:
 
   # SNMP community string for hardware monitoring (optional)
   # Only needed if monitoring.rdsMonitoring.enabled=true
-  # Default RouterOS community is "public"
-  # Encode: echo -n "public" | base64
-  snmp-community: cHVibGlj
+  # Provide a non-default value through the Kubernetes Secret when enabling SNMP.
+  snmp-community: <base64-encoded-community>
 ```
 
 ## Storage Classes
@@ -285,7 +284,7 @@ The driver exposes Prometheus metrics on port 9809 (configurable).
 - `rds_csi_operation_duration_seconds` - Histogram of CSI operation latencies
 - `rds_csi_nvme_connections_active` - Gauge of active NVMe/TCP connections
 
-**RDS Disk Metrics** (when `monitoring.rdsMonitoring.enabled=true`):
+**RDS Disk Metrics** (when `monitoring.enabled=true`):
 - `rds_disk_read_ops_per_second` - Read IOPS
 - `rds_disk_write_ops_per_second` - Write IOPS
 - `rds_disk_read_bytes_per_second` - Read throughput
@@ -296,7 +295,7 @@ The driver exposes Prometheus metrics on port 9809 (configurable).
 - `rds_disk_active_time_percent` - Active time percentage
 - `rds_disk_capacity_bytes` - Total disk capacity
 
-**RDS Hardware Metrics** (when `monitoring.rdsMonitoring.enabled=true`):
+**RDS Hardware Metrics** (when both `monitoring.rdsMonitoring.enabled=true` and `monitoring.rdsMonitoring.snmpEnabled=true`, with a configured host and community):
 - `rds_hardware_cpu_temperature_celsius` - CPU temperature
 - `rds_hardware_board_temperature_celsius` - Board temperature
 - `rds_hardware_fan1_speed_rpm` - Fan 1 speed

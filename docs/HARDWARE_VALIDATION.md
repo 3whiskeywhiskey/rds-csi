@@ -1,5 +1,7 @@
 # Hardware Validation Guide
 
+> Addresses in this guide are documentation examples. Substitute your own RDS addresses before running commands.
+
 **Version:** Written for RDS CSI Driver v0.9.0+, RouterOS 7.16+
 **Last Updated:** 2026-02-18
 **Purpose:** Step-by-step test procedures for validating RDS CSI driver functionality on production hardware
@@ -21,9 +23,9 @@ Before running these tests, ensure you have:
 
 ### Access Requirements
 - **RDS accessible via two networks:**
-  - Management IP: `10.42.241.3` (SSH port 22 for volume management)
-  - Storage IP: `10.42.68.1` (NVMe/TCP port 4420 for block device access)
-- **SSH access to RDS:** `ssh admin@10.42.241.3` with working credentials
+  - Management IP: `192.0.2.10` (SSH port 22 for volume management)
+  - Storage IP: `192.0.2.11` (NVMe/TCP port 4420 for block device access)
+- **SSH access to RDS:** `ssh admin@192.0.2.10` with working credentials
 - **SSH access to worker nodes:** For verifying NVMe/TCP connections
 - **kubectl access:** Cluster-admin privileges to create/delete test resources
 
@@ -33,7 +35,7 @@ Before running these tests, ensure you have:
 - Worker nodes with:
   - `nvme-cli` installed (for NVMe/TCP operations)
   - Kernel 5.0+ (for NVMe/TCP support)
-  - Network connectivity to RDS storage IP (10.42.68.1)
+  - Network connectivity to RDS storage IP (192.0.2.11)
 
 ### Validation Tools
 - `kubectl` command-line tool
@@ -47,7 +49,7 @@ Run these pre-flight checks before executing test cases to ensure your environme
 ### Step 1: Verify Controller Running
 
 ```bash
-kubectl get pods -n kube-system -l app=rds-csi-controller
+kubectl get pods -n rds-csi -l app=rds-csi-controller
 ```
 
 **Expected:** One pod in `Running` state
@@ -59,13 +61,13 @@ rds-csi-controller-7d8b9f5c6d-xk2mn   3/3     Running   0          5m
 
 **If not running:** Check controller logs for errors:
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50
 ```
 
 ### Step 2: Verify Node Plugin Running
 
 ```bash
-kubectl get pods -n kube-system -l app=rds-csi-node
+kubectl get pods -n rds-csi -l app=rds-csi-node
 ```
 
 **Expected:** DaemonSet pod on every worker node in `Running` state
@@ -78,7 +80,7 @@ rds-csi-node-8n2xp   3/3     Running   0          5m
 
 **If not running:** Check node plugin logs:
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-plugin --tail=50
+kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-plugin --tail=50
 ```
 
 ### Step 3: Verify StorageClass Exists
@@ -97,7 +99,7 @@ rds-nvme-tcp    rds.csi.srvlab.io     Delete          WaitForFirstConsumer   tru
 ### Step 4: Verify SSH Connectivity to RDS
 
 ```bash
-ssh admin@10.42.241.3 '/system/resource/print'
+ssh admin@192.0.2.10 '/system/resource/print'
 ```
 
 **Expected:** RouterOS system information output
@@ -115,7 +117,7 @@ ssh admin@10.42.241.3 '/system/resource/print'
 ### Step 5: Verify RDS Storage Capacity
 
 ```bash
-ssh admin@10.42.241.3 '/disk print brief'
+ssh admin@192.0.2.10 '/disk print brief'
 ```
 
 **Expected:** List of disks with available slots
@@ -214,13 +216,13 @@ test-hw-pvc-01   Bound     pvc-12345678-1234-1234-1234-123456789abc   5Gi       
 
 **If stuck in Pending >60s:** Check controller logs for errors:
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=30 | grep CreateVolume
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=30 | grep CreateVolume
 ```
 
 #### 3. Verify Volume on RDS
 
 ```bash
-ssh admin@10.42.241.3 '/disk print detail where slot~"pvc-"' | head -20
+ssh admin@192.0.2.10 '/disk print detail where slot~"pvc-"' | head -20
 ```
 
 **Expected:** Volume exists with correct size and NVMe/TCP export enabled
@@ -254,7 +256,7 @@ test-hw-pod-01   1/1     Running   0          45s
 
 **If stuck in ContainerCreating:** Check node plugin logs:
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-plugin --tail=30 | grep NodeStage
+kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-plugin --tail=30 | grep NodeStage
 ```
 
 #### 5. Verify Volume Mounted in Pod
@@ -307,7 +309,7 @@ kubectl delete pvc test-hw-pvc-01
 sleep 30
 
 # Verify volume deleted on RDS
-ssh admin@10.42.241.3 '/disk print detail where slot~"pvc-12345678"'
+ssh admin@192.0.2.10 '/disk print detail where slot~"pvc-12345678"'
 ```
 
 **Expected:** No output (volume deleted)
@@ -415,7 +417,7 @@ ssh <node-ip> 'nvme list-subsys'
 ```
 nvme-subsys1 - NQN=nqn.2000-02.com.mikrotik:pvc-12345678-1234-1234-1234-123456789abc
 \
- +- nvme1 tcp traddr=10.42.68.1 trsvcid=4420 live
+ +- nvme1 tcp traddr=192.0.2.11 trsvcid=4420 live
 ```
 
 #### 6. Verify Transport Type
@@ -469,7 +471,7 @@ kubectl delete pvc test-hw-pvc-02
 - ✅ Connection parameters configured correctly
 
 **Troubleshooting:**
-- **No NVMe device found:** Check `dmesg | grep nvme` for connection errors, verify network connectivity to 10.42.68.1:4420
+- **No NVMe device found:** Check `dmesg | grep nvme` for connection errors, verify network connectivity to 192.0.2.11:4420
 - **Wrong transport type:** Verify nvme-cli version supports TCP transport, check kernel version (5.0+ required)
 - **Connection timeouts:** Check ctrl_loss_tmo, verify RDS is responding on port 4420, check network latency
 
@@ -621,7 +623,7 @@ Filesystem      Size  Used Avail Use% Mounted on
 ```bash
 # Get volume ID from PV
 VOLUME_ID=$(kubectl get pvc test-hw-pvc-03 -o jsonpath='{.spec.volumeName}' | sed 's/pv-/pvc-/')
-ssh admin@10.42.241.3 "/disk print detail where slot=\"$VOLUME_ID\""
+ssh admin@192.0.2.10 "/disk print detail where slot=\"$VOLUME_ID\""
 ```
 
 **Expected:** File size shows 10GiB
@@ -993,22 +995,22 @@ kubectl wait --for=condition=Ready pod/test-hw-pod-06 --timeout=60s
 #### 3. Check Connection Manager Status in Logs
 
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=100 | grep -i "connection\|connected"
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=100 | grep -i "connection\|connected"
 ```
 
 **Expected:** Logs show active connection to RDS
 
 ```
 INFO    Connection manager started, polling every 5s
-INFO    Connected to RDS at 10.42.241.3:22
+INFO    Connected to RDS at 192.0.2.10:22
 INFO    Connection healthy
 ```
 
 #### 4. Verify Controller Probe Endpoint
 
 ```bash
-CONTROLLER_POD=$(kubectl get pod -n kube-system -l app=rds-csi-controller -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n kube-system $CONTROLLER_POD -c rds-csi-plugin -- /bin/sh -c 'wget -q -O - http://localhost:9808/healthz'
+CONTROLLER_POD=$(kubectl get pod -n rds-csi -l app=rds-csi-controller -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n rds-csi $CONTROLLER_POD -c rds-csi-plugin -- /bin/sh -c 'wget -q -O - http://localhost:9808/healthz'
 ```
 
 **Expected:** Health check returns healthy status
@@ -1020,7 +1022,7 @@ ok
 #### 5. Verify Exponential Backoff Configuration
 
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=200 | grep -i "backoff\|retry"
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=200 | grep -i "backoff\|retry"
 ```
 
 **Expected:** Logs show retry configuration (if any connection issues occurred)
@@ -1048,7 +1050,7 @@ INFO    Retry configuration: exponential backoff with jitter, max elapsed time: 
 
 ```bash
 # Check probe endpoint (should be healthy since RDS is available)
-kubectl exec -n kube-system $CONTROLLER_POD -c rds-csi-plugin -- /bin/sh -c 'wget -q -O - http://localhost:9808/healthz; echo'
+kubectl exec -n rds-csi $CONTROLLER_POD -c rds-csi-plugin -- /bin/sh -c 'wget -q -O - http://localhost:9808/healthz; echo'
 ```
 
 **Expected:** Returns `ok` when connected
@@ -1067,7 +1069,7 @@ kubectl delete pvc test-hw-pvc-06
 - ✅ Expected reconnection behavior understood
 
 **Troubleshooting:**
-- **Probe unhealthy:** Check RDS SSH connectivity, verify controller can reach 10.42.241.3:22
+- **Probe unhealthy:** Check RDS SSH connectivity, verify controller can reach 192.0.2.10:22
 - **No connection logs:** Increase log verbosity with `--v=5` flag in controller deployment
 
 **Note:** To fully test RDS restart recovery, you would need to:
@@ -1242,7 +1244,7 @@ volume-c-data
 #### 7. Verify All Volumes on RDS
 
 ```bash
-ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-"' | grep -E "test-hw|pvc-aaaa|pvc-bbbb|pvc-cccc"
+ssh admin@192.0.2.10 '/disk print brief where slot~"pvc-"' | grep -E "test-hw|pvc-aaaa|pvc-bbbb|pvc-cccc"
 ```
 
 **Expected:** Three volumes visible on RDS
@@ -1263,7 +1265,7 @@ kubectl delete pvc test-hw-pvc-07a test-hw-pvc-07b test-hw-pvc-07c
 sleep 30
 
 # Verify all volumes deleted on RDS
-ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-aaaa|pvc-bbbb|pvc-cccc"'
+ssh admin@192.0.2.10 '/disk print brief where slot~"pvc-aaaa|pvc-bbbb|pvc-cccc"'
 ```
 
 **Expected:** No volumes found (all cleaned up)
@@ -1390,14 +1392,14 @@ test-hw-snapshot-08    true         test-hw-pvc-08-source                       
 
 **If stuck in non-ready state >30s:** Check controller logs:
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=30 | grep CreateSnapshot
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=30 | grep CreateSnapshot
 ```
 
 #### 4. Verify Snapshot on RDS via SSH
 
 ```bash
 # Check snapshot exists on RDS using slot prefix filter
-ssh admin@10.42.241.3 "/disk print detail where slot~\"snap-\""
+ssh admin@192.0.2.10 "/disk print detail where slot~\"snap-\""
 ```
 
 **Expected:** Snapshot visible on RDS as a standard file-backed disk with no NVMe export flags
@@ -1516,7 +1518,7 @@ Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "test-hw-s
 **Verify snapshot disk entry and backing file removed from RDS:**
 
 ```bash
-ssh admin@10.42.241.3 "/disk print detail where slot~\"snap-\""
+ssh admin@192.0.2.10 "/disk print detail where slot~\"snap-\""
 ```
 
 **Expected:** No snapshots found (both disk entry and backing .img file removed from RDS)
@@ -1547,7 +1549,7 @@ kubectl delete pvc test-hw-pvc-08-source test-hw-pvc-08-restored
 sleep 30
 
 # Verify all volumes deleted on RDS
-ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-"'
+ssh admin@192.0.2.10 '/disk print brief where slot~"pvc-"'
 ```
 
 **Expected:** No test volumes remaining
@@ -1567,11 +1569,11 @@ ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-"'
 - **Restore fails:** Verify VolumeSnapshotClass exists, check source snapshot is ReadyToUse
 - **copy-from failure:** Verify source volume exists on RDS with correct slot name (`/disk print detail where slot~"pvc-"`). Check that RDS has sufficient free space for the CoW copy (copy-from creates an independent full copy)
 - **Data mismatch after restore:** copy-from creates an independent copy at snapshot time; verify RDS had sufficient space to complete the full copy before any subsequent writes to the source
-- **Snapshot not deleted from RDS:** Check controller logs for DeleteSnapshot errors. The driver removes both the disk entry and backing file; verify both are cleaned up: `ssh admin@10.42.241.3 '/disk print detail where slot~"snap-"'` and `ssh admin@10.42.241.3 '/file print detail where name~"snap-"'`
+- **Snapshot not deleted from RDS:** Check controller logs for DeleteSnapshot errors. The driver removes both the disk entry and backing file; verify both are cleaned up: `ssh admin@192.0.2.10 '/disk print detail where slot~"snap-"'` and `ssh admin@192.0.2.10 '/file print detail where name~"snap-"'`
 
 ### Execution
 
-This test case is designed for manual execution against real RDS hardware. After automated sanity tests pass (Phase 30), execute TC-08 steps manually against the RDS at 10.42.241.3 and record results in the Results Template below. Document execution outcome in the phase SUMMARY.md.
+This test case is designed for manual execution against real RDS hardware. After automated sanity tests pass (Phase 30), execute TC-08 steps manually against the RDS at 192.0.2.10 and record results in the Results Template below. Document execution outcome in the phase SUMMARY.md.
 
 ---
 
@@ -1667,7 +1669,7 @@ SSH to the worker node and block NVMe/TCP traffic to RDS:
 ssh <node-ip>
 
 # Block NVMe/TCP outbound traffic to RDS storage IP
-iptables -A OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP
+iptables -A OUTPUT -d 192.0.2.11 -p tcp --dport 4420 -j DROP
 ```
 
 #### 5. Wait 30 Seconds and Observe NVMe Errors
@@ -1698,7 +1700,7 @@ kubectl exec test-hw-pod-09 -- tail -5 /data/io-test.log
 
 ```bash
 # On the worker node
-iptables -D OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP
+iptables -D OUTPUT -d 192.0.2.11 -p tcp --dport 4420 -j DROP
 ```
 
 #### 8. Wait for NVMe/TCP Reconnection
@@ -1751,7 +1753,7 @@ kubectl delete pod test-hw-pod-09
 kubectl delete pvc test-hw-pvc-09
 
 # Remove any lingering iptables rules (from the worker node)
-ssh <node-ip> 'iptables -D OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP 2>/dev/null; true'
+ssh <node-ip> 'iptables -D OUTPUT -d 192.0.2.11 -p tcp --dport 4420 -j DROP 2>/dev/null; true'
 ```
 
 **Success Criteria:**
@@ -1775,7 +1777,7 @@ ssh <node-ip> 'iptables -D OUTPUT -d 10.42.68.1 -p tcp --dport 4420 -j DROP 2>/d
 
 **Prerequisites:**
 - TC-01 passed and environment validation complete
-- SSH access to RDS management IP (10.42.241.3)
+- SSH access to RDS management IP (192.0.2.10)
 - Understanding that RDS restart will affect ALL NVMe/TCP connections on ALL nodes
 
 > **DANGER:** Restarting RDS affects ALL NVMe/TCP connections on ALL cluster nodes. Only run this test during a maintenance window when no production workloads are running. Ensure you have physical access to the RDS hardware in case it doesn't come back online.
@@ -1851,13 +1853,13 @@ ssh <node-ip> 'nvme list-subsys'
 
 ```
 nvme-subsys1 - NQN=nqn.2000-02.com.mikrotik:pvc-<uuid>
- +- nvme1 tcp traddr=10.42.68.1 trsvcid=4420 live
+ +- nvme1 tcp traddr=192.0.2.11 trsvcid=4420 live
 ```
 
 #### 5. Restart RDS
 
 ```bash
-ssh admin@10.42.241.3 '/system/reboot'
+ssh admin@192.0.2.10 '/system/reboot'
 ```
 
 Confirm with `y` when prompted. The RDS will begin rebooting immediately.
@@ -1867,7 +1869,7 @@ Confirm with `y` when prompted. The RDS will begin rebooting immediately.
 Poll until the management interface responds (typically 60-120 seconds):
 
 ```bash
-until ssh admin@10.42.241.3 '/system/resource/print' 2>/dev/null | grep -q version; do
+until ssh admin@192.0.2.10 '/system/resource/print' 2>/dev/null | grep -q version; do
   echo "Waiting for RDS to come back online..."
   sleep 10
 done
@@ -1900,16 +1902,16 @@ ssh <node-ip> 'nvme list-subsys'
 #### 9. Check Controller Logs for Reconnection
 
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "reconnect"
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "reconnect"
 ```
 
 **Expected:** Connection manager logs showing SSH reconnection via exponential backoff
 
 ```
-INFO    ConnectionManager: RDS connection lost to 10.42.241.3:22, starting reconnection
-INFO    ConnectionManager: Reconnection attempt 1 to 10.42.241.3:22
-INFO    ConnectionManager: Reconnection attempt 5 to 10.42.241.3:22
-INFO    ConnectionManager: Successfully reconnected to 10.42.241.3:22 after 8 attempts (45.20s)
+INFO    ConnectionManager: RDS connection lost to 192.0.2.10:22, starting reconnection
+INFO    ConnectionManager: Reconnection attempt 1 to 192.0.2.10:22
+INFO    ConnectionManager: Reconnection attempt 5 to 192.0.2.10:22
+INFO    ConnectionManager: Successfully reconnected to 192.0.2.10:22 after 8 attempts (45.20s)
 ```
 
 #### 10. Verify Data Integrity After Restart
@@ -2068,7 +2070,7 @@ kubectl delete node $NODE_NAME
 #### 6. Observe Attachment Reconciler Behavior
 
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "stale\|reconcil\|attachment"
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "stale\|reconcil\|attachment"
 ```
 
 **Expected:** Attachment reconciler logs detecting the stale attachment
@@ -2085,14 +2087,14 @@ The attachment reconciler runs on a 5-minute interval with a 30-second grace per
 
 ```bash
 # Trigger immediate reconciliation by restarting the controller
-kubectl rollout restart deployment/rds-csi-controller -n kube-system
-kubectl rollout status deployment/rds-csi-controller -n kube-system --timeout=60s
+kubectl rollout restart deployment/rds-csi-controller -n rds-csi
+kubectl rollout status deployment/rds-csi-controller -n rds-csi --timeout=60s
 ```
 
 Then check the reconciler logs again:
 
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "stale\|reconcil"
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep -i "stale\|reconcil"
 ```
 
 #### 8. Verify VolumeAttachment is Cleared
@@ -2219,7 +2221,7 @@ fio --name=randread --rw=randread --bs=4k --size=1G --numjobs=1 --direct=1 --iod
 
 **Step 1:** Check controller pod status
 ```bash
-kubectl get pods -n kube-system -l app=rds-csi-controller
+kubectl get pods -n rds-csi -l app=rds-csi-controller
 ```
 
 - **If CrashLoopBackOff:** See "Controller Won't Start" below
@@ -2227,7 +2229,7 @@ kubectl get pods -n kube-system -l app=rds-csi-controller
 
 **Step 2:** Check controller logs for CreateVolume errors
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep CreateVolume
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep CreateVolume
 ```
 
 - **If "SSH connection failed":** See "SSH Authentication Issues" below
@@ -2255,7 +2257,7 @@ kubectl describe pvc <pvc-name> | grep -A 10 Events
 
 **Step 1:** Check node plugin pod status
 ```bash
-kubectl get pods -n kube-system -l app=rds-csi-node
+kubectl get pods -n rds-csi -l app=rds-csi-node
 ```
 
 - **If no pods:** Node plugin DaemonSet not deployed
@@ -2263,7 +2265,7 @@ kubectl get pods -n kube-system -l app=rds-csi-node
 
 **Step 2:** Check node plugin logs for NodeStageVolume errors
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-plugin --tail=50 | grep NodeStage
+kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-plugin --tail=50 | grep NodeStage
 ```
 
 - **If "nvme connect failed":** See "NVMe Connection Failures" below
@@ -2288,18 +2290,18 @@ kubectl describe pod <pod-name> | grep -A 10 Events
 
 **Check SSH secret exists:**
 ```bash
-kubectl get secret rds-ssh-key -n kube-system
+kubectl get secret rds-csi-secret -n rds-csi
 ```
 
 **Verify secret mounted to controller:**
 ```bash
-CONTROLLER_POD=$(kubectl get pod -n kube-system -l app=rds-csi-controller -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n kube-system $CONTROLLER_POD -c rds-csi-plugin -- ls -la /etc/rds-csi/
+CONTROLLER_POD=$(kubectl get pod -n rds-csi -l app=rds-csi-controller -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n rds-csi $CONTROLLER_POD -c rds-csi-plugin -- ls -la /etc/rds-csi/
 ```
 
 **Test SSH connectivity manually:**
 ```bash
-ssh -i <path-to-key> admin@10.42.241.3 '/system/resource/print'
+ssh -i <path-to-key> admin@192.0.2.10 '/system/resource/print'
 ```
 
 **Common Fixes:**
@@ -2314,12 +2316,12 @@ ssh -i <path-to-key> admin@10.42.241.3 '/system/resource/print'
 
 **Check RDS capacity:**
 ```bash
-ssh admin@10.42.241.3 '/file print detail where name="/storage-pool"'
+ssh admin@192.0.2.10 '/file print detail where name="/storage-pool"'
 ```
 
 **List all volumes:**
 ```bash
-ssh admin@10.42.241.3 '/disk print brief'
+ssh admin@192.0.2.10 '/disk print brief'
 ```
 
 **Common Fixes:**
@@ -2335,7 +2337,7 @@ ssh admin@10.42.241.3 '/disk print brief'
 **Check NVMe/TCP connectivity from node:**
 ```bash
 # From worker node
-nvme discover -t tcp -a 10.42.68.1 -s 4420
+nvme discover -t tcp -a 192.0.2.11 -s 4420
 ```
 
 **Check kernel NVMe/TCP support:**
@@ -2347,13 +2349,13 @@ lsmod | grep nvme
 **Check firewall rules:**
 ```bash
 # Verify port 4420 is accessible
-telnet 10.42.68.1 4420
+telnet 192.0.2.11 4420
 ```
 
 **Common Fixes:**
 - Load nvme-tcp kernel module: `modprobe nvme-tcp`
 - Add firewall rule to allow port 4420
-- Verify network connectivity to storage IP (10.42.68.1)
+- Verify network connectivity to storage IP (192.0.2.11)
 - Check RDS NVMe/TCP service is running
 
 ---
@@ -2367,16 +2369,16 @@ kubectl get pvc <pvc-name>
 
 **Check controller logs for DeleteVolume errors:**
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep DeleteVolume
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep DeleteVolume
 ```
 
 **Manual cleanup on RDS:**
 ```bash
 # List volumes
-ssh admin@10.42.241.3 '/disk print brief where slot~"pvc-"'
+ssh admin@192.0.2.10 '/disk print brief where slot~"pvc-"'
 
 # Delete specific volume
-ssh admin@10.42.241.3 '/disk remove [find slot="pvc-12345678-1234-1234-1234-123456789abc"]'
+ssh admin@192.0.2.10 '/disk remove [find slot="pvc-12345678-1234-1234-1234-123456789abc"]'
 ```
 
 **Common Fixes:**
@@ -2395,12 +2397,12 @@ kubectl describe pvc <pvc-name> | grep -A 10 Events
 
 **Check controller logs:**
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep ControllerExpandVolume
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-plugin --tail=50 | grep ControllerExpandVolume
 ```
 
 **Check node logs:**
 ```bash
-kubectl logs -n kube-system -l app=rds-csi-node -c rds-csi-plugin --tail=50 | grep NodeExpandVolume
+kubectl logs -n rds-csi -l app=rds-csi-node -c rds-csi-plugin --tail=50 | grep NodeExpandVolume
 ```
 
 **Verify StorageClass allows expansion:**
@@ -2479,7 +2481,7 @@ kubectl delete pvc -l test=hardware-validation
 sleep 30
 
 # Verify all test volumes removed from RDS
-ssh admin@10.42.241.3 '/disk print brief where slot~"test-hw"'
+ssh admin@192.0.2.10 '/disk print brief where slot~"test-hw"'
 ```
 
 **Expected:** No output (all test volumes cleaned up)

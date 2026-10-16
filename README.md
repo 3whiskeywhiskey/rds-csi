@@ -2,10 +2,10 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Go Report Card](https://goreportcard.com/badge/github.com/3whiskeywhiskey/rds-csi)](https://goreportcard.com/report/github.com/3whiskeywhiskey/rds-csi)
-[![Dev Build](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/dev.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/dev.yml)
-[![Main Build](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/main.yml/badge.svg)](https://github.com/3whiskeywhiskey/rds-csi/actions/workflows/main.yml)
 
 Kubernetes CSI (Container Storage Interface) driver for **MikroTik ROSE Data Server (RDS)** NVMe/TCP storage.
+
+**Project status:** This is the v1 driver; `nvmet-csi` is its successor. The v1 code and deployment chart remain available here. The latest repository tag is v0.13.0. Review the [Helm chart](deploy/helm/rds-csi-driver/) and known limitations before a new deployment.
 
 ## Overview
 
@@ -24,7 +24,7 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 - **Attachment Reconciliation**: Automatic recovery from stale VolumeAttachment state after infrastructure failures
 - **Orphan Volume Reconciliation**: Automatic detection and cleanup of orphaned volumes (optional)
 - **Enhanced Error Handling**: Comprehensive retry logic, idempotent operations, and audit logging
-- **Snapshots**: Btrfs-based volume snapshots (planned)
+- **Snapshots**: Btrfs-based volume snapshots
 - **Volume Cloning**: Fast volume duplication for rapid VM provisioning (planned)
 
 ### Architecture
@@ -54,8 +54,8 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
               ▼                  ▼                  ▼
    ┌────────────────────────────────────────────────────┐
    │  MikroTik RDS                                      │
-   │  - Management IP: 10.42.241.3 (1Gbit)             │
-   │  - Storage IP: 10.42.68.1 (25Gbit)                │
+   │  - Management IP: configured by operator           │
+   │  - Storage IP: configured by operator              │
    │  - Btrfs RAID Storage                             │
    │  - NVMe/TCP Export                                │
    │  - File-backed Volumes                            │
@@ -75,7 +75,7 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 
 ## Status
 
-**Current Version**: v0.8.0 (v0.9.0 in progress)
+**Latest Git tag:** v0.13.0. This is the v1 codebase; development moved to `nvmet-csi`.
 
 **Completed:**
 - [x] Project setup and documentation
@@ -90,15 +90,12 @@ The RDS CSI Driver enables dynamic provisioning of persistent block storage volu
 - [x] Orphan reconciliation
 - [x] NVMe-oF reconnection resilience
 - [x] Attachment reconciliation
-- [ ] Helm chart (planned)
+- [x] Helm chart
+- [x] Volume snapshots and scheduled snapshot jobs
 - [x] Prometheus metrics endpoint
 - [x] Comprehensive test coverage (65%+)
 
-**In Progress (v0.9.0):**
-- [ ] Volume snapshots (Phase 26)
-- [ ] Documentation & hardware validation (Phase 27)
-
-See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress.
+Hardware validation was documented, but some test cases were not completed against a real RDS. See [project history](.planning/PROJECT.md) for the v1 milestone record.
 
 ## Prerequisites
 
@@ -124,13 +121,18 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress
 ### Installation
 
 ```bash
-# Apply manifests
-kubectl apply -f deploy/kubernetes/
+# Create credentials outside the repository. The host key must be verified
+# against your RDS through a trusted channel before creating this Secret.
+kubectl create namespace rds-csi
+kubectl create secret generic rds-csi-secret -n rds-csi \
+  --from-file=rds-private-key=/path/to/rds-private-key \
+  --from-file=rds-host-key=/path/to/verified-rds-host-key
 
-# Create SSH key secret
-kubectl create secret generic rds-ssh-key \
-  --from-file=id_rsa=/path/to/rds-ssh-key \
-  --namespace kube-system
+# Supply your own management and storage addresses and SSH username.
+helm install rds-csi ./deploy/helm/rds-csi-driver -n rds-csi \
+  --set-string rds.managementIP="$RDS_MANAGEMENT_IP" \
+  --set-string rds.storageIP="$RDS_STORAGE_IP" \
+  --set-string rds.sshUser="$RDS_SSH_USER"
 ```
 
 ### Usage Example
@@ -145,7 +147,7 @@ metadata:
 provisioner: rds.csi.srvlab.io
 parameters:
   # RDS connection details
-  rdsAddress: "10.42.68.1"
+  nvmeAddress: "192.0.2.11" # Example only; use your RDS storage address
   nvmePort: "4420"
   sshPort: "22"
 
@@ -208,7 +210,7 @@ spec:
 | `nvmePort` | NVMe/TCP target port | `4420` | No |
 | `sshPort` | SSH port for management | `22` | No |
 | `fsType` | Filesystem type (ext4, xfs, ext3) | `ext4` | No |
-| `volumePath` | Base path for volumes on RDS | `/storage-pool/metal-csi` | No |
+| `volumePath` | Base path for volumes on RDS | `/storage-pool/rds-csi` | No |
 | `nqnPrefix` | NVMe Qualified Name prefix | `nqn.2000-02.com.mikrotik` | No |
 
 **Note**: `nvmeAddress` allows using a separate high-speed network for storage traffic while management operations use `rdsAddress`.
@@ -288,7 +290,7 @@ For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubern
 - **[Capabilities & Comparison](docs/CAPABILITIES.md)** - Feature comparison with AWS EBS CSI and Longhorn
 - [Architecture](docs/architecture.md) - System design and component interactions
 - [RDS Commands Reference](docs/rds-commands.md) - RouterOS CLI commands used
-- [CI/CD Pipeline](docs/ci-cd.md) - Automated builds, releases, and versioning
+- [Former CI/CD setup](docs/ci-cd.md) - Historical workflow documentation; automation is retired
 - [Development Guide](CLAUDE.md) - Development notes and context
 - [Testing Guide](TESTING.md) - Test procedures
 
@@ -298,13 +300,13 @@ For detailed installation instructions, see [Kubernetes Setup Guide](docs/kubern
 
 ```bash
 # Controller pod
-kubectl get pods -n kube-system -l app=rds-csi-controller
+kubectl get pods -n rds-csi -l app=rds-csi-controller
 
 # Node plugin pods
-kubectl get pods -n kube-system -l app=rds-csi-node
+kubectl get pods -n rds-csi -l app=rds-csi-node
 
 # Check logs
-kubectl logs -n kube-system -l app=rds-csi-controller -c rds-csi-plugin
+kubectl logs -n rds-csi -l app=rds-csi-controller -c rds-csi-driver
 ```
 
 ### Common Issues
@@ -355,7 +357,7 @@ See [docs/development.md](docs/development.md) for development environment setup
 
 See [ROADMAP.md](ROADMAP.md) for detailed milestone history and current progress.
 
-**Current Focus**: v0.9.0 - Production Readiness & Test Maturity
+This v1 driver is maintained for reference and existing deployments. New development continues in [nvmet-csi](https://github.com/3whiskeywhiskey/nvmet-csi).
 
 ## License
 

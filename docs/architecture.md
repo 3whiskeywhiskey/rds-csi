@@ -59,7 +59,7 @@ The RDS CSI Driver is a Kubernetes-native storage driver that enables dynamic pr
                  │ NVMe/TCP Port 4420: Block Device Access
                  │
 ┌────────────────▼──────────────────────────────────────────────────────────────┐
-│ MikroTik ROSE Data Server (RDS) - 10.42.68.1                                 │
+│ MikroTik ROSE Data Server (RDS) - 192.0.2.11                                 │
 │                                                                               │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
 │  │ RouterOS CLI (SSH Management Interface)                                │  │
@@ -139,7 +139,7 @@ The RDS CSI Driver is a Kubernetes-native storage driver that enables dynamic pr
 
 5. Return VolumeContext:
    - volumeID: pvc-<uuid>
-   - rdsAddress: 10.42.68.1
+   - rdsAddress: 192.0.2.11
    - nvmePort: 4420
    - nqn: nqn.2000-02.com.mikrotik:pvc-<uuid>
 ```

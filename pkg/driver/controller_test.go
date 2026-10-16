@@ -2239,7 +2239,7 @@ func TestSanityRegression_VolumeContextParameters(t *testing.T) {
 		{
 			name: "valid nvmeAddress",
 			params: map[string]string{
-				"nvmeAddress": "10.42.68.1",
+				"nvmeAddress": "192.0.2.11",
 			},
 			wantErr: false,
 		},

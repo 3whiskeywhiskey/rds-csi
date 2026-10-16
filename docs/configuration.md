@@ -17,7 +17,7 @@ metadata:
   name: rds-csi-config
   namespace: rds-csi
 data:
-  rds-address: "10.42.241.3"
+  rds-address: "192.0.2.10"
   rds-port: "22"
   rds-user: "metal-csi"
   rds-volume-base-path: "/storage-pool/metal-csi"

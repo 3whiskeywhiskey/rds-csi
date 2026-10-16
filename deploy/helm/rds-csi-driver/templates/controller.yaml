@@ -54,6 +54,12 @@ spec:
             - "-v={{ .Values.controller.logLevel }}"
             {{- if .Values.monitoring.enabled }}
             - "-metrics-address=:{{ .Values.monitoring.port }}"
+            {{- if and .Values.monitoring.rdsMonitoring.enabled .Values.monitoring.rdsMonitoring.snmpEnabled }}
+            - "-rds-snmp-host={{ required "monitoring.rdsMonitoring.snmpHost is required when SNMP is enabled" .Values.monitoring.rdsMonitoring.snmpHost }}"
+            - "-rds-snmp-community-file=/etc/rds-csi/snmp-community"
+            {{- end }}
+            {{- else }}
+            - "-metrics-address="
             {{- end }}
             {{- if .Values.rds.insecureSkipVerify }}
             - "-rds-insecure-skip-verify=true"

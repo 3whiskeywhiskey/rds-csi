@@ -60,7 +60,7 @@ args:
 ### Option 2: Using kubectl patch
 
 ```bash
-kubectl -n kube-system patch deployment rds-csi-controller --type='json' -p='[
+kubectl -n rds-csi patch deployment rds-csi-controller --type='json' -p='[
   {
     "op": "add",
     "path": "/spec/template/spec/containers/0/args/-",
@@ -81,13 +81,13 @@ kubectl -n kube-system patch deployment rds-csi-controller --type='json' -p='[
 1. **Enable with dry-run**: Deploy with `-enable-orphan-reconciler` and `-orphan-dry-run=true` (default)
 2. **Monitor logs**: Watch controller logs for orphaned volume detections:
    ```bash
-   kubectl -n kube-system logs -f deployment/rds-csi-controller -c rds-csi-driver | grep -i orphan
+   kubectl -n rds-csi logs -f deployment/rds-csi-controller -c rds-csi-driver | grep -i orphan
    ```
 3. **Review findings**: Check if detected orphans are legitimate or false positives
 4. **Manual cleanup** (if needed):
    ```bash
    # SSH to RDS and manually remove orphans
-   ssh admin@10.42.241.3
+   ssh admin@192.0.2.10
    /disk print detail where slot~"pvc-"
    /disk remove [find slot=pvc-xxxx-orphan-id]
    ```
@@ -174,7 +174,7 @@ Planned Prometheus metrics:
 - Insufficient RBAC permissions
 
 **Solution**:
-- Check RDS connectivity: `kubectl -n kube-system exec -it deployment/rds-csi-controller -c rds-csi-driver -- sh -c "ssh admin@$RDS_ADDRESS /disk print"`
+- Check RDS connectivity: `kubectl -n rds-csi exec -it deployment/rds-csi-controller -c rds-csi-driver -- sh -c "ssh admin@$RDS_ADDRESS /disk print"`
 - Verify RBAC: Controller ServiceAccount needs `get`, `list`, `watch` on PVs
 - Check controller logs for specific error messages
 

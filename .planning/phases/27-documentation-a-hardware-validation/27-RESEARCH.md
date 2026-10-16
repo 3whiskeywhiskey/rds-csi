@@ -413,7 +413,7 @@ Problems that look simple but have existing solutions:
 **Objective:** Verify end-to-end volume provisioning, mounting, and cleanup
 
 **Prerequisites:**
-- RDS accessible at 10.42.68.1 (management) and 10.42.68.1 (storage)
+- RDS accessible at 192.0.2.11 (management) and 192.0.2.11 (storage)
 - Kubernetes cluster with RDS CSI driver deployed
 - SSH access to worker node for verification
 - At least 10GB free space on RDS
@@ -461,7 +461,7 @@ Problems that look simple but have existing solutions:
 
 3. Verify volume on RDS
    ```bash
-   ssh admin@10.42.241.3 '/disk print detail where slot~"pvc-"'
+   ssh admin@192.0.2.10 '/disk print detail where slot~"pvc-"'
    ```
 
    **Expected:** Volume exists with NVMe/TCP export enabled
@@ -518,7 +518,7 @@ Problems that look simple but have existing solutions:
 kubectl delete pod test-validation-pod
 kubectl delete pvc test-validation-pvc
 # Wait 30s for cleanup
-ssh admin@10.42.241.3 '/disk print detail where slot~"pvc-abc123"'
+ssh admin@192.0.2.10 '/disk print detail where slot~"pvc-abc123"'
 # Expected: No results (volume deleted)
 ```
 

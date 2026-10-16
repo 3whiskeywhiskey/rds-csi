@@ -57,6 +57,8 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to start mock RDS server")
 
 	klog.Infof("Mock RDS server started on %s:%d", mockRDS.Address(), mockRDS.Port())
+	clientKey, err := mock.GenerateClientPrivateKey()
+	Expect(err).NotTo(HaveOccurred(), "Failed to generate mock SSH key")
 
 	// Create driver with both controller and node enabled
 	By("Creating CSI driver")
@@ -67,7 +69,7 @@ var _ = BeforeSuite(func() {
 		RDSAddress:            mockRDS.Address(),
 		RDSPort:               mockRDS.Port(),
 		RDSUser:               "admin",
-		RDSPrivateKey:         []byte(testSSHPrivateKey),
+		RDSPrivateKey:         clientKey,
 		RDSInsecureSkipVerify: true,
 		RDSVolumeBasePath:     testVolumeBasePath,
 		ManagedNQNPrefix:      "nqn.2000-02.com.mikrotik:",
